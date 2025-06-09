@@ -1,0 +1,55 @@
+services:
+  pfsense-backup:
+    build: .
+    container_name: pfsense-backup
+    restart: unless-stopped
+    
+    # Environment variables for credentials (modify as needed)
+    environment:
+      - POSEIDON_USERNAME=${POSEIDON_USERNAME}
+      - POSEIDON_PASSWORD=${POSEIDON_PASSWORD}
+      - PROTEUS_USERNAME=${PROTEUS_USERNAME}
+      - PROTEUS_PASSWORD=${PROTEUS_PASSWORD}
+      
+      # Optional: Override default paths
+      - CONFIG_FILE=/app/config/config.yaml
+      - BACKUP_DIR=/backups
+      - HOSTNAME=Ouranos
+    
+    volumes:
+      # Mount config directory (optional: for easy config editing)
+      - ./config:/app/config:ro
+      
+      # Mount backup directory to host
+      - /mnt/usb-hdd-mirror/backups/pfsense:/backups
+      
+      # Optional: Mount custom config file
+      # - /path/to/your/config.yaml:/app/config/config.yaml:ro
+    ports:
+      - 8000:8000
+    
+    # Optional: Run container in read-only mode for security
+    # read_only: true
+    # tmpfs:
+    #   - /tmp
+    
+    # Optional: Limit resources
+    # deploy:
+    #   resources:
+    #     limits:
+    #       memory: 256M
+    #       cpus: '0.5'
+
+  # Optional: Run as one-time backup (comment out main service above)
+  # pfsense-backup-once:
+  #   build: .
+  #   container_name: pfsense-backup-once
+  #   command: ["python", "src/backup_manager.py", "--once"]
+  #   environment:
+  #     - PFSENSE_MAIN_FIREWALL_USERNAME=${PFSENSE_MAIN_FIREWALL_USERNAME}
+  #     - PFSENSE_MAIN_FIREWALL_PASSWORD=${PFSENSE_MAIN_FIREWALL_PASSWORD}
+  #     - PFSENSE_GUEST_FIREWALL_USERNAME=${PFSENSE_GUEST_FIREWALL_USERNAME}
+  #     - PFSENSE_GUEST_FIREWALL_PASSWORD=${PFSENSE_GUEST_FIREWALL_PASSWORD}
+  #   volumes:
+  #     - ./config:/app/config:ro
+  #     - ./backups:/backups
