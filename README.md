@@ -1,245 +1,439 @@
-# pfSense Configuration Backup Docker Container
+# pfSense Configuration Backup Tool
 
-A secure Docker container solution for automatically backing up pfSense configurations from multiple instances.
+**Automatically backup multiple pfSense configurations with Docker**
 
-## Features
+A secure, production-ready Docker container that automatically backs up pfSense configurations from multiple instances with monitoring, notifications, and comprehensive error handling.
 
-- **Multi-instance support**: Backup configurations from multiple pfSense instances
-- **Secure credential management**: Uses environment variables for credentials
-- **Flexible scheduling**: Support for scheduled backups (daily, hourly, weekly)
-- **Configurable retention**: Automatic cleanup of old backup files
-- **Compression support**: Optional gzip compression of backup files
-- **Notification support**: Webhook notifications for backup status
-- **SSL/TLS support**: Works with self-signed certificates
-- **Docker-based**: Easy deployment and management
+![pfSense Backup](https://img.shields.io/badge/pfSense-Backup-blue) ![Docker](https://img.shields.io/badge/Docker-Ready-green) ![Prometheus](https://img.shields.io/badge/Prometheus-Metrics-orange)
 
-## Quick Start
+## 🚀 Quick Start
 
-1. **Clone or create the project structure**:
+**Get up and running in 5 minutes:**
+
+```bash
+# 1. Clone or download the project
+git clone <your-repo-url> pfsense-backup
+cd pfsense-backup
+
+# 2. Copy the environment template
+cp .env.example .env
+
+# 3. Edit your credentials (see configuration section below)
+nano .env
+
+# 4. Start the backup service
+docker-compose up -d
+
+# 5. Check logs to verify everything is working
+docker-compose logs -f
+```
+
+That's it! Your pfSense configurations will be automatically backed up daily at 2 AM.
+
+## 📋 Table of Contents
+
+- [Features](#-features)
+- [Quick Start](#-quick-start)
+- [Installation](#-installation)
+- [Configuration](#-configuration)
+- [Usage](#-usage)
+- [Monitoring & Notifications](#-monitoring--notifications)
+- [Security](#-security)
+- [Troubleshooting](#-troubleshooting)
+- [Advanced Usage](#-advanced-usage)
+
+## ✨ Features
+
+### Core Features
+- **🔄 Multi-instance Support** - Backup multiple pfSense firewalls simultaneously
+- **⏰ Flexible Scheduling** - Daily, hourly, or weekly automated backups
+- **🔐 Secure Credentials** - Environment variable-based credential management
+- **📁 Smart File Management** - Automatic cleanup with configurable retention
+- **🗜️ Compression Support** - Optional gzip compression to save space
+
+### Monitoring & Alerting
+- **📊 Prometheus Metrics** - Complete operational metrics on port 8000
+- **🔔 Multi-webhook Notifications** - Discord, Slack, email, and health checks
+- **📈 Success/Failure Tracking** - Detailed backup statistics and timing
+- **🎯 Customizable Alerts** - Success-only, failure-only, or all notifications
+
+### Enterprise Features
+- **🐳 Docker Native** - Production-ready containerized deployment
+- **🛡️ SSL/TLS Support** - Works with self-signed certificates
+- **📝 Comprehensive Logging** - Detailed operation logs with configurable levels
+- **🔧 Flexible Configuration** - YAML-based configuration with environment overrides
+
+## 🔧 Installation
+
+### Prerequisites
+- Docker and Docker Compose installed
+- Access to pfSense web interface (HTTPS)
+- Network connectivity from container to pfSense instances
+
+### Method 1: Docker Compose (Recommended)
+
+1. **Download the project files:**
 ```bash
 mkdir pfsense-backup && cd pfsense-backup
-# Copy all the provided files into this directory
+# Copy all provided files to this directory
 ```
 
-2. **Configure your instances** by editing `config/config.yaml`:
-```yaml
-pfsense_instances:
-  - name: "main-firewall"
-    url: "https://192.168.1.1"
-    username_env: "PFSENSE_MAIN_FIREWALL_USERNAME"
-    password_env: "PFSENSE_MAIN_FIREWALL_PASSWORD"
-    backup_prefix: "main-fw"
-```
-
-3. **Set up credentials**:
+2. **Set up your environment:**
 ```bash
 cp .env.example .env
-# Edit .env with your actual credentials
 ```
 
-4. **Build and run**:
+3. **Configure your credentials in `.env`:**
+```bash
+# pfSense Instance Credentials
+POSEIDON_USERNAME=admin
+POSEIDON_PASSWORD=your_secure_password_here
+PROTEUS_USERNAME=admin
+PROTEUS_PASSWORD=another_secure_password
+```
+
+4. **Start the service:**
 ```bash
 docker-compose up -d
 ```
 
-## Configuration
+### Method 2: Docker Run
 
-### Instance Configuration (`config/config.yaml`)
+```bash
+docker run -d \
+  --name pfsense-backup \
+  -v $(pwd)/config:/app/config:ro \
+  -v $(pwd)/backups:/backups \
+  -e POSEIDON_USERNAME=admin \
+  -e POSEIDON_PASSWORD=password \
+  -p 8000:8000 \
+  pfsense-backup
+```
 
-Each pfSense instance requires:
-- `name`: Unique identifier for the instance
-- `url`: Full URL to the pfSense web interface
-- `username_env`: Environment variable name containing the username
-- `password_env`: Environment variable name containing the password
+## ⚙️ Configuration
 
-Optional settings:
-- `backup_prefix`: Custom prefix for backup filenames
-- `verify_ssl`: Whether to verify SSL certificates (default: false)
-- `timeout`: Connection timeout in seconds (default: 30)
+### 1. pfSense Instance Configuration
 
-### Backup Configuration
+Edit `config/config.yaml` to define your pfSense instances:
 
-Configure backup behavior:
+```yaml
+pfsense_instances:
+  - name: "main-firewall"                    # Unique name for this instance
+    url: "https://192.168.1.1"              # pfSense web interface URL
+    username_env: "MAIN_FW_USERNAME"         # Environment variable for username
+    password_env: "MAIN_FW_PASSWORD"         # Environment variable for password
+    subfolder: "main-fw"                     # Optional: organize backups in subfolders
+    backup_prefix: "daily"                   # Optional: custom filename prefix
+    verify_ssl: false                        # Set to true for valid SSL certificates
+    timeout: 30                              # Connection timeout in seconds
+
+  - name: "guest-firewall"
+    url: "https://192.168.2.1"
+    username_env: "GUEST_FW_USERNAME"
+    password_env: "GUEST_FW_PASSWORD"
+    subfolder: "guest-fw"
+    backup_prefix: "daily"
+    verify_ssl: false
+    timeout: 30
+```
+
+### 2. Backup Settings
+
 ```yaml
 backup:
-  directory: "/backups"
+  directory: "/backups"                      # Where to store backup files
   filename_format: "{prefix}_{instance_name}_{timestamp}.xml"
-  timestamp_format: "%Y%m%d_%H%M%S"
-  retention_count: 10  # Keep last 10 backups per instance
-  compress: true       # Gzip compression
+  timestamp_format: "%Y-%m-%d_%H-%M-%S"     # 2024-12-01_14-30-00
+  retention_count: 30                       # Keep last 30 backups per instance
+  compress: true                            # Enable gzip compression
 ```
 
-### Scheduling
+### 3. Scheduling
 
-Enable automatic backups:
 ```yaml
 schedule:
-  enabled: true
-  frequency: "daily"  # daily, hourly, weekly
+  enabled: true                             # Enable automatic scheduling
+  frequency: "daily"                        # Options: daily, hourly, weekly
 ```
 
-### Notifications
+### 4. Environment Variables (.env file)
 
-Get notified of backup status:
+```bash
+# pfSense Credentials (match the *_env values in config.yaml)
+MAIN_FW_USERNAME=admin
+MAIN_FW_PASSWORD=your_password_here
+GUEST_FW_USERNAME=admin
+GUEST_FW_PASSWORD=another_password
+
+# Optional: Override default paths
+CONFIG_FILE=/app/config/config.yaml
+BACKUP_DIR=/backups
+```
+
+## 🎯 Usage
+
+### Basic Operations
+
+```bash
+# Start the backup service
+docker-compose up -d
+
+# Run backup once (no scheduling)
+docker-compose run --rm pfsense-backup python src/backup_manager.py --once
+
+# View logs
+docker-compose logs -f pfsense-backup
+
+# Stop the service
+docker-compose down
+
+# Check backup files
+ls -la backups/
+```
+
+### Verify Your Setup
+
+```bash
+# Test connectivity to your pfSense instances
+docker-compose run --rm pfsense-backup curl -k https://192.168.1.1
+
+# Check configuration syntax
+docker-compose run --rm pfsense-backup python -c "
+import yaml
+with open('/app/config/config.yaml') as f:
+    config = yaml.safe_load(f)
+print('Configuration is valid!')
+"
+```
+
+## 📊 Monitoring & Notifications
+
+### Prometheus Metrics
+
+Access metrics at `http://localhost:8000/metrics` for monitoring:
+
+- `pfsense_backup_total` - Total backup attempts
+- `pfsense_backup_success_total` - Successful backups
+- `pfsense_backup_duration_seconds` - Backup timing
+- `pfsense_backup_file_size_bytes` - Backup file sizes
+- Many more detailed metrics...
+
+### Notification Setup
+
+Configure multiple notification channels in `config.yaml`:
+
+#### Discord Webhook
 ```yaml
 notifications:
   enabled: true
-  webhook_url: "https://hooks.slack.com/your/webhook/url"
-  notify_success: true
-  notify_failure: true
+  webhooks:
+    - name: "discord_alerts"
+      url: "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN"
+      trigger: "always"  # success, failure, or always
+      message_format: "🔄 pfSense Backup: {status} - {details}"
 ```
 
-## Security Features
+#### Health Checks (Uptime Monitoring)
+```yaml
+    - name: "healthcheck"
+      url: "https://hc-ping.com/your-check-id"
+      trigger: "success"
+```
 
-- **Environment-based credentials**: Passwords are never stored in configuration files
-- **Non-root container**: Runs as unprivileged user for security
-- **Read-only configuration**: Config files can be mounted read-only
-- **SSL verification**: Optional SSL certificate verification
-- **Secure authentication**: Proper CSRF token handling
+#### Slack Webhook
+```yaml
+    - name: "slack_alerts"
+      url: "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK"
+      trigger: "failure"
+      payload_template:
+        text: "{message}"
+        channel: "#alerts"
+```
 
-## Usage Examples
+## 🔒 Security
 
-### Run once (no scheduling):
+### Best Practices Implemented
+
+- **No hardcoded credentials** - All passwords via environment variables
+- **Non-root container** - Runs as unprivileged user
+- **SSL support** - Handles self-signed certificates properly
+- **CSRF protection** - Automatic CSRF token handling
+- **Read-only configs** - Configuration files mounted read-only
+
+### Recommended Security Measures
+
+1. **Use strong passwords** for pfSense accounts
+2. **Restrict network access** - Only allow backup container IPs
+3. **Enable pfSense firewall rules** for management interface
+4. **Regularly rotate credentials**
+5. **Monitor backup logs** for unauthorized access attempts
+
+## 🐛 Troubleshooting
+
+### Common Issues and Solutions
+
+#### 1. 403 Forbidden Errors
+
+**Most common causes:**
+- **Wrong credentials** - Double-check username/password in `.env`
+- **IP blocking** - pfSense firewall blocking container IP
+- **Rate limiting** - Too many failed login attempts
+
+**Solutions:**
 ```bash
-docker-compose run --rm pfsense-backup python src/backup_manager.py --once
+# Test credentials manually
+docker-compose run --rm pfsense-backup curl -k -d "login=Login&usernamefld=admin&passwordfld=password" https://192.168.1.1/index.php
+
+# Check pfSense logs
+# In pfSense: Status → System Logs → System
+
+# Enable debug logging
+# Set logging level to DEBUG in config.yaml
 ```
 
-### Run with custom configuration:
+#### 2. Connection Refused/Timeout
+
+**Check network connectivity:**
 ```bash
-docker run --rm \
-  -v /path/to/config.yaml:/app/config/config.yaml:ro \
-  -v /path/to/backups:/backups \
-  -e PFSENSE_MAIN_FIREWALL_USERNAME=admin \
-  -e PFSENSE_MAIN_FIREWALL_PASSWORD=password \
-  pfsense-backup python src/backup_manager.py --once
+# Test basic connectivity
+docker-compose run --rm pfsense-backup ping 192.168.1.1
+
+# Test HTTPS port
+docker-compose run --rm pfsense-backup curl -k -m 10 https://192.168.1.1
 ```
 
-### Check logs:
+**pfSense Configuration Checklist:**
+- ✅ HTTPS web interface enabled (System → Advanced → Admin Access)
+- ✅ Web interface accessible from backup server IP
+- ✅ Firewall rules allow HTTPS (port 443) from backup server
+- ✅ Anti-lockout rule enabled (System → Advanced → Admin Access)
+
+#### 3. Authentication Issues
+
 ```bash
-docker-compose logs -f pfsense-backup
+# Test with debug mode
+docker-compose run --rm pfsense-backup python src/backup_manager.py --once --debug
+
+# Check if login page is accessible
+docker-compose run --rm pfsense-backup curl -k -v https://192.168.1.1/index.php | grep -i login
 ```
 
-## File Structure
+#### 4. Permission Errors
 
-```
-pfsense-backup/
-├── Dockerfile
-├── docker-compose.yml
-├── requirements.txt
-├── .env.example
-├── README.md
-├── config/
-│   └── config.yaml
-├── src/
-│   └── backup_manager.py
-└── backups/          # Created automatically
-    ├── main-fw_main-firewall_20241201_120000.xml.gz
-    └── guest-fw_guest-firewall_20241201_120000.xml.gz
-```
-
-## Environment Variables
-
-| Variable | Description | Required |
-|----------|-------------|----------|
-| `PFSENSE_*_USERNAME` | Username for pfSense instance | Yes |
-| `PFSENSE_*_PASSWORD` | Password for pfSense instance | Yes |
-| `CONFIG_FILE` | Path to configuration file | No |
-| `BACKUP_DIR` | Backup directory path | No |
-
-## Backup Filename Format
-
-Backups are saved with customizable filenames:
-- Default: `{prefix}_{instance_name}_{timestamp}.xml`
-- With compression: `{prefix}_{instance_name}_{timestamp}.xml.gz`
-- Timestamp format: `YYYYMMDD_HHMMSS`
-
-## Troubleshooting
-
-### 403 Forbidden Errors
-
-If you're getting 403 errors during login, try these steps:
-
-1. **Test connectivity first**:
 ```bash
-docker-compose run --rm pfsense-backup python src/backup_manager.py --test
+# Check backup directory permissions
+ls -la backups/
+
+# Fix permissions if needed
+sudo chown -R 1000:1000 backups/
+sudo chmod 755 backups/
 ```
 
-2. **Enable debug mode**:
-```bash
-docker-compose run --rm pfsense-backup python src/backup_manager.py --debug
-```
+### Enable Debug Mode
 
-3. **Common causes of 403 errors**:
-   - **Incorrect credentials**: Double-check username/password
-   - **IP-based restrictions**: pfSense may have firewall rules blocking the container's IP
-   - **Login attempt rate limiting**: pfSense may temporarily block after failed attempts
-   - **CSRF token issues**: The script handles multiple CSRF patterns automatically
-   - **Web interface disabled**: Ensure HTTPS web interface is enabled in pfSense
-
-4. **pfSense configuration checklist**:
-   - System → Advanced → Admin Access: Ensure "WebGUI" protocol is HTTPS
-   - System → Advanced → Admin Access: Check "WebGUI redirect" settings  
-   - Firewall → Rules: Ensure management interface allows HTTPS from backup container
-   - System → Advanced → Admin Access: Verify "Anti-lockout rule" is enabled
-
-5. **Network troubleshooting**:
-```bash
-# Test from container
-docker-compose run --rm pfsense-backup curl -k https://192.168.1.1
-
-# Check if pfSense login page is accessible
-docker-compose run --rm pfsense-backup curl -k -v https://192.168.1.1/index.php
-```
-
-### Common Issues
-
-1. **Authentication failures**: Verify credentials and pfSense URL
-2. **SSL certificate errors**: Set `verify_ssl: false` for self-signed certificates
-3. **Permission denied**: Ensure backup directory is writable
-4. **Network connectivity**: Check firewall rules and network access
-
-### Debug Mode
-
-Enable debug logging in config:
+Add to `config.yaml`:
 ```yaml
 logging:
   level: "DEBUG"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 ```
 
-Or run with debug flag:
+### Getting Help
+
+1. **Check logs first:**
+   ```bash
+   docker-compose logs -f pfsense-backup
+   ```
+
+2. **Test individual components:**
+   ```bash
+   # Test config loading
+   docker-compose run --rm pfsense-backup python -c "
+   import src.backup_manager
+   mgr = src.backup_manager.PfSenseBackupManager('/app/config/config.yaml')
+   print('Config loaded successfully')
+   "
+   ```
+
+3. **Manual backup test:**
+   ```bash
+   docker-compose run --rm pfsense-backup python src/backup_manager.py --once
+   ```
+
+## 🔧 Advanced Usage
+
+### Custom Scheduling with Cron
+
+Instead of built-in scheduling, use host cron for more control:
+
 ```bash
-docker-compose run --rm pfsense-backup python src/backup_manager.py --debug
+# Disable scheduling in config.yaml
+schedule:
+  enabled: false
+
+# Add to host crontab
+# Backup every day at 2 AM
+0 2 * * * cd /path/to/pfsense-backup && docker-compose run --rm pfsense-backup python src/backup_manager.py --once
+
+# Backup every 6 hours
+0 */6 * * * cd /path/to/pfsense-backup && docker-compose run --rm pfsense-backup python src/backup_manager.py --once
 ```
 
-### Testing Individual Components
+### Integration with Monitoring Stack
 
+**Grafana Dashboard:**
+Import metrics from Prometheus endpoint for visualization.
+
+**Alertmanager Rules:**
+```yaml
+# Example alert for backup failures
+- alert: PfSenseBackupFailed
+  expr: increase(pfsense_backup_failed_total[1h]) > 0
+  for: 5m
+  annotations:
+    summary: "pfSense backup failed for {{ $labels.instance }}"
+```
+
+### Backup to Remote Storage
+
+Mount cloud storage or network shares:
+
+```yaml
+# docker-compose.yml
+volumes:
+  - "/mnt/nfs-backup:/backups"  # NFS mount
+  - "/mnt/s3fs:/backups"        # S3 filesystem
+```
+
+### Multiple Environment Setup
+
+**Production:**
 ```bash
-# Test connectivity only
-docker-compose run --rm pfsense-backup python src/backup_manager.py --test
-
-# Test configuration loading
-docker-compose run --rm pfsense-backup python -c "import src.backup_manager; print('Config OK')"
-
-# Test single instance backup
-docker-compose run --rm pfsense-backup python src/backup_manager.py --once
+cp config.yaml config-prod.yaml
+CONFIG_FILE=/app/config/config-prod.yaml docker-compose up -d
 ```
 
-## Contributing
+**Development:**
+```bash
+cp config.yaml config-dev.yaml
+CONFIG_FILE=/app/config/config-dev.yaml docker-compose up -d
+```
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
+## 📁 File Structure
 
-## License
-
-This project is released under the MIT License.
-
-## Security Notice
-
-- Keep your `.env` file secure and never commit it to version control
-- Use strong passwords for pfSense instances
-- Regularly rotate credentials
-- Monitor backup logs for any security issues
-- Consider using network segmentation for backup access
+```
+pfsense-backup/
+├── 📄 README.md                 # This documentation
+├── 🐳 Dockerfile               # Container definition
+├── 🐳 docker-compose.yml       # Service orchestration
+├── 📦 requirements.txt         # Python dependencies
+├── 🔐 .env.example             # Environment template
+├── 📁 config/
+│   └── ⚙️ config.yaml         # Main configuration
+├── 📁 src/
+│   ├── 🐍 backup_manager.py   # Main backup logic
+│   └── 📊 prometheus_metrics.py # Metrics collection
+└── 📁 backups/                 # Backup storage (created automatically)
+    ├── 📄 main-fw_main-firewall_2024-12-01_14-30-00.xml.gz
+    └── 📄 guest-fw_guest-firewall_2024-12-01_14-30-00.xml.gz
+```
