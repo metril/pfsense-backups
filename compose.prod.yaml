@@ -1,0 +1,14 @@
+# Production overlay: pin services to published GHCR images.
+# Usage:
+#   docker compose -f compose.yaml -f compose.prod.yaml pull
+#   docker compose -f compose.yaml -f compose.prod.yaml up -d
+#
+# Override the image tag by setting IMAGE_TAG (e.g., IMAGE_TAG=v0.1.0).
+
+services:
+  worker:
+    # Pull the tagged image instead of building locally. The base compose.yaml
+    # still has a `build:` entry; leaving it alone is harmless — `docker compose
+    # pull` fetches from GHCR and `up` starts the pulled image.
+    image: ghcr.io/metril/pfsense-backup-worker:${IMAGE_TAG:-latest}
+    pull_policy: always
