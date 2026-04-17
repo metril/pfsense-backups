@@ -20,8 +20,14 @@ from pfsense_shared.settings import WebSettings
 
 from .middleware import AuthRequiredMiddleware
 from .routers import auth as auth_router
+from .routers import backups as backups_router
 from .routers import events as events_router
 from .routers import health as health_router
+from .routers import instances as instances_router
+from .routers import jobs as jobs_router
+from .routers import notifications as notifications_router
+from .routers import schedule as schedule_router
+from .routers import settings_router
 from .services.event_bus import EventBus
 from .services.ipc_client import IpcClient
 from .services.oidc import make_oauth
@@ -87,6 +93,12 @@ def create_app(settings: WebSettings | None = None, static_dir: Path | None = No
     app.include_router(auth_router.router)
     app.include_router(health_router.router)
     app.include_router(events_router.router)
+    app.include_router(instances_router.router)
+    app.include_router(schedule_router.router)
+    app.include_router(notifications_router.router)
+    app.include_router(settings_router.router)
+    app.include_router(jobs_router.router)
+    app.include_router(backups_router.router)
 
     spa_dir = static_dir or Path(__file__).resolve().parent / "static"
     mount_spa(app, spa_dir)
