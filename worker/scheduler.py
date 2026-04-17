@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from croniter import croniter
 from sqlalchemy.orm import sessionmaker
 
 from pfsense_shared.models import Instance, Job
 from pfsense_shared.schemas import ScheduleReloaded
 
+from .instance_locks import InstanceLocks
 from .ipc_publisher import IpcPublisher
 
 log = logging.getLogger(__name__)
@@ -23,19 +27,26 @@ def _job_id(instance_id: int) -> str:
 
 
 class Scheduler:
-    """Per-instance cron scheduling. Backup execution delegates to a provided callable
-    so this module stays free of HTTP/DB concerns beyond triggering."""
+    """Per-instance cron scheduling.
+
+    Backup execution delegates to a provided callable so this module stays free
+    of HTTP/DB concerns beyond triggering. The per-instance lock is shared with
+    the IPC listener so a scheduled run + a user-triggered "Backup Now" for
+    the same instance serialize rather than racing (C2).
+    """
 
     def __init__(
         self,
         session_factory: sessionmaker,
         db_url: str,
         publisher: IpcPublisher,
-        run_backup: callable,  # type: ignore[valid-type]  (instance_id:int, job_id:int) -> None
+        run_backup: Callable[..., object],
+        instance_locks: InstanceLocks,
     ) -> None:
         self._session_factory = session_factory
         self._publisher = publisher
         self._run_backup = run_backup
+        self._instance_locks = instance_locks
         jobstore = SQLAlchemyJobStore(url=db_url, tablename="apscheduler_jobs")
         self._scheduler = BackgroundScheduler(
             jobstores={"default": jobstore},
@@ -56,7 +67,10 @@ class Scheduler:
         self.load_all_jobs()
 
     def shutdown(self) -> None:
-        self._scheduler.shutdown(wait=False)
+        # Wait for any running trigger callback to finish so we don't leave
+        # a Job row stuck in 'running'. Startup hook will clean up anything
+        # abandoned by a hard kill.
+        self._scheduler.shutdown(wait=True)
 
     # -------------------------------------------------------------- #
     # job management
@@ -96,10 +110,28 @@ class Scheduler:
         if not cron:
             self._remove(instance_id)
             return
+        # H10: validate cron + timezone up-front so we log a clear error and
+        # never hand APScheduler something it will silently reject later.
+        if not croniter.is_valid(cron):
+            log.error(
+                "Invalid cron expression for instance %s: %r — job not scheduled",
+                instance_id,
+                cron,
+            )
+            return
+        try:
+            ZoneInfo(tz)
+        except ZoneInfoNotFoundError:
+            log.error(
+                "Invalid timezone for instance %s: %r — job not scheduled",
+                instance_id,
+                tz,
+            )
+            return
         try:
             trigger = CronTrigger.from_crontab(cron, timezone=tz)
         except Exception as exc:
-            log.error("Invalid cron for instance %s: %s (%s)", instance_id, cron, exc)
+            log.error("APScheduler rejected cron for instance %s: %s (%s)", instance_id, cron, exc)
             return
         self._scheduler.add_job(
             self._fire,
@@ -108,7 +140,7 @@ class Scheduler:
             kwargs={"instance_id": instance_id},
             replace_existing=True,
         )
-        log.info("Scheduled instance %s with cron='%s' tz=%s", instance_id, cron, tz)
+        log.info("Scheduled instance %s with cron=%r tz=%s", instance_id, cron, tz)
 
     def _remove(self, instance_id: int) -> None:
         try:
@@ -118,8 +150,18 @@ class Scheduler:
             pass
 
     def _fire(self, instance_id: int) -> None:
-        """APScheduler callback: creates a Job row then delegates to run_backup."""
+        """APScheduler callback: verify instance still exists, create Job row,
+        then run the backup under the shared per-instance lock."""
         with self._session_factory() as s:
+            inst = s.get(Instance, instance_id)
+            if inst is None or not inst.enabled:
+                # M16: instance was deleted or disabled between scheduling and
+                # firing. Silently skip — no Job row, no event storm.
+                log.info(
+                    "Scheduled run skipped: instance %s missing or disabled",
+                    instance_id,
+                )
+                return
             job = Job(
                 instance_id=instance_id,
                 kind="scheduled",
@@ -130,4 +172,6 @@ class Scheduler:
             s.add(job)
             s.commit()
             job_id = job.id
-        self._run_backup(instance_id=instance_id, job_id=job_id)
+        # C2: serialize with user-triggered backups for the same instance.
+        with self._instance_locks.for_instance(instance_id):
+            self._run_backup(instance_id=instance_id, job_id=job_id)

@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from collections import defaultdict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -29,6 +28,7 @@ from pfsense_shared.schemas import (
 )
 
 from .backup_manager import PfSenseBackupManager
+from .instance_locks import InstanceLocks
 from .ipc_publisher import IpcPublisher
 from .notifier import Notifier
 from .scheduler import Scheduler
@@ -45,7 +45,9 @@ class IpcListener:
         scheduler: Scheduler,
         notifier: Notifier,
         publisher: IpcPublisher,
+        instance_locks: InstanceLocks,
         max_workers: int = 4,
+        shutdown_grace_seconds: float = 60.0,
     ) -> None:
         self._bind_url = bind_url
         self._session_factory = session_factory
@@ -53,12 +55,13 @@ class IpcListener:
         self._scheduler = scheduler
         self._notifier = notifier
         self._publisher = publisher
+        self._instance_locks = instance_locks
+        self._shutdown_grace_seconds = shutdown_grace_seconds
 
         self._ctx = zmq.Context.instance()
         self._sock: zmq.Socket[bytes] = self._ctx.socket(zmq.PULL)
         self._sock.setsockopt(zmq.LINGER, 0)
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="ipc-cmd")
-        self._instance_locks: dict[int, threading.Lock] = defaultdict(threading.Lock)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -69,11 +72,20 @@ class IpcListener:
         log.info("ZMQ PULL bound at %s", self._bind_url)
 
     def stop(self) -> None:
+        # Stop accepting new commands first.
         self._stop.set()
-        self._executor.shutdown(wait=False, cancel_futures=True)
-        self._sock.close()
         if self._thread is not None:
             self._thread.join(timeout=2)
+        self._sock.close()
+        # Wait for in-flight commands (backups) to finish within grace.
+        # H15: don't cancel mid-backup — better to let the HTTP flow finish and
+        # write a proper Backup row. Past the grace window the process exit
+        # will force termination anyway.
+        log.info(
+            "IpcListener waiting up to %.0fs for in-flight commands",
+            self._shutdown_grace_seconds,
+        )
+        self._executor.shutdown(wait=True)
 
     # -------------------------------------------------------------- #
     # loop + dispatch
@@ -120,8 +132,7 @@ class IpcListener:
 
     def _handle_run_backup(self, payload: dict) -> None:
         c = RunBackupCommand.model_validate(payload)
-        lock = self._instance_locks[c.instance_id]
-        with lock:
+        with self._instance_locks.for_instance(c.instance_id):
             self._manager.backup_instance(c.instance_id, c.job_id)
 
     def _handle_run_backup_all(self, payload: dict) -> None:
@@ -130,8 +141,7 @@ class IpcListener:
 
     def _handle_test_connection(self, payload: dict) -> None:
         c = TestConnectionCommand.model_validate(payload)
-        lock = self._instance_locks[c.instance_id]
-        with lock:
+        with self._instance_locks.for_instance(c.instance_id):
             self._manager.test_connection(c.instance_id, c.job_id)
 
     def _handle_reload_schedule(self, payload: dict) -> None:

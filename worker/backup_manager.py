@@ -295,62 +295,122 @@ class PfSenseBackupManager:
     # HTTP flow (ported from the original YAML-driven code)
     # ------------------------------------------------------------------ #
 
-    _CSRF_RE = re.compile(r"name=['\"]__csrf_magic['\"][^>]*value=['\"]([^'\"]*)['\"]")
+    # H5: attribute-order-agnostic. pfSense renders the CSRF input as either
+    # <input ... name="__csrf_magic" ... value="..."> or with name/value
+    # reversed depending on version and page; match both.
+    _CSRF_RE_NAME_FIRST = re.compile(
+        r"name=['\"]__csrf_magic['\"][^>]*value=['\"]([^'\"]*)['\"]"
+    )
+    _CSRF_RE_VALUE_FIRST = re.compile(
+        r"value=['\"]([^'\"]*)['\"][^>]*name=['\"]__csrf_magic['\"]"
+    )
+
+    # M5: browser-like headers. Some hardened pfSense builds reject requests
+    # without a sensible User-Agent / Accept.
+    _BROWSER_HEADERS = {
+        "User-Agent": "Mozilla/5.0 (compatible; pfsense-backup/0.1)",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+    }
+
+    # H6: unique dashboard marker. The old heuristic matched "Dashboard" or
+    # "logout.php" — both appear on non-dashboard pages that happen to render
+    # the authenticated chrome (error pages, etc.). pfSense's dashboard page
+    # title is always "Status: Dashboard" across CE 2.7+ and Plus 24.x.
+    _DASHBOARD_MARKERS = (
+        "<title>Status: Dashboard",
+        "widget-dashboard",
+    )
+
+    # H7: pfSense emits text/xml, application/xml, or application/octet-stream
+    # depending on version. Accept the family and fall back to body sniff.
+    _XML_CONTENT_TYPE_PREFIXES = ("text/xml", "application/xml", "application/octet-stream")
+
+    @classmethod
+    def _extract_csrf(cls, html: str) -> str | None:
+        m = cls._CSRF_RE_NAME_FIRST.search(html) or cls._CSRF_RE_VALUE_FIRST.search(html)
+        return m.group(1) if m else None
 
     def _authenticate(self, http: requests.Session, snap: _InstanceSnapshot) -> bool:
         with MetricsTimer(self._metrics, snap.name, "auth") as timer:
             login_url = urljoin(snap.url, "/index.php")
-            resp = http.get(login_url, verify=snap.verify_ssl, timeout=snap.timeout)
+            resp = http.get(
+                login_url,
+                headers=self._BROWSER_HEADERS,
+                verify=snap.verify_ssl,
+                timeout=snap.timeout,
+            )
             resp.raise_for_status()
             self._metrics.record_network_request(snap.name, "login_page", resp.status_code)
 
-            csrf_token = None
-            m = self._CSRF_RE.search(resp.text)
-            if m:
-                csrf_token = m.group(1)
+            csrf_token = self._extract_csrf(resp.text)
 
             data = {"login": "Login", "usernamefld": snap.username, "passwordfld": snap.password}
             if csrf_token:
                 data["__csrf_magic"] = csrf_token
+            # Referer helps some hardened pfSense builds accept the POST.
+            post_headers = {**self._BROWSER_HEADERS, "Referer": login_url}
             resp = http.post(
                 login_url,
                 data=data,
+                headers=post_headers,
                 verify=snap.verify_ssl,
                 timeout=snap.timeout,
                 allow_redirects=True,
             )
             self._metrics.record_network_request(snap.name, "login", resp.status_code)
 
-            ok = "Dashboard" in resp.text or "logout.php" in resp.text
+            ok = any(marker in resp.text for marker in self._DASHBOARD_MARKERS)
             self._metrics.record_auth_attempt(snap.name, ok, timer.get_duration())
             if not ok:
-                log.error("Authentication failed for %s", snap.name)
+                # Dump a short prefix of the response so the user can diagnose
+                # a misidentified page (e.g. account locked, password expired).
+                snippet = resp.text[:200].replace("\n", " ").strip()
+                log.error(
+                    "Authentication failed for %s (status=%d, body starts: %s...)",
+                    snap.name,
+                    resp.status_code,
+                    snippet,
+                )
             return ok
 
     def _download_config(self, http: requests.Session, snap: _InstanceSnapshot) -> str | None:
         with MetricsTimer(self._metrics, snap.name, "download"):
             backup_url = urljoin(snap.url, "/diag_backup.php")
-            resp = http.get(backup_url, verify=snap.verify_ssl, timeout=snap.timeout)
+            resp = http.get(
+                backup_url,
+                headers=self._BROWSER_HEADERS,
+                verify=snap.verify_ssl,
+                timeout=snap.timeout,
+            )
             resp.raise_for_status()
             self._metrics.record_network_request(snap.name, "backup_page", resp.status_code)
 
-            csrf_token = None
-            m = self._CSRF_RE.search(resp.text)
-            if m:
-                csrf_token = m.group(1)
+            csrf_token = self._extract_csrf(resp.text)
 
             data = {"download": "download", "donotbackuprrd": "yes", "backupssh": "yes"}
             if csrf_token:
                 data["__csrf_magic"] = csrf_token
-            resp = http.post(backup_url, data=data, verify=snap.verify_ssl, timeout=snap.timeout)
+            post_headers = {**self._BROWSER_HEADERS, "Referer": backup_url}
+            resp = http.post(
+                backup_url,
+                data=data,
+                headers=post_headers,
+                verify=snap.verify_ssl,
+                timeout=snap.timeout,
+            )
             resp.raise_for_status()
             self._metrics.record_network_request(snap.name, "backup_download", resp.status_code)
 
-            content_type = resp.headers.get("content-type", "")
-            if content_type.startswith("text/xml") or resp.text.lstrip().startswith("<?xml"):
+            content_type = resp.headers.get("content-type", "").lower()
+            ct_ok = any(content_type.startswith(p) for p in self._XML_CONTENT_TYPE_PREFIXES)
+            if ct_ok or resp.text.lstrip().startswith("<?xml"):
                 return resp.text
             log.error(
-                "Unexpected response format from %s (content-type=%s)", snap.name, content_type
+                "Unexpected response format from %s (content-type=%s, first 100 chars: %s)",
+                snap.name,
+                content_type or "<absent>",
+                resp.text[:100].replace("\n", " "),
             )
             return None
 
@@ -389,25 +449,54 @@ class PfSenseBackupManager:
         return _SaveResult(path=xml_path, size_bytes=original_size, compressed=False)
 
     def _cleanup_old_backups(self, snap: _InstanceSnapshot) -> int:
+        """Retention enforcement, Backup-table-driven.
+
+        C3/M4: previously this walked the filesystem with a glob pattern
+        keyed on ``name``, which (1) orphaned DB rows after cleanup and
+        (2) broke when ``name`` or ``backup_prefix`` changed. We now
+        authoritatively select from the ``backups`` table, keep the most
+        recent ``retention_count`` successful rows per instance, and unlink
+        + delete both file and row for the rest in a single transaction.
+        """
         if snap.retention_count <= 0:
             return 0
-        dirpath = self._instance_dir(snap)
-        pattern = f"{snap.backup_prefix}_{snap.name}_*"
-        files = sorted(dirpath.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+
+        from pfsense_shared.models import Backup  # local import to avoid cycle
+
         removed = 0
-        for stale in files[snap.retention_count :]:
-            try:
-                stale.unlink()
+        with self._session_factory() as s:
+            successful = (
+                s.query(Backup)
+                .filter(Backup.instance_id == snap.id, Backup.success.is_(True))
+                .order_by(Backup.started_at.desc())
+                .all()
+            )
+            stale_rows = successful[snap.retention_count :]
+            for row in stale_rows:
+                path = Path(row.path) if row.path else None
+                if path is not None and path.is_file():
+                    try:
+                        path.unlink()
+                    except OSError as exc:
+                        log.error("Failed to remove stale backup %s: %s", path, exc)
+                        # Still delete the row — the file pointer is dangling
+                        # anyway. Err on the side of DB/FS agreement.
+                s.delete(row)
                 removed += 1
-            except OSError as exc:
-                log.error("Failed to remove stale backup %s: %s", stale, exc)
+            if removed:
+                s.commit()
         return removed
 
     def _update_retained_files_count(self, snap: _InstanceSnapshot) -> None:
-        dirpath = self._instance_dir(snap)
-        pattern = f"{snap.backup_prefix}_{snap.name}_*"
-        files = list(dirpath.glob(pattern))
-        self._metrics.set_files_retained(snap.name, len(files))
+        from pfsense_shared.models import Backup  # local import to avoid cycle
+
+        with self._session_factory() as s:
+            count = (
+                s.query(Backup)
+                .filter(Backup.instance_id == snap.id, Backup.success.is_(True))
+                .count()
+            )
+        self._metrics.set_files_retained(snap.name, count)
 
     # ------------------------------------------------------------------ #
     # DB side-effects

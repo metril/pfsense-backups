@@ -49,7 +49,11 @@ class Notifier:
             message = self._format_message(
                 hook, status=status, details=details, failed_instances=failed_instances or []
             )
-            self._send_one(hook, message)
+            # H8: one broken webhook must not silence the rest.
+            try:
+                self._send_one(hook, message)
+            except Exception as exc:
+                log.error("Webhook %s failed; continuing: %s", hook.name, exc)
 
     def send_test(self, session: Session, notification_id: int) -> tuple[bool, str]:
         """Send a test message to a single configured webhook."""
@@ -94,25 +98,49 @@ class Notifier:
         msg += f"\nHost: {self._hostname}"
         return msg
 
+    # Discord caps webhook `content` at 2000 chars. Keep a safety margin.
+    _DISCORD_CONTENT_MAX = 1997  # 2000 - "..."
+
     def _send_one(self, hook: Notification, message: str) -> None:
-        url = os.path.expandvars(hook.url)
+        # M2: URL is stored as-is. Don't expandvars on it — if the user
+        # embeds a literal `$FOO` we must not rewrite silently. Headers,
+        # on the other hand, commonly carry `Authorization: Bearer ${TOKEN}`
+        # and expanding those once per call is the useful pattern.
+        url = hook.url
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if hook.headers_json:
             for k, v in json.loads(hook.headers_json).items():
                 headers[k] = os.path.expandvars(str(v))
 
         payload: dict[str, Any] | None
+        is_discord = "discord.com/api/webhooks" in url.lower()
+        is_healthcheck = "healthchecks" in url.lower()
+
         if hook.payload_template_json:
             tmpl = json.loads(hook.payload_template_json)
             payload = {
                 k: (v.format(message=message) if isinstance(v, str) else v) for k, v in tmpl.items()
             }
-        elif "discord.com/api/webhooks" in url.lower():
+        elif is_discord:
             payload = {"content": message}
-        elif "healthchecks" in url.lower():
+        elif is_healthcheck:
             payload = None
         else:
             payload = {"text": message, "timestamp": datetime.now().isoformat()}
+
+        # M3: Discord rejects payload.content > 2000 chars. Truncate any
+        # `content` field when sending to a Discord webhook (whether the
+        # user supplied a template or we built the default).
+        if payload is not None and is_discord:
+            content = payload.get("content")
+            if isinstance(content, str) and len(content) > self._DISCORD_CONTENT_MAX:
+                payload["content"] = content[: self._DISCORD_CONTENT_MAX] + "..."
+                log.warning(
+                    "Truncated Discord content for %s from %d to %d chars",
+                    hook.name,
+                    len(content),
+                    self._DISCORD_CONTENT_MAX + 3,
+                )
 
         try:
             if payload is None:

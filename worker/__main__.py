@@ -19,6 +19,7 @@ from pfsense_shared.models import Job
 from pfsense_shared.settings import WorkerSettings
 
 from .backup_manager import PfSenseBackupManager
+from .instance_locks import InstanceLocks
 from .ipc_listener import IpcListener
 from .ipc_publisher import IpcPublisher
 from .notifier import Notifier
@@ -87,11 +88,15 @@ def main() -> None:
         hostname=settings.hostname,
     )
 
+    # C2: single shared per-instance lock map for both scheduler and listener.
+    instance_locks = InstanceLocks()
+
     scheduler = Scheduler(
         session_factory=session_factory,
         db_url=settings.app_db_url,
         publisher=publisher,
         run_backup=manager.backup_instance,
+        instance_locks=instance_locks,
     )
     scheduler.start()
 
@@ -102,15 +107,18 @@ def main() -> None:
         scheduler=scheduler,
         notifier=notifier,
         publisher=publisher,
+        instance_locks=instance_locks,
     )
     listener.start()
 
     stop = threading.Event()
+    # H14: heartbeat is NOT a daemon — we join it cleanly on shutdown so the
+    # last PUB frame gets flushed before the publisher socket closes.
     heartbeat_thread = threading.Thread(
         target=_heartbeat_loop,
         args=(publisher, stop, settings.heartbeat_seconds),
         name="heartbeat",
-        daemon=True,
+        daemon=False,
     )
     heartbeat_thread.start()
 
@@ -123,10 +131,15 @@ def main() -> None:
 
     stop.wait()
 
+    # Shutdown order matters: stop producing work first, then drain in-flight
+    # commands, then close the publisher (so the listener's final events still
+    # reach the web service), then the heartbeat thread.
     log.info("Shutting down scheduler")
     scheduler.shutdown()
     log.info("Shutting down IPC listener")
     listener.stop()
+    log.info("Joining heartbeat thread")
+    heartbeat_thread.join(timeout=max(2.0, settings.heartbeat_seconds + 1.0))
     log.info("Closing publisher")
     publisher.close()
     log.info("Bye")

@@ -9,12 +9,21 @@ from cryptography.fernet import Fernet
 
 
 def ensure_key(key_file: Path) -> bytes:
-    """Read the Fernet key from disk, generating it (0600) on first boot."""
+    """Read the Fernet key from disk, generating it (0600) on first boot.
+
+    L1: Set a restrictive umask around the initial write so there is no
+    window where the key exists on disk with world-readable permissions.
+    The subsequent explicit `chmod` is belt-and-braces.
+    """
     if key_file.exists():
         return key_file.read_bytes()
     key_file.parent.mkdir(parents=True, exist_ok=True)
     key = Fernet.generate_key()
-    key_file.write_bytes(key)
+    old_umask = os.umask(0o077)
+    try:
+        key_file.write_bytes(key)
+    finally:
+        os.umask(old_umask)
     os.chmod(key_file, 0o600)
     return key
 

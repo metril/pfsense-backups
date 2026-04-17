@@ -34,15 +34,16 @@ async def get_all(db: DbSession) -> dict[str, Any]:
 async def put_backup(
     payload: BackupSettingsUpdate, db: DbSession, user: CurrentUser
 ) -> BackupSettingsRead:
-    row = db.get(BackupSettings, 1) or BackupSettings(id=1)
+    row = db.get(BackupSettings, 1)
+    if row is None:
+        row = BackupSettings(id=1)
+        db.add(row)
     changed: dict[str, Any] = {}
     for field in ("filename_format", "timestamp_format", "directory"):
         val = getattr(payload, field)
         if val is not None and getattr(row, field, None) != val:
             setattr(row, field, val)
             changed[field] = val
-    if row.id is None:
-        db.add(row)
     if changed:
         audit.record(
             db, actor_email=user["email"], action="update", resource="backup_settings",
@@ -56,15 +57,16 @@ async def put_backup(
 async def put_logging(
     payload: LoggingSettingsUpdate, db: DbSession, user: CurrentUser
 ) -> LoggingSettingsRead:
-    row = db.get(LoggingSettings, 1) or LoggingSettings(id=1)
+    row = db.get(LoggingSettings, 1)
+    if row is None:
+        row = LoggingSettings(id=1)
+        db.add(row)
     changed: dict[str, Any] = {}
     for field in ("level", "format"):
         val = getattr(payload, field)
         if val is not None and getattr(row, field, None) != val:
             setattr(row, field, val)
             changed[field] = val
-    if row.id is None:
-        db.add(row)
     if changed:
         audit.record(
             db, actor_email=user["email"], action="update", resource="logging_settings",
