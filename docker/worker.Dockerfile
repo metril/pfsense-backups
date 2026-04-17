@@ -21,6 +21,8 @@ RUN uv sync --locked --extra worker --no-dev
 # Application code.
 COPY pfsense_shared/ ./pfsense_shared/
 COPY worker/ ./worker/
+COPY alembic/ ./alembic/
+COPY alembic.ini ./alembic.ini
 
 RUN useradd -m -u 1000 appuser \
     && mkdir -p /app/data /backups \

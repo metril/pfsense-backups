@@ -41,6 +41,8 @@ RUN uv sync --locked --extra web --no-dev
 
 COPY pfsense_shared/ ./pfsense_shared/
 COPY web/ ./web/
+COPY alembic/ ./alembic/
+COPY alembic.ini ./alembic.ini
 COPY --from=frontend /fe/frontend/dist/ ./web/static/
 
 RUN useradd -m -u 1000 appuser \
