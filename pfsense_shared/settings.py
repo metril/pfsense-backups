@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .paths import BACKUPS_DIR, DB_FILE, KEY_FILE
@@ -38,19 +38,20 @@ class WebSettings(CommonSettings):
     oidc_client_id: str
     oidc_client_secret: str
     oidc_redirect_url: str
-    oidc_allowed_emails: list[str] = Field(default_factory=list)
+    # CSV of emails. Kept as a plain str at the env boundary because
+    # pydantic-settings insists on JSON-decoding list fields, which makes
+    # `OIDC_ALLOWED_EMAILS=a@x,b@y` fail parsing. Access the parsed list
+    # via `settings.oidc_allowed_emails`.
+    oidc_allowed_emails_raw: str = Field(default="", alias="OIDC_ALLOWED_EMAILS")
 
     worker_push_url: str = Field(default="tcp://worker:5555")
     worker_sub_url: str = Field(default="tcp://worker:5556")
 
-    @field_validator("oidc_allowed_emails", mode="before")
-    @classmethod
-    def _split_csv(cls, v: object) -> object:
-        if isinstance(v, str):
-            return [item.strip().lower() for item in v.split(",") if item.strip()]
-        return v
-
-    @field_validator("oidc_allowed_emails")
-    @classmethod
-    def _lowercase(cls, v: list[str]) -> list[str]:
-        return [e.lower() for e in v]
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def oidc_allowed_emails(self) -> list[str]:
+        return [
+            e.strip().lower()
+            for e in self.oidc_allowed_emails_raw.split(",")
+            if e.strip()
+        ]

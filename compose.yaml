@@ -19,21 +19,63 @@ services:
       HEARTBEAT_SECONDS: "5"
 
     volumes:
-      # App state: SQLite DB + Fernet key. Back up this directory off-site.
       - ./data:/app/data
-      # pfSense backup XMLs.
       - /mnt/usb-hdd-mirror/backups/pfsense:/backups
 
     networks:
       - internal
 
-    # Prometheus scraping. Internal ZMQ ports (5555/5556) are not exposed to the host.
+    # Prometheus scraping. ZMQ ports (5555/5556) stay on the internal network only.
     ports:
       - "8000:8000"
 
-    # Web service will share the `internal` network when added in Phase 2.
-    # Worker is reachable from the web service at hostnames: worker:5555, worker:5556.
+  web:
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+    container_name: pfsense-backup-web
+    restart: unless-stopped
+    depends_on:
+      - worker
+
+    environment:
+      TZ: ${TZ:-UTC}
+      APP_DB_URL: sqlite:////app/data/app.db
+      PFSENSE_BACKUP_SECRET_KEY_FILE: /app/data/secret.key
+      BACKUPS_DIR: /backups
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      WEB_PORT: "8080"
+
+      SESSION_SECRET: ${SESSION_SECRET}
+      OIDC_ISSUER: ${OIDC_ISSUER}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET}
+      OIDC_REDIRECT_URL: ${OIDC_REDIRECT_URL}
+      OIDC_ALLOWED_EMAILS: ${OIDC_ALLOWED_EMAILS}
+
+      WORKER_PUSH_URL: tcp://worker:5555
+      WORKER_SUB_URL: tcp://worker:5556
+
+    volumes:
+      # Shared DB + Fernet key with the worker.
+      - ./data:/app/data
+      # Read-only backup store: web serves files for download/diff.
+      - /mnt/usb-hdd-mirror/backups/pfsense:/backups:ro
+
+    networks:
+      - internal
+      - traefik
+
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: "traefik"
+      traefik.http.routers.pfsense-backup.rule: "Host(`${WEB_HOST:-pfsense-backup.olympos.net}`)"
+      traefik.http.routers.pfsense-backup.entrypoints: "websecure"
+      traefik.http.routers.pfsense-backup.tls: "true"
+      traefik.http.services.pfsense-backup.loadbalancer.server.port: "8080"
 
 networks:
   internal:
     driver: bridge
+  traefik:
+    external: true

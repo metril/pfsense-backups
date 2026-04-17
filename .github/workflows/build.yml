@@ -25,26 +25,33 @@ jobs:
         run: uv sync --locked --extra worker --extra web --extra dev
 
       - name: Ruff
-        run: uv run ruff check pfsense_shared/ worker/
+        run: uv run ruff check pfsense_shared/ worker/ web/
 
-      - name: Mypy (pfsense_shared + worker)
-        # Only enforce strict types on the packages that exist at this phase.
-        run: uv run mypy pfsense_shared/ worker/ || true
+      - name: Mypy
+        run: uv run mypy pfsense_shared/ worker/ web/ || true
 
-  build-worker:
+  build-images:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        component:
+          - name: worker
+            dockerfile: docker/worker.Dockerfile
+          - name: web
+            dockerfile: docker/web.Dockerfile
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build worker image
+      - name: Build ${{ matrix.component.name }} image
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: docker/worker.Dockerfile
+          file: ${{ matrix.component.dockerfile }}
           push: false
-          cache-from: type=gha,scope=worker
-          cache-to: type=gha,scope=worker,mode=max
-          tags: pfsense-backup-worker:ci
+          cache-from: type=gha,scope=${{ matrix.component.name }}
+          cache-to: type=gha,scope=${{ matrix.component.name }},mode=max
+          tags: pfsense-backup-${{ matrix.component.name }}:ci
