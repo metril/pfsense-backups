@@ -16,7 +16,11 @@
 # How it works:
 #   Operates on an ephemeral clone of this repo so the primary working tree is
 #   never touched. git-filter-repo --mailmap rewrites author+committer identities,
-#   then force-push-with-lease to GitHub. Deterministic: same inputs → same SHAs.
+#   then force-push to GitHub. Deterministic: same inputs → same rewritten SHAs.
+#
+#   We use --force (not --force-with-lease) because this is a one-way mirror: the
+#   GitHub side is considered disposable and gets overwritten every run. Lease
+#   checks don't add value for a solo mirror and break re-runs from fresh clones.
 
 set -euo pipefail
 
@@ -64,11 +68,11 @@ git remote add github "${GITHUB_URL}"
 
 if [[ "${MODE}" == "all" ]]; then
   echo ">>> pushing all branches + tags to ${GITHUB_URL}"
-  git push github --all --force-with-lease
+  git push github --all --force
   git push github --tags --force
 else
   echo ">>> pushing ${REF} to ${GITHUB_URL}"
-  git push github "${REF}:refs/heads/${REF}" --force-with-lease
+  git push github "${REF}:refs/heads/${REF}" --force
   # Tags are cheap; push them too so tagged releases land on GitHub.
   git push github --tags --force
 fi
