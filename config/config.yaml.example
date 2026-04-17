@@ -1,0 +1,79 @@
+# pfSense Backup Configuration — EXAMPLE
+#
+# Copy this file to config/config.yaml and fill in your values.
+# config/config.yaml is gitignored so secrets (webhook URLs, tokens) stay local.
+
+pfsense_instances:
+  - name: "main-firewall"
+    url: "https://192.168.1.1"
+    username_env: "MAIN_FW_USERNAME"
+    password_env: "MAIN_FW_PASSWORD"
+    subfolder: "main-fw"
+    backup_prefix: "daily"
+    verify_ssl: false
+    timeout: 30
+    test_connectivity: true
+
+  # - name: "guest-firewall"
+  #   url: "https://192.168.2.1"
+  #   username_env: "GUEST_FW_USERNAME"
+  #   password_env: "GUEST_FW_PASSWORD"
+  #   subfolder: "guest-fw"
+  #   backup_prefix: "daily"
+  #   verify_ssl: false
+  #   timeout: 30
+
+backup:
+  directory: "/backups"
+  filename_format: "{prefix}_{instance_name}_{timestamp}.xml"
+  timestamp_format: "%Y-%m-%d_%H-%M-%S"
+  retention_count: 365
+  compress: false
+
+schedule:
+  enabled: true
+  frequency: "daily"
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(levelname)s - %(message)s"
+
+notifications:
+  enabled: true
+  webhooks:
+    - name: "healthchecks_success"
+      url: "https://healthchecks.example.com/ping/REPLACE-WITH-YOUR-UUID/pfsense-backups"
+      trigger: "success"
+      message_format: "{status}: pfSense backup completed. {details}"
+      include_instance_details: true
+      timeout: 10
+
+    - name: "healthchecks_failure"
+      url: "https://healthchecks.example.com/ping/REPLACE-WITH-YOUR-UUID/pfsense-backups/fail"
+      trigger: "failure"
+      message_format: "{status}: pfSense backup completed. {details}"
+      include_instance_details: true
+      timeout: 10
+
+    - name: "discord_success"
+      url: "https://discord.com/api/webhooks/REPLACE-WITH-YOUR-WEBHOOK-ID/REPLACE-WITH-YOUR-TOKEN"
+      trigger: "success"
+      message_format: "pfSense backup successful: {details}"
+      include_instance_details: true
+      timeout: 10
+      payload_template:
+        content: "{message}"
+
+    - name: "discord_failure"
+      url: "https://discord.com/api/webhooks/REPLACE-WITH-YOUR-WEBHOOK-ID/REPLACE-WITH-YOUR-TOKEN"
+      trigger: "failure"
+      message_format: "pfSense Backup Alert: {details}"
+      include_instance_details: true
+      timeout: 15
+      payload_template:
+        content: "{message}"
+
+  message_settings:
+    include_timestamp: true
+    include_hostname: true
+    max_length: 1000

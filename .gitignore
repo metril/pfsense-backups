@@ -1,2 +1,22 @@
 .env
 !.env.example
+
+# Local config with secrets — use config/config.yaml.example as a reference
+config/config.yaml
+
+# App runtime data (SQLite DB, Fernet key)
+data/
+
+# Author-identity mailmap for GitHub mirror — not committed, see scripts/github-mailmap.txt.example
+scripts/github-mailmap.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
