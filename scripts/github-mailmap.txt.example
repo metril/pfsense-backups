@@ -1,0 +1,12 @@
+# git-filter-repo mailmap — rewrites author/committer identities before pushing to GitHub.
+#
+# Format (per line):
+#   <new-name> <new-email> <old-name> <old-email>
+#   OR
+#   <new-name> <new-email> <old-email>
+#
+# Copy this file to scripts/github-mailmap.txt (gitignored) and keep the template here
+# with placeholder values only. One line per identity that needs rewriting.
+#
+# Example:
+metril <1517921+metril@users.noreply.github.com> Real Name <real@email.example>
