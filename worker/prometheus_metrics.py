@@ -3,12 +3,13 @@
 Prometheus metrics for pfSense backup operations
 """
 
-import time
-import threading
-from prometheus_client import Counter, Histogram, Gauge, Info, start_http_server
-from prometheus_client.core import CollectorRegistry
-from typing import Dict, Any
 import logging
+import threading
+import time
+
+from prometheus_client import Counter, Gauge, Histogram, Info, start_http_server
+from prometheus_client.core import CollectorRegistry
+
 
 class PrometheusMetrics:
     def __init__(self, port: int = 8000, registry: CollectorRegistry = None):

@@ -51,6 +51,11 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "N"]
 
+[tool.ruff.lint.per-file-ignores]
+# prometheus_metrics.py carries long Prometheus label chains that are clearer
+# on one line than wrapped; this file is lifted from the original src/ layout.
+"worker/prometheus_metrics.py" = ["E501"]
+
 [tool.mypy]
 python_version = "3.11"
 strict = true
