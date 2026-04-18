@@ -7,7 +7,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+from apscheduler.jobstores.memory import MemoryJobStore
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from croniter import croniter
@@ -38,7 +38,6 @@ class Scheduler:
     def __init__(
         self,
         session_factory: sessionmaker,
-        db_url: str,
         publisher: IpcPublisher,
         run_backup: Callable[..., object],
         instance_locks: InstanceLocks,
@@ -47,9 +46,16 @@ class Scheduler:
         self._publisher = publisher
         self._run_backup = run_backup
         self._instance_locks = instance_locks
-        jobstore = SQLAlchemyJobStore(url=db_url, tablename="apscheduler_jobs")
+        # MemoryJobStore — not SQLAlchemyJobStore. The persistent store
+        # pickles each job, which for bound methods like ``self._fire``
+        # drags the Scheduler instance (and its SQLAlchemy engine, whose
+        # ``create_engine.<locals>.connect`` closure is unpicklable) into
+        # the pickle graph. We don't need persistence: ``load_all_jobs``
+        # is called on ``start()`` and rebuilds every schedule directly
+        # from the authoritative ``instances`` table, so a restart loses
+        # nothing.
         self._scheduler = BackgroundScheduler(
-            jobstores={"default": jobstore},
+            jobstores={"default": MemoryJobStore()},
             job_defaults={
                 "misfire_grace_time": 3600,
                 "coalesce": True,

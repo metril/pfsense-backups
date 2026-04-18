@@ -113,7 +113,6 @@ def main() -> None:
 
     scheduler = Scheduler(
         session_factory=session_factory,
-        db_url=settings.app_db_url,
         publisher=publisher,
         run_backup=manager.backup_instance,
         instance_locks=instance_locks,
