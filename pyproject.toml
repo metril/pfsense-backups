@@ -1,5 +1,5 @@
 [project]
-name = "pfsense-backup"
+name = "pfsense-backups"
 version = "0.1.0"
 description = "pfSense configuration backup + web dashboard."
 readme = "README.md"

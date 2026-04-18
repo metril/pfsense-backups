@@ -1,5 +1,5 @@
 {
-  "name": "pfsense-backup-frontend",
+  "name": "pfsense-backups-frontend",
   "private": true,
   "version": "0.1.0",
   "type": "module",
