@@ -34,25 +34,43 @@ async def callback(request: Request) -> Response:
     settings = request.app.state.settings
     try:
         token = await oauth.oidc.authorize_access_token(request)
-    except Exception as exc:
-        log.error("OIDC callback failed: %s", exc)
+    except Exception:
+        log.exception("OIDC token exchange failed")
         # L9: redirect the browser to /login with an error query-param so the
         # SPA can render a user-friendly message instead of raw JSON.
         return RedirectResponse(url="/login?error=oidc_exchange_failed", status_code=302)
 
-    claims = token.get("userinfo") or await oauth.oidc.userinfo(token=token)
-    user = user_from_claims(dict(claims))
-    if user is None:
-        return RedirectResponse(url="/login?error=no_email", status_code=302)
+    # Everything past the token exchange needs its own guard: userinfo
+    # fetches, claim coercion, session writes can all raise. An uncaught
+    # exception here produces an opaque "Internal Server Error" page with
+    # the traceback buried in uvicorn's stderr. log.exception puts the
+    # traceback on the root logger so it lands in `docker logs` alongside
+    # the rest of our app output.
+    try:
+        claims = token.get("userinfo")
+        if not claims:
+            try:
+                claims = await oauth.oidc.userinfo(token=token)
+            except Exception:
+                log.exception("OIDC userinfo fetch failed; no id_token claims to fall back on")
+                return RedirectResponse(url="/login?error=userinfo_failed", status_code=302)
 
-    allowed = {e.lower() for e in settings.oidc_allowed_emails}
-    if user["email"].lower() not in allowed:
-        log.warning("Login denied (not on allowlist): %s", user["email"])
-        return RedirectResponse(url="/login?error=access_denied", status_code=302)
+        user = user_from_claims(dict(claims))
+        if user is None:
+            log.warning("OIDC claims had no usable email: %r", dict(claims))
+            return RedirectResponse(url="/login?error=no_email", status_code=302)
 
-    request.session["user"] = user
-    log.info("Login OK: %s", user["email"])
-    return RedirectResponse(url="/", status_code=302)
+        allowed = {e.lower() for e in settings.oidc_allowed_emails}
+        if user["email"].lower() not in allowed:
+            log.warning("Login denied (not on allowlist): %s", user["email"])
+            return RedirectResponse(url="/login?error=access_denied", status_code=302)
+
+        request.session["user"] = user
+        log.info("Login OK: %s", user["email"])
+        return RedirectResponse(url="/", status_code=302)
+    except Exception:
+        log.exception("OIDC callback pipeline failure")
+        return RedirectResponse(url="/login?error=server_error", status_code=302)
 
 
 @router.post("/logout")

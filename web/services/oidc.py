@@ -31,8 +31,18 @@ def make_oauth(
 
 
 def user_from_claims(claims: dict[str, Any]) -> dict[str, Any] | None:
-    """Extract the session user payload from an ID-token claims dict."""
-    email = (claims.get("email") or "").strip().lower()
+    """Extract the session user payload from an ID-token claims dict.
+
+    Defensive about the `email` shape: some IdPs return a list-of-string
+    (Authelia betas did this). Anything we can't coerce to a non-empty
+    string yields None so the caller redirects rather than 500s.
+    """
+    raw = claims.get("email")
+    if isinstance(raw, list):
+        raw = raw[0] if raw else None
+    if not isinstance(raw, str):
+        return None
+    email = raw.strip().lower()
     if not email:
         return None
     return {

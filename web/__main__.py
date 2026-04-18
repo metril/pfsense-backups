@@ -23,6 +23,12 @@ def main() -> None:
         forwarded_allow_ips="*",
         proxy_headers=True,
         log_level=settings.log_level.lower(),
+        # Drop uvicorn's default log config so its loggers propagate to the
+        # root logger configured by basicConfig above — uvicorn access lines
+        # and exception tracebacks then share our ISO-timestamped format and
+        # land in `docker logs` alongside the app's own output.
+        log_config=None,
+        access_log=True,
     )
 
 
