@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Archive, Download, Split } from "lucide-react";
+import { Archive, Download, Eye, Split } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { useBackups, useInstances } from "@/api/queries";
@@ -90,6 +90,7 @@ export function BackupsPage() {
             <th className="text-left font-normal">File</th>
             <th className="text-left font-normal">Size</th>
             <th className="text-left font-normal">Status</th>
+            <th className="w-10"></th>
           </tr>
         </thead>
         <tbody>
@@ -108,22 +109,47 @@ export function BackupsPage() {
                 />
               </td>
               <td className="py-2">
-                <Link to={`/instances`} className="hover:text-accent">{b.instance_name}</Link>
+                <Link to={`/instances`} className="hover:text-accent">
+                  {b.instance_name}
+                </Link>
               </td>
               <td className="py-2 text-xs">{new Date(b.started_at).toLocaleString()}</td>
               <td className="py-2 text-xs">{b.duration_seconds.toFixed(1)}s</td>
               <td className="py-2 font-mono text-xs">
-                {b.filename} {b.compressed && <Badge tone="muted">gz</Badge>}
+                {b.success ? (
+                  <Link to={`/backups/${b.id}/view`} className="hover:text-accent">
+                    {b.filename}
+                  </Link>
+                ) : (
+                  b.filename
+                )}{" "}
+                {b.compressed && <Badge tone="muted">gz</Badge>}
               </td>
               <td className="py-2">{Math.round(b.size_bytes / 1024)} KB</td>
               <td className="py-2">
-                {b.success ? <Badge tone="success">ok</Badge> : <Badge tone="danger">fail</Badge>}
+                {b.success ? (
+                  <Badge tone="success">ok</Badge>
+                ) : (
+                  <Badge tone="danger">fail</Badge>
+                )}
+              </td>
+              <td className="py-2 text-right">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => nav(`/backups/${b.id}/view`)}
+                  disabled={!b.success}
+                  aria-label={`View ${b.filename}`}
+                  title="View XML"
+                >
+                  <Eye className="h-4 w-4" />
+                </Button>
               </td>
             </tr>
           ))}
           {rows.length === 0 && (
             <tr>
-              <td colSpan={7} className="py-8 text-center text-sm text-muted-fg">
+              <td colSpan={8} className="py-8 text-center text-sm text-muted-fg">
                 No backups yet.
               </td>
             </tr>
