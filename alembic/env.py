@@ -20,7 +20,12 @@ from pfsense_shared.models import Base
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers defaults to True, which nukes every logger
+    # registered before Alembic's env.py runs — including the ones our
+    # app (uvicorn + our FastAPI handlers) set up in basicConfig. That
+    # makes every post-migration traceback silently disappear from
+    # `docker logs`. Keep our loggers alive.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # Override alembic.ini's URL with the live env var.
 config.set_main_option(
