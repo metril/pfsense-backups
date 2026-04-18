@@ -80,4 +80,4 @@ jobs:
           push: false
           cache-from: type=gha,scope=${{ matrix.component.name }}
           cache-to: type=gha,scope=${{ matrix.component.name }},mode=max
-          tags: pfsense-backup-${{ matrix.component.name }}:ci
+          tags: pfsense-backups-${{ matrix.component.name }}:ci

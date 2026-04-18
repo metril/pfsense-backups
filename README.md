@@ -56,8 +56,8 @@ Worker exposes Prometheus metrics → :8000/metrics
 
 ```bash
 # 1. Clone
-git clone git@github.com:metril/pfsense-backup.git
-cd pfsense-backup
+git clone git@github.com:metril/pfsense-backups.git
+cd pfsense-backups
 
 # 2. Configure environment
 cp .env.example .env
@@ -137,7 +137,7 @@ Frontend: `cd frontend && npm install && npm run dev`. Vite proxies `/api`
 and `/api/events` to `http://localhost:8080`.
 
 Releases are cut by pushing a semver tag (`v0.1.0`). GitHub Actions builds
-multi-arch images to `ghcr.io/metril/pfsense-backup-{worker,web}` and opens
+multi-arch images to `ghcr.io/metril/pfsense-backups-{worker,web}` and opens
 a GitHub Release with auto-generated notes.
 
 ### Mirroring to both GitLab and GitHub

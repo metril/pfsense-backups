@@ -22,9 +22,9 @@ FROM python:3.13-slim
 # L10: OCI image labels so GHCR + anything consuming the registry can show
 # where this image came from. Values are populated at build time by the
 # GitHub Actions release workflow via docker/metadata-action.
-LABEL org.opencontainers.image.title="pfsense-backup-web" \
-      org.opencontainers.image.description="pfSense backup — web/API service (FastAPI + React)" \
-      org.opencontainers.image.source="https://github.com/metril/pfsense-backup" \
+LABEL org.opencontainers.image.title="pfsense-backups-web" \
+      org.opencontainers.image.description="pfSense backups — web/API service (FastAPI + React)" \
+      org.opencontainers.image.source="https://github.com/metril/pfsense-backups" \
       org.opencontainers.image.licenses="MIT"
 
 ENV PYTHONUNBUFFERED=1 \

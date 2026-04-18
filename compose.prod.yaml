@@ -7,9 +7,9 @@
 
 services:
   worker:
-    image: ghcr.io/metril/pfsense-backup-worker:${IMAGE_TAG:-latest}
+    image: ghcr.io/metril/pfsense-backups-worker:${IMAGE_TAG:-latest}
     pull_policy: always
 
   web:
-    image: ghcr.io/metril/pfsense-backup-web:${IMAGE_TAG:-latest}
+    image: ghcr.io/metril/pfsense-backups-web:${IMAGE_TAG:-latest}
     pull_policy: always

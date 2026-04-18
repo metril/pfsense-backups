@@ -26,7 +26,7 @@ set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 MAILMAP="${REPO_ROOT}/scripts/github-mailmap.txt"
-GITHUB_URL="${GITHUB_URL:-git@github.com:metril/pfsense-backup.git}"
+GITHUB_URL="${GITHUB_URL:-git@github.com:metril/pfsense-backups.git}"
 
 if [[ ! -f "${MAILMAP}" ]]; then
   echo "error: ${MAILMAP} not found." >&2

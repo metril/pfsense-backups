@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: docker/worker.Dockerfile
-    container_name: pfsense-backup-worker
+    container_name: pfsense-backups-worker
     restart: unless-stopped
 
     environment:
@@ -33,7 +33,7 @@ services:
     build:
       context: .
       dockerfile: docker/web.Dockerfile
-    container_name: pfsense-backup-web
+    container_name: pfsense-backups-web
     restart: unless-stopped
     depends_on:
       - worker
@@ -69,10 +69,10 @@ services:
     labels:
       traefik.enable: "true"
       traefik.docker.network: "traefik"
-      traefik.http.routers.pfsense-backup.rule: "Host(`${WEB_HOST:-pfsense-backup.olympos.net}`)"
-      traefik.http.routers.pfsense-backup.entrypoints: "websecure"
-      traefik.http.routers.pfsense-backup.tls: "true"
-      traefik.http.services.pfsense-backup.loadbalancer.server.port: "8080"
+      traefik.http.routers.pfsense-backups.rule: "Host(`${WEB_HOST:-pfsense-backups.olympos.net}`)"
+      traefik.http.routers.pfsense-backups.entrypoints: "websecure"
+      traefik.http.routers.pfsense-backups.tls: "true"
+      traefik.http.services.pfsense-backups.loadbalancer.server.port: "8080"
 
 networks:
   internal:
