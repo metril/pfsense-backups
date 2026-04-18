@@ -6,7 +6,17 @@
 # ------------------------------------------------------------------ #
 # Stage 1: frontend builder
 # ------------------------------------------------------------------ #
-FROM node:20-alpine AS frontend
+# --platform=$BUILDPLATFORM pins this stage to the builder's *native* arch
+# regardless of the --platform requested for the final image. Under buildx
+# multi-arch builds (linux/amd64 + linux/arm64) the runtime stage below is
+# rebuilt once per target platform, but the frontend stage's output is a
+# pile of static files (JS/CSS/HTML) that is architecture-independent, so
+# there's no reason to also rebuild it on each target. Running it under
+# QEMU for arm64 crashed Node 20 + esbuild/vite native binaries with
+# SIGILL ("qemu: uncaught target signal 4 (Illegal instruction)"), which
+# is how v0.3.4's web image failed to publish. Native build + cross-copy
+# sidesteps QEMU entirely and is much faster too.
+FROM --platform=$BUILDPLATFORM node:20-alpine AS frontend
 WORKDIR /fe
 COPY frontend/ ./frontend/
 # L3/L6: install ALL deps (including dev — build tools need them), then
