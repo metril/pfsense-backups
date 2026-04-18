@@ -50,6 +50,12 @@ class WebSettings(CommonSettings):
     worker_push_url: str = Field(default="tcp://worker:5555")
     worker_sub_url: str = Field(default="tcp://worker:5556")
 
+    # A3: rate limiting. slowapi accepts strings like "10/minute", "200/hour".
+    rate_limit_enabled: bool = Field(default=True)
+    rate_limit_default: str = Field(default="100/minute")
+    rate_limit_login: str = Field(default="10/minute")
+    rate_limit_ws: str = Field(default="30/minute")
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def oidc_allowed_emails(self) -> list[str]:

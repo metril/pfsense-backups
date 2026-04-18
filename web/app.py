@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from slowapi.errors import RateLimitExceeded
 from starlette.middleware.sessions import SessionMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
@@ -36,6 +37,7 @@ from .routers import settings_router
 from .services.event_bus import EventBus
 from .services.ipc_client import IpcClient
 from .services.oidc import make_oauth
+from .services.rate_limit import configure_from_settings, limiter, rate_limit_exceeded_handler
 from .static_spa import mount_spa
 
 log = logging.getLogger(__name__)
@@ -89,6 +91,12 @@ def create_app(settings: WebSettings | None = None, static_dir: Path | None = No
 
     app = FastAPI(title="pfSense Backup", lifespan=lifespan)
     app.state.settings = settings
+
+    # A3: configure the module-level slowapi limiter with this app's settings
+    # and attach it to app.state so SlowAPIMiddleware can find it.
+    configure_from_settings(settings)
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
     # Proxy-awareness BEFORE session middleware so `request.url` reflects https://.
     app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")

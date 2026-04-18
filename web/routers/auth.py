@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from ..dependencies import CurrentUser
 from ..middleware import CSRF_COOKIE, CSRF_HEADER
 from ..services.oidc import user_from_claims
+from ..services.rate_limit import limiter, login_limit
 
 log = logging.getLogger(__name__)
 
@@ -19,6 +20,7 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
 @router.get("/login")
+@limiter.limit(login_limit)
 async def login(request: Request) -> Response:
     oauth = request.app.state.oauth
     redirect_url = request.app.state.settings.oidc_redirect_url
@@ -26,6 +28,7 @@ async def login(request: Request) -> Response:
 
 
 @router.get("/callback")
+@limiter.limit(login_limit)
 async def callback(request: Request) -> Response:
     oauth = request.app.state.oauth
     settings = request.app.state.settings

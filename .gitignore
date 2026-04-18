@@ -4,8 +4,9 @@
 # Local config with secrets — use config/config.yaml.example as a reference
 config/config.yaml
 
-# App runtime data (SQLite DB, Fernet key)
+# App runtime data (SQLite DB, Fernet key, init lock)
 data/
+.init.lock
 
 # Author-identity mailmap for GitHub mirror — not committed, see scripts/github-mailmap.txt.example
 scripts/github-mailmap.txt
