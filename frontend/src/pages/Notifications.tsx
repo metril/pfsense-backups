@@ -3,6 +3,7 @@ import { BellRing, Pencil, Plus, Send, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { Input } from "@/components/ui/Input";
 import { Label } from "@/components/ui/Label";
 import {
@@ -34,6 +35,7 @@ export function NotificationsPage() {
   const update = useUpdateNotification();
   const del = useDeleteNotification();
   const send = useSendTestNotification();
+  const confirm = useConfirm();
   const [editing, setEditing] = useState<Draft | null>(null);
 
   return (
@@ -67,8 +69,13 @@ export function NotificationsPage() {
                 <Button
                   variant="ghost"
                   size="icon"
-                  onClick={() => {
-                    if (confirm(`Delete ${n.name}?`)) del.mutate(n.id);
+                  onClick={async () => {
+                    const ok = await confirm({
+                      title: `Delete ${n.name}?`,
+                      confirmLabel: "Delete",
+                      tone: "danger",
+                    });
+                    if (ok) del.mutate(n.id);
                   }}
                 >
                   <Trash2 className="h-4 w-4 text-danger" />

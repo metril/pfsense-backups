@@ -15,6 +15,8 @@ export default {
         "accent-fg": "hsl(var(--accent-fg))",
         danger: "hsl(var(--danger))",
         ok: "hsl(var(--ok))",
+        warn: "hsl(var(--warn))",
+        info: "hsl(var(--info))",
       },
     },
   },

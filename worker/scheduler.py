@@ -87,15 +87,16 @@ class Scheduler:
         with self._session_factory() as s:
             instances = s.query(Instance).filter(Instance.enabled.is_(True)).all()
             for inst in instances:
-                self._add_or_update(inst.id, inst.cron_expression, inst.cron_timezone)
+                self._add_or_update(inst.id, inst.name, inst.cron_expression, inst.cron_timezone)
 
     def reload_instance(self, instance_id: int) -> None:
         with self._session_factory() as s:
             inst = s.get(Instance, instance_id)
         if inst is None or not inst.enabled or not inst.cron_expression:
-            self._remove(instance_id)
+            name = inst.name if inst is not None else None
+            self._remove(instance_id, name=name)
         else:
-            self._add_or_update(inst.id, inst.cron_expression, inst.cron_timezone)
+            self._add_or_update(inst.id, inst.name, inst.cron_expression, inst.cron_timezone)
         self._publisher.publish(
             ScheduleReloaded(instance_id=instance_id, ts=datetime.now(UTC))
         )
@@ -112,32 +113,35 @@ class Scheduler:
     # internals
     # -------------------------------------------------------------- #
 
-    def _add_or_update(self, instance_id: int, cron: str | None, tz: str) -> None:
+    def _add_or_update(
+        self, instance_id: int, name: str, cron: str | None, tz: str
+    ) -> None:
         if not cron:
-            self._remove(instance_id)
+            self._remove(instance_id, name=name)
             return
         # H10: validate cron + timezone up-front so we log a clear error and
         # never hand APScheduler something it will silently reject later.
         if not croniter.is_valid(cron):
             log.error(
-                "Invalid cron expression for instance %s: %r — job not scheduled",
-                instance_id,
-                cron,
+                "Invalid cron expression for %r (id=%d): %r — job not scheduled",
+                name, instance_id, cron,
             )
             return
         try:
             ZoneInfo(tz)
         except ZoneInfoNotFoundError:
             log.error(
-                "Invalid timezone for instance %s: %r — job not scheduled",
-                instance_id,
-                tz,
+                "Invalid timezone for %r (id=%d): %r — job not scheduled",
+                name, instance_id, tz,
             )
             return
         try:
             trigger = CronTrigger.from_crontab(cron, timezone=tz)
         except Exception as exc:
-            log.error("APScheduler rejected cron for instance %s: %s (%s)", instance_id, cron, exc)
+            log.error(
+                "APScheduler rejected cron for %r (id=%d): %s (%s)",
+                name, instance_id, cron, exc,
+            )
             return
         self._scheduler.add_job(
             self._fire,
@@ -146,12 +150,15 @@ class Scheduler:
             kwargs={"instance_id": instance_id},
             replace_existing=True,
         )
-        log.info("Scheduled instance %s with cron=%r tz=%s", instance_id, cron, tz)
+        log.info(
+            "Scheduled %r (id=%d) with cron=%r tz=%s", name, instance_id, cron, tz
+        )
 
-    def _remove(self, instance_id: int) -> None:
+    def _remove(self, instance_id: int, *, name: str | None = None) -> None:
         try:
             self._scheduler.remove_job(_job_id(instance_id))
-            log.info("Unscheduled instance %s", instance_id)
+            label = f"{name!r} (id={instance_id})" if name else f"instance id={instance_id}"
+            log.info("Unscheduled %s", label)
         except Exception:
             pass
 
@@ -163,10 +170,10 @@ class Scheduler:
             if inst is None or not inst.enabled:
                 # M16: instance was deleted or disabled between scheduling and
                 # firing. Silently skip — no Job row, no event storm.
-                log.info(
-                    "Scheduled run skipped: instance %s missing or disabled",
-                    instance_id,
+                name_or_id = (
+                    f"{inst.name!r}" if inst is not None else f"id={instance_id}"
                 )
+                log.info("Scheduled run skipped: %s missing or disabled", name_or_id)
                 return
             job = Job(
                 instance_id=instance_id,

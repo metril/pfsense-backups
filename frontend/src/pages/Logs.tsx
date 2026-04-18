@@ -30,12 +30,27 @@ const LEVEL_ORDER: Record<Level, number> = {
   CRITICAL: 50,
 };
 
-const LEVEL_TONE: Record<Level, string> = {
+// Level → text/row styling. Uses theme tokens so colors match Toast/Badge
+// elsewhere in the app instead of stock Tailwind palette values.
+const LEVEL_TEXT: Record<Level, string> = {
   DEBUG: "text-muted-fg",
-  INFO: "text-fg",
-  WARNING: "text-yellow-400",
-  ERROR: "text-red-400",
-  CRITICAL: "text-red-500 font-semibold",
+  INFO: "text-info",
+  WARNING: "text-warn",
+  ERROR: "text-danger",
+  CRITICAL: "text-danger font-semibold",
+};
+
+const LEVEL_ROW: Record<Level, string> = {
+  DEBUG: "",
+  INFO: "",
+  WARNING: "bg-warn/5",
+  ERROR: "bg-danger/10",
+  CRITICAL: "bg-danger/20",
+};
+
+const SERVICE_TONE: Record<Service, string> = {
+  web: "text-accent",
+  worker: "text-ok",
 };
 
 export function LogsPage() {
@@ -231,19 +246,24 @@ export function LogsPage() {
             {filtered.map((e, i) => (
               <li
                 key={`${e.ts}-${i}`}
-                className="flex gap-3 px-3 py-1 whitespace-pre-wrap break-words"
+                className={cn(
+                  "flex gap-3 px-3 py-1 whitespace-pre-wrap break-words",
+                  LEVEL_ROW[e.level],
+                )}
               >
                 <span className="shrink-0 text-muted-fg tabular-nums">
                   {e.ts.replace("T", " ").slice(0, 19)}
                 </span>
-                <span className="shrink-0 w-14 text-muted-fg">{e.service}</span>
-                <span className={cn("shrink-0 w-16", LEVEL_TONE[e.level])}>
+                <span className={cn("shrink-0 w-14 font-semibold", SERVICE_TONE[e.service])}>
+                  {e.service}
+                </span>
+                <span className={cn("shrink-0 w-16", LEVEL_TEXT[e.level])}>
                   {e.level}
                 </span>
                 <span className="shrink-0 max-w-[18rem] truncate text-muted-fg">
                   {e.logger}
                 </span>
-                <span className="flex-1">{e.message}</span>
+                <span className={cn("flex-1", LEVEL_TEXT[e.level])}>{e.message}</span>
               </li>
             ))}
           </ul>

@@ -9,6 +9,7 @@ import {
 } from "@tanstack/react-query";
 import App from "./App";
 import { ApiError } from "./api/client";
+import { ConfirmProvider } from "./components/ui/ConfirmDialog";
 import { ToastProvider, useToast } from "./components/ui/Toast";
 import "./index.css";
 
@@ -77,7 +78,9 @@ function AppWithErrorBridge() {
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <ToastProvider>
-      <AppWithErrorBridge />
+      <ConfirmProvider>
+        <AppWithErrorBridge />
+      </ConfirmProvider>
     </ToastProvider>
   </StrictMode>,
 );

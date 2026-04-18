@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
 import { Input } from "@/components/ui/Input";
 import { Label } from "@/components/ui/Label";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { useToast } from "@/components/ui/Toast";
 import { CronEditor } from "@/components/cron/CronEditor";
 import {
@@ -47,6 +48,7 @@ export function InstancesPage() {
   const backup = useBackupNow();
   const importBackups = useImportBackups();
   const toast = useToast();
+  const confirm = useConfirm();
 
   return (
     <div>
@@ -108,14 +110,15 @@ export function InstancesPage() {
                       size="icon"
                       onClick={async () => {
                         const sub = inst.subfolder ? `/${inst.subfolder}` : "";
-                        if (
-                          !confirm(
-                            `Import existing backup files from /backups${sub} into "${inst.name}"?\n\n` +
-                              "Only files not already tracked will be added. Files keep their original " +
-                              "names and paths; mtime is used for the timestamp.",
-                          )
-                        )
-                          return;
+                        const ok = await confirm({
+                          title: `Import backups for ${inst.name}?`,
+                          description:
+                            `Scans /backups${sub} and adds any *.xml / *.xml.gz ` +
+                            `files that aren't already tracked. Files keep their ` +
+                            `original names and paths; mtime is used for the timestamp.`,
+                          confirmLabel: "Import",
+                        });
+                        if (!ok) return;
                         try {
                           const r = await importBackups.mutateAsync(inst.id);
                           toast.success(
@@ -142,8 +145,16 @@ export function InstancesPage() {
                     <Button
                       variant="ghost"
                       size="icon"
-                      onClick={() => {
-                        if (confirm(`Delete ${inst.name}?`)) del.mutate(inst.id);
+                      onClick={async () => {
+                        const ok = await confirm({
+                          title: `Delete ${inst.name}?`,
+                          description:
+                            "The instance row and every backup row linked to it " +
+                            "will be removed. Files on disk are NOT deleted.",
+                          confirmLabel: "Delete",
+                          tone: "danger",
+                        });
+                        if (ok) del.mutate(inst.id);
                       }}
                       aria-label={`Delete ${inst.name}`}
                     >
