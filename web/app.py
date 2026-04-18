@@ -111,9 +111,17 @@ def create_app(settings: WebSettings | None = None, static_dir: Path | None = No
         log.exception("Unhandled exception on %s %s", request.method, request.url.path)
         return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
-    # Proxy-awareness BEFORE session middleware so `request.url` reflects https://.
-    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
-
+    # Middleware wrapping in Starlette: add_middleware() inserts at the head
+    # of user_middleware, and build_middleware_stack iterates via reversed(),
+    # so the LAST add_middleware call becomes the OUTERMOST wrapper — first
+    # to run on incoming requests. We need:
+    #   request → ProxyHeaders → Session → AuthRequired → router
+    # so AuthRequired (which reads request.session) sees a populated session
+    # scope, and ProxyHeaders (which rewrites scheme from X-Forwarded-Proto)
+    # runs before SessionMiddleware checks cookie Secure-flag eligibility.
+    # To get that ordering we add in the REVERSE order: innermost first,
+    # outermost last.
+    app.add_middleware(AuthRequiredMiddleware)
     app.add_middleware(
         SessionMiddleware,
         secret_key=settings.session_secret,
@@ -122,7 +130,7 @@ def create_app(settings: WebSettings | None = None, static_dir: Path | None = No
         same_site="lax",
         max_age=14 * 24 * 3600,
     )
-    app.add_middleware(AuthRequiredMiddleware)
+    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
     app.include_router(auth_router.router)
     app.include_router(health_router.router)
