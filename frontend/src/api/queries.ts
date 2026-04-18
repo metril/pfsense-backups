@@ -106,6 +106,17 @@ export function useBackupNow() {
   });
 }
 
+export function useImportBackups() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) =>
+      api.post<{ imported: number; skipped: number; scanned_dir: string }>(
+        `/api/instances/${id}/import-backups`,
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["backups"] }),
+  });
+}
+
 // ----------------- schedule -----------------
 
 export function useSchedules() {

@@ -70,21 +70,35 @@ export function CronEditor({
       </div>
 
       {onTimezoneChange && (
-        <>
-          <Input
-            list="pfsense-tz-list"
-            value={timezone}
-            onChange={(e) => onTimezoneChange(e.target.value)}
-            placeholder="UTC"
-            aria-label="Timezone"
-          />
-          {/* Datalist-based suggestions for every IANA tz the browser knows. */}
-          <datalist id="pfsense-tz-list">
-            {tzList.map((tz) => (
-              <option key={tz} value={tz} />
-            ))}
-          </datalist>
-        </>
+        // Real <select> (not an <input list>) — datalists render unreliably
+        // inside portal-rendered modals on some browsers, which made the TZ
+        // "dropdown" look stuck.
+        <select
+          value={tzList.includes(timezone) ? timezone : "__custom__"}
+          onChange={(e) => {
+            const v = e.target.value;
+            if (v !== "__custom__") onTimezoneChange(v);
+          }}
+          aria-label="Timezone"
+          className={cn(
+            "h-9 w-full rounded-md border border-border bg-bg px-3 text-sm",
+            "focus-visible:border-accent focus-visible:outline-none",
+          )}
+        >
+          {/* If the saved tz isn't in the browser's IANA list (e.g. an older
+              snapshot), keep it visible as a disabled option so the user
+              doesn't silently have it overwritten. */}
+          {!tzList.includes(timezone) && (
+            <option value="__custom__" disabled>
+              {timezone} (not in browser list)
+            </option>
+          )}
+          {tzList.map((tz) => (
+            <option key={tz} value={tz}>
+              {tz}
+            </option>
+          ))}
+        </select>
       )}
 
       {error ? (

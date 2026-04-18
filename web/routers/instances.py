@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import select
 
-from pfsense_shared.models import Instance, Job
+from pfsense_shared.models import Backup, BackupSettings, Instance, Job
 from pfsense_shared.schemas import (
     InstanceCreate,
     InstanceRead,
@@ -218,3 +220,84 @@ async def backup_now(
     await db.commit()
     await ipc.send(RunBackupCommand(instance_id=instance_id, job_id=job.id))
     return {"job_id": job.id}
+
+
+class ImportBackupsResult(BaseModel):
+    imported: int
+    skipped: int
+    scanned_dir: str
+
+
+@router.post("/{instance_id}/import-backups", response_model=ImportBackupsResult)
+async def import_backups(
+    instance_id: int, db: DbSession, user: CurrentUser
+) -> ImportBackupsResult:
+    """Adopt pre-existing backup files on disk into this instance's Backup rows.
+
+    Scans the instance's backup directory (``{BackupSettings.directory}`` joined
+    with ``Instance.subfolder`` if set), non-recursively, for ``*.xml`` and
+    ``*.xml.gz`` files. Each unseen file (by absolute path) gets a Backup row
+    with ``success=True``, size from ``st_size``, and mtime mapped to both
+    ``started_at`` and ``finished_at``. Files already referenced by any existing
+    Backup row are skipped so a shared directory doesn't double-adopt across
+    instances.
+    """
+    inst = await db.get(Instance, instance_id)
+    if inst is None:
+        raise HTTPException(404, "instance not found")
+
+    bs = await db.get(BackupSettings, 1)
+    root = Path(bs.directory if bs is not None else "/backups")
+    scan_dir = root / inst.subfolder if inst.subfolder else root
+
+    if not scan_dir.is_dir():
+        raise HTTPException(404, f"backup directory not found on disk: {scan_dir}")
+
+    candidates: list[Path] = sorted(
+        p for p in scan_dir.iterdir()
+        if p.is_file() and (p.suffix == ".xml" or p.name.endswith(".xml.gz"))
+    )
+
+    existing_paths: set[str] = set(
+        (await db.scalars(select(Backup.path))).all()
+    )
+
+    imported = 0
+    skipped = 0
+    for p in candidates:
+        abs_path = str(p.resolve())
+        if abs_path in existing_paths:
+            skipped += 1
+            continue
+        stat = p.stat()
+        ts = datetime.fromtimestamp(stat.st_mtime, tz=UTC)
+        db.add(
+            Backup(
+                instance_id=inst.id,
+                job_id=None,
+                started_at=ts,
+                finished_at=ts,
+                duration_seconds=0.0,
+                filename=p.name,
+                path=abs_path,
+                size_bytes=stat.st_size,
+                compressed=p.name.endswith(".gz"),
+                success=True,
+                error_message=None,
+            )
+        )
+        imported += 1
+
+    audit.record(
+        db, actor_email=user["email"], action="trigger", resource="import_backups",
+        resource_id=inst.id,
+        details={"imported": imported, "skipped": skipped, "scanned_dir": str(scan_dir)},
+    )
+    await db.commit()
+    log.info(
+        "import_backups instance=%s dir=%s imported=%d skipped=%d",
+        inst.name, scan_dir, imported, skipped,
+    )
+    return ImportBackupsResult(
+        imported=imported, skipped=skipped, scanned_dir=str(scan_dir)
+    )

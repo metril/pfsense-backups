@@ -1,15 +1,17 @@
 import { useState } from "react";
-import { Pencil, Plug, Play, Plus, Trash2 } from "lucide-react";
+import { HardDriveDownload, Pencil, Plug, Play, Plus, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
 import { Input } from "@/components/ui/Input";
 import { Label } from "@/components/ui/Label";
+import { useToast } from "@/components/ui/Toast";
 import { CronEditor } from "@/components/cron/CronEditor";
 import {
   useBackupNow,
   useCreateInstance,
   useDeleteInstance,
+  useImportBackups,
   useInstances,
   useTestConnection,
   useUpdateInstance,
@@ -43,6 +45,8 @@ export function InstancesPage() {
   const del = useDeleteInstance();
   const test = useTestConnection();
   const backup = useBackupNow();
+  const importBackups = useImportBackups();
+  const toast = useToast();
 
   return (
     <div>
@@ -98,6 +102,34 @@ export function InstancesPage() {
                       title="Test connection"
                     >
                       <Plug className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={async () => {
+                        const sub = inst.subfolder ? `/${inst.subfolder}` : "";
+                        if (
+                          !confirm(
+                            `Import existing backup files from /backups${sub} into "${inst.name}"?\n\n` +
+                              "Only files not already tracked will be added. Files keep their original " +
+                              "names and paths; mtime is used for the timestamp.",
+                          )
+                        )
+                          return;
+                        try {
+                          const r = await importBackups.mutateAsync(inst.id);
+                          toast.success(
+                            `Imported ${r.imported}, skipped ${r.skipped} from ${r.scanned_dir}`,
+                            "Import complete",
+                          );
+                        } catch {
+                          // MutationCache's onError already surfaces the error toast.
+                        }
+                      }}
+                      aria-label={`Import backups from disk for ${inst.name}`}
+                      title="Import from disk"
+                    >
+                      <HardDriveDownload className="h-4 w-4" />
                     </Button>
                     <Button
                       variant="ghost"

@@ -313,13 +313,27 @@ class PfSenseBackupManager:
         "Accept-Language": "en-US,en;q=0.5",
     }
 
-    # H6: unique dashboard marker. The old heuristic matched "Dashboard" or
-    # "logout.php" — both appear on non-dashboard pages that happen to render
-    # the authenticated chrome (error pages, etc.). pfSense's dashboard page
-    # title is always "Status: Dashboard" across CE 2.7+ and Plus 24.x.
+    # H6: positive dashboard markers (present only when logged in).
+    # pfSense CE 2.7+ and Plus 24.x render "Status: Dashboard" as the title.
+    # Older skins / themed builds drop the prefix, so also accept the bare
+    # "Dashboard" when combined with the authenticated chrome marker below.
     _DASHBOARD_MARKERS = (
         "<title>Status: Dashboard",
         "widget-dashboard",
+        'id="logout"',
+        "index.php?logout",
+    )
+
+    # H8: negative markers — if any of these appear in the POST response, the
+    # login form is still being rendered, which means auth failed regardless
+    # of the 200 status. More reliable than the positive markers on themed
+    # or heavily customized pfSense installs where the dashboard title gets
+    # overridden.
+    _LOGIN_FORM_MARKERS = (
+        'name="passwordfld"',
+        "name='passwordfld'",
+        'name="usernamefld"',
+        "name='usernamefld'",
     )
 
     # H7: pfSense emits text/xml, application/xml, or application/octet-stream
@@ -344,6 +358,13 @@ class PfSenseBackupManager:
             self._metrics.record_network_request(snap.name, "login_page", resp.status_code)
 
             csrf_token = self._extract_csrf(resp.text)
+            if not csrf_token:
+                log.warning(
+                    "No __csrf_magic token found on login page for %s — "
+                    "pfSense layout may have changed. Body starts: %s",
+                    snap.name,
+                    resp.text[:200].replace("\n", " ").strip(),
+                )
 
             data = {"login": "Login", "usernamefld": snap.username, "passwordfld": snap.password}
             if csrf_token:
@@ -360,17 +381,32 @@ class PfSenseBackupManager:
             )
             self._metrics.record_network_request(snap.name, "login", resp.status_code)
 
-            ok = any(marker in resp.text for marker in self._DASHBOARD_MARKERS)
+            body = resp.text
+            has_dashboard = any(m in body for m in self._DASHBOARD_MARKERS)
+            has_login_form = any(m in body for m in self._LOGIN_FORM_MARKERS)
+            # Trust the negative signal first: if the login form is still on
+            # the page we're definitely not authenticated, regardless of any
+            # incidental "Dashboard" text elsewhere.
+            ok = has_dashboard and not has_login_form
+
             self._metrics.record_auth_attempt(snap.name, ok, timer.get_duration())
-            if not ok:
-                # Dump a short prefix of the response so the user can diagnose
-                # a misidentified page (e.g. account locked, password expired).
-                snippet = resp.text[:200].replace("\n", " ").strip()
+            cookies = ";".join(f"{c.name}" for c in http.cookies)
+            if ok:
+                log.info(
+                    "Authentication OK for %s (final_url=%s, cookies=%s, body=%d bytes)",
+                    snap.name, resp.url, cookies or "<none>", len(body),
+                )
+            else:
+                # Dump more signal than before so the user can diagnose a
+                # misidentified response (themed dashboard, MFA prompt,
+                # account locked, password-expired redirect, etc.).
+                snippet = body[:400].replace("\n", " ").strip()
                 log.error(
-                    "Authentication failed for %s (status=%d, body starts: %s...)",
-                    snap.name,
-                    resp.status_code,
-                    snippet,
+                    "Authentication failed for %s "
+                    "(status=%d, final_url=%s, cookies=%s, body=%d bytes, "
+                    "has_dashboard=%s, has_login_form=%s, body starts: %s)",
+                    snap.name, resp.status_code, resp.url, cookies or "<none>",
+                    len(body), has_dashboard, has_login_form, snippet,
                 )
             return ok
 
