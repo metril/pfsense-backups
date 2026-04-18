@@ -122,7 +122,7 @@ encrypted pfSense credentials are unrecoverable.
   `pfsense_shared/crypto.py`). The key is generated on first boot with 0600
   permissions.
 - Rotating `SESSION_SECRET` invalidates all existing browser sessions.
-  Rotating the Fernet key (`PFSENSE_BACKUP_SECRET_KEY_FILE`) invalidates all
+  Rotating the Fernet key (`PFSENSE_BACKUPS_SECRET_KEY_FILE`) invalidates all
   stored passwords — they'll need to be re-entered in the UI.
 - Restore (uploading a backup **back** to pfSense) is intentionally not
   implemented; it's high-risk to do over the same form auth, and manual

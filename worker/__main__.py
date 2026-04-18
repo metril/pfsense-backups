@@ -73,7 +73,7 @@ def main() -> None:
     session_factory = make_session_factory(engine)
     _mark_stale_jobs(session_factory)
 
-    crypto = Crypto.from_file(settings.pfsense_backup_secret_key_file)
+    crypto = Crypto.from_file(settings.pfsense_backups_secret_key_file)
 
     metrics = get_metrics_instance(port=settings.metrics_port)
     publisher = IpcPublisher(settings.zmq_pub_bind)

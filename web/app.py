@@ -57,7 +57,7 @@ async def lifespan(app: FastAPI):
     async_engine = make_async_engine(settings.app_db_url)
     app.state.engine = async_engine
     app.state.session_factory = make_async_session_factory(async_engine)
-    app.state.crypto = Crypto.from_file(settings.pfsense_backup_secret_key_file)
+    app.state.crypto = Crypto.from_file(settings.pfsense_backups_secret_key_file)
 
     bus = EventBus()
     app.state.event_bus = bus

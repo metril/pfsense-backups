@@ -17,7 +17,7 @@ class CommonSettings(BaseSettings):
     )
 
     app_db_url: str = Field(default=f"sqlite:///{DB_FILE}")
-    pfsense_backup_secret_key_file: Path = Field(default=KEY_FILE)
+    pfsense_backups_secret_key_file: Path = Field(default=KEY_FILE)
     backups_dir: Path = Field(default=BACKUPS_DIR)
     log_level: str = Field(default="INFO")
 
