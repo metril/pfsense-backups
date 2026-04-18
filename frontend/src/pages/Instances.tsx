@@ -85,6 +85,7 @@ export function InstancesPage() {
                       variant="ghost"
                       size="icon"
                       onClick={() => backup.mutate(inst.id)}
+                      aria-label={`Backup ${inst.name} now`}
                       title="Backup now"
                     >
                       <Play className="h-4 w-4" />
@@ -93,11 +94,17 @@ export function InstancesPage() {
                       variant="ghost"
                       size="icon"
                       onClick={() => test.mutate(inst.id)}
+                      aria-label={`Test connection to ${inst.name}`}
                       title="Test connection"
                     >
                       <Plug className="h-4 w-4" />
                     </Button>
-                    <Button variant="ghost" size="icon" onClick={() => setEditing(toDraft(inst))}>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => setEditing(toDraft(inst))}
+                      aria-label={`Edit ${inst.name}`}
+                    >
                       <Pencil className="h-4 w-4" />
                     </Button>
                     <Button
@@ -106,6 +113,7 @@ export function InstancesPage() {
                       onClick={() => {
                         if (confirm(`Delete ${inst.name}?`)) del.mutate(inst.id);
                       }}
+                      aria-label={`Delete ${inst.name}`}
                     >
                       <Trash2 className="h-4 w-4 text-danger" />
                     </Button>
@@ -125,7 +133,12 @@ export function InstancesPage() {
       )}
 
       {editing && (
+        // C5: key by id ("new" for fresh adds) so the dialog remounts with
+        // fresh form state whenever the user switches which instance they
+        // are editing. useState's initializer-only semantics otherwise keep
+        // the first-opened draft's values forever.
         <EditorDialog
+          key={editing.id ?? "new"}
           draft={editing}
           onClose={() => setEditing(null)}
           onSave={async (d) => {
@@ -183,7 +196,14 @@ function EditorDialog({ draft, onClose, onSave }: { draft: Draft; onClose: () =>
     <Dialog open onOpenChange={(o) => !o && onClose()} title={isNew ? "Add instance" : `Edit ${d.name}`}>
       <div className="grid grid-cols-2 gap-4">
         <Field label="Name"><Input value={d.name} onChange={(e) => setD({ ...d, name: e.target.value })} /></Field>
-        <Field label="URL"><Input value={d.url} onChange={(e) => setD({ ...d, url: e.target.value })} placeholder="https://pfsense.example.com" /></Field>
+        <Field label="URL">
+          <Input
+            type="url"
+            value={d.url}
+            onChange={(e) => setD({ ...d, url: e.target.value })}
+            placeholder="https://pfsense.example.com"
+          />
+        </Field>
         <Field label="Username"><Input value={d.username} onChange={(e) => setD({ ...d, username: e.target.value })} /></Field>
         <Field label={isNew ? "Password" : "Password (leave blank to keep)"}>
           <Input type="password" value={d.password} onChange={(e) => setD({ ...d, password: e.target.value })} />
@@ -194,13 +214,25 @@ function EditorDialog({ draft, onClose, onSave }: { draft: Draft; onClose: () =>
         <Field label="Retention count"><Input type="number" value={d.retention_count} onChange={(e) => setD({ ...d, retention_count: Number(e.target.value) })} /></Field>
 
         <Field label="Verify SSL">
-          <Switch checked={d.verify_ssl ?? false} onChange={(v) => setD({ ...d, verify_ssl: v })} />
+          <Switch
+            label="Verify SSL"
+            checked={d.verify_ssl ?? false}
+            onChange={(v) => setD({ ...d, verify_ssl: v })}
+          />
         </Field>
         <Field label="Compress">
-          <Switch checked={d.compress ?? false} onChange={(v) => setD({ ...d, compress: v })} />
+          <Switch
+            label="Compress backups"
+            checked={d.compress ?? false}
+            onChange={(v) => setD({ ...d, compress: v })}
+          />
         </Field>
         <Field label="Enabled">
-          <Switch checked={d.enabled ?? true} onChange={(v) => setD({ ...d, enabled: v })} />
+          <Switch
+            label="Instance enabled"
+            checked={d.enabled ?? true}
+            onChange={(v) => setD({ ...d, enabled: v })}
+          />
         </Field>
 
         <div className="col-span-2">
@@ -231,10 +263,22 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function Switch({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+function Switch({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  label: string;
+}) {
+  // M6 (a11y): expose as a proper switch so screen readers announce it.
   return (
     <button
       type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
       onClick={() => onChange(!checked)}
       className={`mt-1 inline-flex h-5 w-9 items-center rounded-full transition-colors ${
         checked ? "bg-accent" : "bg-muted"

@@ -50,7 +50,13 @@ export function Dashboard() {
             lastBackup={backups.data?.find((b) => b.instance_id === inst.id)}
             onBackupNow={() => backupNow.mutate(inst.id)}
             onTest={() => test.mutate(inst.id)}
-            busy={backupNow.isPending || test.isPending}
+            // H3: per-instance busy flag. TanStack Query exposes the last
+            // mutation's `variables`; compare to this tile's id so clicking
+            // one tile doesn't freeze every tile's buttons.
+            busy={
+              (backupNow.isPending && backupNow.variables === inst.id) ||
+              (test.isPending && test.variables === inst.id)
+            }
           />
         ))}
       </div>

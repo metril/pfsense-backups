@@ -1,10 +1,23 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import cronstrue from "cronstrue";
 import cronParser from "cron-parser";
 import { cn } from "@/lib/cn";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { CronBuilderModal } from "./CronBuilderModal";
+
+// M12: Intl.supportedValuesOf is widely available in evergreen browsers;
+// fall back to a short curated list if missing so the app still works.
+function supportedTimezones(): string[] {
+  try {
+    const fn = (Intl as unknown as { supportedValuesOf?: (k: string) => string[] })
+      .supportedValuesOf;
+    if (typeof fn === "function") return fn("timeZone");
+  } catch {
+    // swallow
+  }
+  return ["UTC", "America/Los_Angeles", "America/New_York", "Europe/London", "Europe/Berlin"];
+}
 
 export function CronEditor({
   value,
@@ -21,6 +34,7 @@ export function CronEditor({
   const [description, setDescription] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [nextRuns, setNextRuns] = useState<string[]>([]);
+  const tzList = useMemo(supportedTimezones, []);
 
   useEffect(() => {
     if (!value) {
@@ -56,11 +70,21 @@ export function CronEditor({
       </div>
 
       {onTimezoneChange && (
-        <Input
-          value={timezone}
-          onChange={(e) => onTimezoneChange(e.target.value)}
-          placeholder="UTC"
-        />
+        <>
+          <Input
+            list="pfsense-tz-list"
+            value={timezone}
+            onChange={(e) => onTimezoneChange(e.target.value)}
+            placeholder="UTC"
+            aria-label="Timezone"
+          />
+          {/* Datalist-based suggestions for every IANA tz the browser knows. */}
+          <datalist id="pfsense-tz-list">
+            {tzList.map((tz) => (
+              <option key={tz} value={tz} />
+            ))}
+          </datalist>
+        </>
       )}
 
       {error ? (

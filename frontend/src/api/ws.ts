@@ -18,6 +18,11 @@ export function useEvents(): {
   useEffect(() => {
     let closed = false;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    // M8: exponential backoff capped at 30s. Resets on a successful open so
+    // a brief hiccup doesn't leave us with minute-long retry gaps.
+    let attempt = 0;
+    const maxDelayMs = 30_000;
+    const baseDelayMs = 1_500;
 
     function connect() {
       const scheme = location.protocol === "https:" ? "wss" : "ws";
@@ -26,11 +31,16 @@ export function useEvents(): {
       socketRef.current = ws;
 
       ws.onopen = () => {
+        attempt = 0;
         setConnected(true);
       };
       ws.onclose = () => {
         setConnected(false);
-        if (!closed) reconnectTimer = setTimeout(connect, 1500);
+        if (!closed) {
+          const delay = Math.min(maxDelayMs, baseDelayMs * 2 ** attempt);
+          attempt += 1;
+          reconnectTimer = setTimeout(connect, delay);
+        }
       };
       ws.onerror = () => {
         ws.close();

@@ -66,6 +66,11 @@ function Card({
       <div className="mt-3">
         <Label>Cron</Label>
         <CronEditor value={cron} onChange={setCron} timezone={tz} onTimezoneChange={setTz} />
+        {/* M14: blank cron == disabled; spell it out so users don't assume
+            the 'enabled' switch runs without a schedule. */}
+        <p className="mt-1 text-xs text-muted-fg">
+          Leave the cron field blank to disable scheduling for this instance.
+        </p>
       </div>
       <div className="mt-3 flex justify-end gap-2">
         <Button

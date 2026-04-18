@@ -12,30 +12,28 @@ export function BackupsPage() {
   const instances = useInstances();
   const nav = useNavigate();
 
-  const [selected, setSelected] = useState<Set<number>>(new Set());
+  // M9: preserve selection ORDER — the first-selected row is "A" in the diff
+  // and the second-selected is "B", rather than silently sorting by id.
+  const [selectedList, setSelectedList] = useState<number[]>([]);
+  const selected = useMemo(() => new Set(selectedList), [selectedList]);
   const rows = backups.data ?? [];
-  const canDiff = selected.size === 2;
-
-  const selectedIds = useMemo(() => [...selected], [selected]);
+  const canDiff = selectedList.length === 2;
 
   function toggle(id: number) {
-    const next = new Set(selected);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    setSelected(next);
+    setSelectedList((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   }
 
   async function downloadSelected() {
-    if (selected.size === 0) return;
-    if (selected.size === 1) {
-      const [id] = selectedIds;
+    if (selectedList.length === 0) return;
+    if (selectedList.length === 1) {
+      const [id] = selectedList;
       const row = rows.find((r) => r.id === id)!;
       const blob = await api.downloadBlob(`/api/backups/${id}/download`);
       triggerDownload(blob, row.filename);
     } else {
       // H2: use the unified helper so CSRF + 401 handling stay in one place.
       const blob = await api.postForBlob("/api/backups/download-zip", {
-        ids: selectedIds,
+        ids: selectedList,
       });
       triggerDownload(blob, "pfsense-backups.zip");
     }
@@ -43,7 +41,7 @@ export function BackupsPage() {
 
   function diffSelected() {
     if (!canDiff) return;
-    const [a, b] = selectedIds.sort((x, y) => x - y);
+    const [a, b] = selectedList;
     nav(`/backups/diff/${a}/${b}`);
   }
 
@@ -62,9 +60,18 @@ export function BackupsPage() {
               <option key={i.id} value={i.id}>{i.name}</option>
             ))}
           </select>
-          <Button variant="secondary" size="sm" onClick={downloadSelected} disabled={selected.size === 0}>
-            {selected.size > 1 ? <Archive className="h-4 w-4" /> : <Download className="h-4 w-4" />}
-            Download ({selected.size})
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={downloadSelected}
+            disabled={selectedList.length === 0}
+          >
+            {selectedList.length > 1 ? (
+              <Archive className="h-4 w-4" />
+            ) : (
+              <Download className="h-4 w-4" />
+            )}
+            Download ({selectedList.length})
           </Button>
           <Button size="sm" onClick={diffSelected} disabled={!canDiff}>
             <Split className="h-4 w-4" />
@@ -91,9 +98,13 @@ export function BackupsPage() {
               <td>
                 <input
                   type="checkbox"
+                  // M11: ensure visible contrast on the dark theme. Default
+                  // browser styling nearly disappears on bg-bg.
+                  className="h-4 w-4 cursor-pointer accent-accent"
                   checked={selected.has(b.id)}
                   onChange={() => toggle(b.id)}
                   disabled={!b.success}
+                  aria-label={`Select backup ${b.filename}`}
                 />
               </td>
               <td className="py-2">
