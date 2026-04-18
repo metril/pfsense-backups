@@ -244,6 +244,15 @@ class BackupRead(BaseModel):
     compressed: bool
     success: bool
     error_message: str | None
+    tag: str | None = None
+    note: str | None = None
+
+
+class BackupUpdate(BaseModel):
+    """Partial patch for user-editable Backup metadata (tag + note only)."""
+
+    tag: str | None = None
+    note: str | None = None
 
 
 class JobRead(BaseModel):

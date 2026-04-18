@@ -157,13 +157,48 @@ export async function previewCron(cron: string, tz: string = "UTC") {
 
 // ----------------- backups -----------------
 
-export function useBackups(instanceId?: number) {
+export interface BackupFilter {
+  instanceId?: number;
+  startedFrom?: string; // ISO-8601, inclusive
+  startedTo?: string;   // ISO-8601, inclusive
+}
+
+export function useBackups(filter: BackupFilter | number | undefined = undefined) {
+  // Back-compat: callers that still pass a bare instanceId get the same
+  // behavior as before (all date-range params omitted).
+  const f: BackupFilter =
+    typeof filter === "number" ? { instanceId: filter } : (filter ?? {});
+
+  const params = new URLSearchParams();
+  if (f.instanceId !== undefined) params.set("instance_id", String(f.instanceId));
+  if (f.startedFrom) params.set("started_from", f.startedFrom);
+  if (f.startedTo) params.set("started_to", f.startedTo);
+  const qs = params.toString();
+
   return useQuery({
-    queryKey: ["backups", instanceId ?? "all"],
+    queryKey: ["backups", f.instanceId ?? "all", f.startedFrom ?? "", f.startedTo ?? ""],
     queryFn: () =>
-      api.get<BackupListItem[]>(
-        instanceId === undefined ? "/api/backups" : `/api/backups?instance_id=${instanceId}`,
+      api.get<BackupListItem[]>(qs ? `/api/backups?${qs}` : "/api/backups"),
+  });
+}
+
+export function useUpdateBackup() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, patch }: { id: number; patch: { tag?: string | null; note?: string | null } }) =>
+      api.patch<{ id: number; tag: string | null; note: string | null }>(
+        `/api/backups/${id}`,
+        patch,
       ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["backups"] }),
+  });
+}
+
+export function useDeleteBackup() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.delete(`/api/backups/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["backups"] }),
   });
 }
 

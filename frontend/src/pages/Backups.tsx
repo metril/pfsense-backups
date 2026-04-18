@@ -1,15 +1,43 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Archive, Download, Eye, Split } from "lucide-react";
+import { Archive, Download, Eye, Split, Tag as TagIcon, Trash2, X } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import { useBackups, useInstances } from "@/api/queries";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
+import {
+  useBackups,
+  useDeleteBackup,
+  useInstances,
+  type BackupFilter,
+} from "@/api/queries";
 import { api, triggerDownload } from "@/api/client";
+
+// Convert a <input type="date"> value (YYYY-MM-DD, local) into an ISO-8601
+// boundary suitable for the started_from / started_to query params. "from"
+// pins to 00:00 local, "to" pins to 23:59:59.999 local so the end-date is
+// inclusive the way a user expects.
+function boundary(d: string, end: boolean): string | undefined {
+  if (!d) return undefined;
+  const [y, m, dd] = d.split("-").map(Number);
+  if (!y || !m || !dd) return undefined;
+  const date = new Date(y, m - 1, dd, end ? 23 : 0, end ? 59 : 0, end ? 59 : 0, end ? 999 : 0);
+  return date.toISOString();
+}
 
 export function BackupsPage() {
   const [instanceId, setInstanceId] = useState<number | undefined>(undefined);
-  const backups = useBackups(instanceId);
+  const [fromDate, setFromDate] = useState<string>("");
+  const [toDate, setToDate] = useState<string>("");
+
+  const filter: BackupFilter = {
+    instanceId,
+    startedFrom: boundary(fromDate, false),
+    startedTo: boundary(toDate, true),
+  };
+  const backups = useBackups(filter);
   const instances = useInstances();
+  const del = useDeleteBackup();
+  const confirm = useConfirm();
   const nav = useNavigate();
 
   // M9: preserve selection ORDER — the first-selected row is "A" in the diff
@@ -18,6 +46,7 @@ export function BackupsPage() {
   const selected = useMemo(() => new Set(selectedList), [selectedList]);
   const rows = backups.data ?? [];
   const canDiff = selectedList.length === 2;
+  const hasDateFilter = Boolean(fromDate || toDate);
 
   function toggle(id: number) {
     setSelectedList((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -45,21 +74,71 @@ export function BackupsPage() {
     nav(`/backups/diff/${a}/${b}`);
   }
 
+  async function deleteBackup(id: number, filename: string) {
+    const ok = await confirm({
+      title: `Delete ${filename}?`,
+      description:
+        "The DB row AND the XML file on disk will be removed. " +
+        "This cannot be undone by the app — restore would require manually " +
+        "placing the file back.",
+      confirmLabel: "Delete",
+      tone: "danger",
+    });
+    if (!ok) return;
+    setSelectedList((prev) => prev.filter((x) => x !== id));
+    del.mutate(id);
+  }
+
   return (
     <div>
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Backups</h1>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <select
             value={instanceId ?? ""}
             onChange={(e) => setInstanceId(e.target.value ? Number(e.target.value) : undefined)}
             className="h-9 rounded-md border border-border bg-bg px-2 text-sm"
+            aria-label="Instance filter"
           >
             <option value="">All instances</option>
             {instances.data?.map((i) => (
-              <option key={i.id} value={i.id}>{i.name}</option>
+              <option key={i.id} value={i.id}>
+                {i.name}
+              </option>
             ))}
           </select>
+          <div className="flex items-center gap-1 rounded-md border border-border bg-bg px-2 text-sm">
+            <span className="text-muted-fg">from</span>
+            <input
+              type="date"
+              value={fromDate}
+              onChange={(e) => setFromDate(e.target.value)}
+              className="h-9 bg-transparent text-sm outline-none"
+              aria-label="Started from"
+            />
+            <span className="text-muted-fg">to</span>
+            <input
+              type="date"
+              value={toDate}
+              onChange={(e) => setToDate(e.target.value)}
+              className="h-9 bg-transparent text-sm outline-none"
+              aria-label="Started to"
+            />
+            {hasDateFilter && (
+              <button
+                type="button"
+                onClick={() => {
+                  setFromDate("");
+                  setToDate("");
+                }}
+                className="rounded p-1 text-muted-fg hover:text-fg"
+                aria-label="Clear date filter"
+                title="Clear date filter"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </div>
           <Button
             variant="secondary"
             size="sm"
@@ -89,8 +168,9 @@ export function BackupsPage() {
             <th className="text-left font-normal">Duration</th>
             <th className="text-left font-normal">File</th>
             <th className="text-left font-normal">Size</th>
+            <th className="text-left font-normal">Tag</th>
             <th className="text-left font-normal">Status</th>
-            <th className="w-10"></th>
+            <th className="w-20"></th>
           </tr>
         </thead>
         <tbody>
@@ -109,7 +189,7 @@ export function BackupsPage() {
                 />
               </td>
               <td className="py-2">
-                <Link to={`/instances`} className="hover:text-accent">
+                <Link to="/instances" className="hover:text-accent">
                   {b.instance_name}
                 </Link>
               </td>
@@ -127,30 +207,53 @@ export function BackupsPage() {
               </td>
               <td className="py-2">{Math.round(b.size_bytes / 1024)} KB</td>
               <td className="py-2">
+                {b.tag ? (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-accent/50 bg-accent/10 px-2 py-0.5 text-xs text-accent">
+                    <TagIcon className="h-3 w-3" />
+                    {b.tag}
+                  </span>
+                ) : (
+                  <span className="text-muted-fg">—</span>
+                )}
+              </td>
+              <td className="py-2">
                 {b.success ? (
                   <Badge tone="success">ok</Badge>
                 ) : (
                   <Badge tone="danger">fail</Badge>
                 )}
               </td>
-              <td className="py-2 text-right">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => nav(`/backups/${b.id}/view`)}
-                  disabled={!b.success}
-                  aria-label={`View ${b.filename}`}
-                  title="View XML"
-                >
-                  <Eye className="h-4 w-4" />
-                </Button>
+              <td className="py-2">
+                <div className="flex justify-end gap-1">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => nav(`/backups/${b.id}/view`)}
+                    disabled={!b.success}
+                    aria-label={`View ${b.filename}`}
+                    title="View XML"
+                  >
+                    <Eye className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => deleteBackup(b.id, b.filename)}
+                    aria-label={`Delete ${b.filename}`}
+                    title="Delete"
+                  >
+                    <Trash2 className="h-4 w-4 text-danger" />
+                  </Button>
+                </div>
               </td>
             </tr>
           ))}
           {rows.length === 0 && (
             <tr>
-              <td colSpan={8} className="py-8 text-center text-sm text-muted-fg">
-                No backups yet.
+              <td colSpan={9} className="py-8 text-center text-sm text-muted-fg">
+                {hasDateFilter
+                  ? "No backups in that date range."
+                  : "No backups yet."}
               </td>
             </tr>
           )}

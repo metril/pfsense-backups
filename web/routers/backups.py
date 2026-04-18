@@ -3,20 +3,26 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pfsense_shared.models import Backup, Instance
+from pfsense_shared.schemas import BackupUpdate
 
-from ..dependencies import DbSession
+from ..dependencies import CurrentUser, DbSession
+from ..services import audit
 from ..services.backup_storage import read_content, stream_raw, zip_stream
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/backups", tags=["backups"])
 
@@ -32,6 +38,8 @@ class BackupListItem(BaseModel):
     size_bytes: int
     compressed: bool
     success: bool
+    tag: str | None = None
+    note: str | None = None
 
 
 class ZipRequest(BaseModel):
@@ -42,6 +50,9 @@ class ZipRequest(BaseModel):
 async def list_backups(
     db: DbSession,
     instance_id: int | None = None,
+    # started_from / started_to: ISO-8601 inclusive bounds on started_at.
+    started_from: datetime | None = None,
+    started_to: datetime | None = None,
     limit: int = Query(default=100, le=500),
     offset: int = Query(default=0, ge=0),
 ) -> list[BackupListItem]:
@@ -54,6 +65,10 @@ async def list_backups(
     )
     if instance_id is not None:
         stmt = stmt.where(Backup.instance_id == instance_id)
+    if started_from is not None:
+        stmt = stmt.where(Backup.started_at >= started_from)
+    if started_to is not None:
+        stmt = stmt.where(Backup.started_at <= started_to)
     rows = (await db.execute(stmt)).all()
     return [
         BackupListItem(
@@ -67,6 +82,8 @@ async def list_backups(
             size_bytes=b.size_bytes,
             compressed=b.compressed,
             success=b.success,
+            tag=b.tag,
+            note=b.note,
         )
         for b, name in rows
     ]
@@ -102,7 +119,97 @@ async def get_backup(backup_id: int, db: DbSession) -> dict[str, Any]:
         "compressed": b.compressed,
         "success": b.success,
         "error_message": b.error_message,
+        "tag": b.tag,
+        "note": b.note,
     }
+
+
+@router.patch("/{backup_id}")
+async def patch_backup(
+    backup_id: int, payload: BackupUpdate, db: DbSession, user: CurrentUser
+) -> dict[str, Any]:
+    """Edit the user-provided metadata (tag + note). Path/size/etc. stay read-only."""
+    b = await db.get(Backup, backup_id)
+    if b is None:
+        raise HTTPException(404, "backup not found")
+
+    changed: dict[str, Any] = {}
+    patch = payload.model_dump(exclude_unset=True)
+    if "tag" in patch:
+        # Treat empty/whitespace as "clear" so the UI can delete a label.
+        tag = patch["tag"]
+        tag = tag.strip() if isinstance(tag, str) else tag
+        if tag == "":
+            tag = None
+        if b.tag != tag:
+            b.tag = tag
+            changed["tag"] = tag
+    if "note" in patch:
+        note = patch["note"]
+        if isinstance(note, str) and note.strip() == "":
+            note = None
+        if b.note != note:
+            b.note = note
+            # Audit the fact of the edit, not the text (may be long/sensitive).
+            changed["note"] = "<updated>" if note else "<cleared>"
+
+    if changed:
+        audit.record(
+            db, actor_email=user["email"], action="update", resource="backup",
+            resource_id=b.id, details=changed,
+        )
+        await db.commit()
+
+    return {"id": b.id, "tag": b.tag, "note": b.note}
+
+
+@router.delete("/{backup_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_backup(
+    backup_id: int, db: DbSession, user: CurrentUser
+) -> Response:
+    """Remove the backup row + the file on disk.
+
+    Mirrors the retention-cleanup behavior in worker/backup_manager.py:
+    both the DB row and the on-disk artifact are removed together so the
+    list stays in sync with the filesystem.
+    """
+    b = await db.get(Backup, backup_id)
+    if b is None:
+        raise HTTPException(404, "backup not found")
+
+    path = Path(b.path)
+    file_removed = False
+    file_missing = False
+    try:
+        path.unlink()
+        file_removed = True
+    except FileNotFoundError:
+        file_missing = True
+    except OSError as exc:
+        # Filesystem refusal (perms, read-only volume) — surface rather
+        # than silently orphan the DB row.
+        log.error("delete_backup id=%d path=%s unlink failed: %s", b.id, path, exc)
+        raise HTTPException(500, f"could not delete file on disk: {exc}") from exc
+
+    filename = b.filename
+    instance_id = b.instance_id
+    await db.delete(b)
+    audit.record(
+        db, actor_email=user["email"], action="delete", resource="backup",
+        resource_id=backup_id,
+        details={
+            "filename": filename,
+            "instance_id": instance_id,
+            "file_removed": file_removed,
+            "file_missing": file_missing,
+        },
+    )
+    await db.commit()
+    log.info(
+        "Deleted backup id=%d filename=%s (file_removed=%s file_missing=%s)",
+        backup_id, filename, file_removed, file_missing,
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/{backup_id}/content")

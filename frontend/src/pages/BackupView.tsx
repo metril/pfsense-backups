@@ -1,10 +1,20 @@
 import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, ClipboardCopy, Download, Split } from "lucide-react";
+import {
+  ArrowLeft,
+  Check,
+  ClipboardCopy,
+  Download,
+  Pencil,
+  Split,
+  Tag as TagIcon,
+  X,
+} from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { Input } from "@/components/ui/Input";
 import { useToast } from "@/components/ui/Toast";
-import { useBackups, useInstances } from "@/api/queries";
+import { useBackups, useInstances, useUpdateBackup } from "@/api/queries";
 import { api, triggerDownload } from "@/api/client";
 
 const MonacoViewer = lazy(() => import("@/components/MonacoViewer"));
@@ -21,6 +31,8 @@ interface BackupDetail {
   compressed: boolean;
   success: boolean;
   error_message: string | null;
+  tag: string | null;
+  note: string | null;
 }
 
 export function BackupViewPage() {
@@ -37,6 +49,11 @@ export function BackupViewPage() {
   // Pull the sibling list AFTER we know which instance this backup belongs to
   // so "Diff against previous" can find the immediate predecessor.
   const siblings = useBackups(detail?.instance_id);
+  const updateBackup = useUpdateBackup();
+
+  const [editingMeta, setEditingMeta] = useState(false);
+  const [tagDraft, setTagDraft] = useState("");
+  const [noteDraft, setNoteDraft] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -92,6 +109,28 @@ export function BackupViewPage() {
     triggerDownload(blob, detail.filename);
   }
 
+  function startEditingMeta() {
+    if (!detail) return;
+    setTagDraft(detail.tag ?? "");
+    setNoteDraft(detail.note ?? "");
+    setEditingMeta(true);
+  }
+
+  async function saveMeta() {
+    if (!detail) return;
+    try {
+      const r = await updateBackup.mutateAsync({
+        id: detail.id,
+        patch: { tag: tagDraft, note: noteDraft },
+      });
+      setDetail({ ...detail, tag: r.tag, note: r.note });
+      setEditingMeta(false);
+      toast.success("Saved tag / note");
+    } catch {
+      // MutationCache's onError already surfaces the error toast.
+    }
+  }
+
   if (error) return <div className="p-6 text-sm text-danger">{error}</div>;
   if (!detail || content === null)
     return <div className="p-6 text-sm text-muted-fg">Loading…</div>;
@@ -119,9 +158,62 @@ export function BackupViewPage() {
             <span>{Math.round(detail.size_bytes / 1024)} KB</span>
             <span>·</span>
             <span>{detail.duration_seconds.toFixed(1)}s</span>
+            {detail.tag && !editingMeta && (
+              <span className="inline-flex items-center gap-1 rounded-full border border-accent/50 bg-accent/10 px-2 py-0.5 text-xs text-accent">
+                <TagIcon className="h-3 w-3" />
+                {detail.tag}
+              </span>
+            )}
           </div>
+          {detail.note && !editingMeta && (
+            <p className="mt-2 max-w-2xl whitespace-pre-wrap text-sm text-muted-fg">
+              {detail.note}
+            </p>
+          )}
+          {editingMeta && (
+            <div className="mt-3 flex max-w-2xl flex-col gap-2">
+              <Input
+                value={tagDraft}
+                onChange={(e) => setTagDraft(e.target.value)}
+                placeholder="Tag (e.g. pre-upgrade, known-good)"
+                maxLength={64}
+                aria-label="Tag"
+              />
+              <textarea
+                value={noteDraft}
+                onChange={(e) => setNoteDraft(e.target.value)}
+                placeholder="Free-text note (what makes this backup interesting?)"
+                rows={3}
+                className="w-full rounded-md border border-border bg-bg p-2 text-sm"
+                aria-label="Note"
+              />
+              <div className="flex gap-2">
+                <Button size="sm" onClick={saveMeta} disabled={updateBackup.isPending}>
+                  <Check className="h-4 w-4" /> Save
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setEditingMeta(false)}
+                  disabled={updateBackup.isPending}
+                >
+                  <X className="h-4 w-4" /> Cancel
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
         <div className="flex shrink-0 gap-2">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={startEditingMeta}
+            disabled={editingMeta}
+            title="Edit tag / note"
+          >
+            <Pencil className="h-4 w-4" />
+            Tag / note
+          </Button>
           <Button
             variant="secondary"
             size="sm"

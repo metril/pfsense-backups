@@ -134,6 +134,12 @@ class Backup(Base):
     success: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     error_message: Mapped[str | None] = mapped_column(Text, default=None, nullable=True)
 
+    # Optional user-provided label + context so known-good backups can be
+    # pinned / explained ("pre-firmware-upgrade", etc.). Both nullable;
+    # retention/cleanup does not consult these.
+    tag: Mapped[str | None] = mapped_column(String(64), default=None, nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, default=None, nullable=True)
+
     instance: Mapped[Instance] = relationship(back_populates="backups")
 
 

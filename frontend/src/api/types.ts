@@ -53,6 +53,8 @@ export interface BackupListItem {
   size_bytes: number;
   compressed: boolean;
   success: boolean;
+  tag: string | null;
+  note: string | null;
 }
 
 export interface ScheduleRow {
