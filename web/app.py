@@ -10,7 +10,8 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
 from starlette.middleware.sessions import SessionMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
@@ -89,7 +90,7 @@ async def lifespan(app: FastAPI):
 def create_app(settings: WebSettings | None = None, static_dir: Path | None = None) -> FastAPI:
     settings = settings or WebSettings()
 
-    app = FastAPI(title="pfSense Backup", lifespan=lifespan)
+    app = FastAPI(title="pfSense Backups", lifespan=lifespan)
     app.state.settings = settings
 
     # A3: configure the module-level slowapi limiter with this app's settings
@@ -97,6 +98,18 @@ def create_app(settings: WebSettings | None = None, static_dir: Path | None = No
     configure_from_settings(settings)
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+
+    # Belt-and-braces: a global unhandled-exception handler that logs the
+    # traceback via our app logger. Without this, Starlette's default
+    # ServerErrorMiddleware returns a plain "Internal Server Error" body
+    # and the traceback goes through uvicorn's error logger — which
+    # sometimes renders silently depending on the uvicorn log config.
+    # Putting log.exception here guarantees every 500 lands in
+    # `docker logs` with the full stack, keyed by request path.
+    @app.exception_handler(Exception)
+    async def _log_unhandled(request: Request, exc: Exception) -> JSONResponse:
+        log.exception("Unhandled exception on %s %s", request.method, request.url.path)
+        return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
     # Proxy-awareness BEFORE session middleware so `request.url` reflects https://.
     app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")

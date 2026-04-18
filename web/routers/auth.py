@@ -24,7 +24,17 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 async def login(request: Request) -> Response:
     oauth = request.app.state.oauth
     redirect_url = request.app.state.settings.oidc_redirect_url
-    return await oauth.oidc.authorize_redirect(request, redirect_url)
+    # authlib fetches the IdP's OIDC discovery document on first call and
+    # stores state/nonce in the session. Any of: network unreachable,
+    # TLS cert mismatch, httpx timeout, or session-cookie write failure
+    # lands here. Log the traceback explicitly so operators don't have to
+    # guess from a 500 response with no context.
+    try:
+        return await oauth.oidc.authorize_redirect(request, redirect_url)
+    except Exception:
+        issuer = request.app.state.settings.oidc_issuer
+        log.exception("OIDC authorize_redirect failed (issuer=%s)", issuer)
+        return RedirectResponse(url="/login?error=authorize_redirect_failed", status_code=302)
 
 
 @router.get("/callback")
