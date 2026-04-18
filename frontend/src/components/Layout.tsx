@@ -6,6 +6,7 @@ import {
   Boxes,
   History,
   LogOut,
+  ScrollText,
   Settings,
   WifiOff,
 } from "lucide-react";
@@ -21,6 +22,7 @@ const NAV = [
   { to: "/backups", label: "Backups", icon: History },
   { to: "/schedule", label: "Schedule", icon: AlarmClock },
   { to: "/notifications", label: "Notifications", icon: BellRing },
+  { to: "/logs", label: "Logs", icon: ScrollText },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 

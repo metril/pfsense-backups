@@ -15,6 +15,7 @@ from sqlalchemy import update
 
 from pfsense_shared.crypto import Crypto
 from pfsense_shared.db import init_db, make_engine, make_session_factory
+from pfsense_shared.log_buffer import InProcessLogHandler, LogLine
 from pfsense_shared.models import Job
 from pfsense_shared.settings import WorkerSettings
 
@@ -34,6 +35,24 @@ def _configure_logging(level: str) -> None:
         level=getattr(logging, level.upper(), logging.INFO),
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
+
+
+def _install_log_forwarder(publisher: IpcPublisher) -> None:
+    """Ship every log record to the web service via ZMQ topic ``log``.
+
+    The in-app log viewer (web side) bridges this topic into its ring buffer
+    so the browser sees worker output without needing ``docker logs``.
+    """
+
+    def sink(entry: LogLine) -> None:
+        try:
+            publisher.publish_raw("log", entry)
+        except Exception:
+            # If ZMQ is down mid-shutdown we silently drop — stderr still has it.
+            pass
+
+    handler = InProcessLogHandler(service="worker", sink=sink)
+    logging.getLogger().addHandler(handler)
 
 
 def _mark_stale_jobs(session_factory) -> None:
@@ -77,6 +96,7 @@ def main() -> None:
 
     metrics = get_metrics_instance(port=settings.metrics_port)
     publisher = IpcPublisher(settings.zmq_pub_bind)
+    _install_log_forwarder(publisher)
 
     notifier = Notifier(metrics=metrics, hostname=settings.hostname)
     manager = PfSenseBackupManager(

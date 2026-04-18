@@ -6,6 +6,7 @@ IPC/EventBus/OIDC singletons that requests depend on.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -23,6 +24,7 @@ from pfsense_shared.db import (
     make_async_session_factory,
     make_engine,
 )
+from pfsense_shared.log_buffer import InProcessLogHandler
 from pfsense_shared.settings import WebSettings
 
 from .middleware import AuthRequiredMiddleware
@@ -32,11 +34,13 @@ from .routers import events as events_router
 from .routers import health as health_router
 from .routers import instances as instances_router
 from .routers import jobs as jobs_router
+from .routers import logs as logs_router
 from .routers import notifications as notifications_router
 from .routers import schedule as schedule_router
 from .routers import settings_router
 from .services.event_bus import EventBus
 from .services.ipc_client import IpcClient
+from .services.log_ring import LogRing
 from .services.oidc import make_oidc_provider
 from .services.rate_limit import configure_from_settings, limiter, rate_limit_exceeded_handler
 from .static_spa import mount_spa
@@ -63,10 +67,25 @@ async def lifespan(app: FastAPI):
     bus = EventBus()
     app.state.event_bus = bus
 
+    # Ring buffer for the in-app log viewer. The root logger handler we
+    # install below feeds it with web-side records, and the ZMQ SUB bridge
+    # routes worker log frames (topic "log") into the same ring so the
+    # browser sees both services interleaved on /logs.
+    log_ring = LogRing()
+    log_ring.attach_loop(asyncio.get_running_loop())
+    app.state.log_ring = log_ring
+
+    web_log_handler = InProcessLogHandler(
+        service="web", sink=log_ring.post_threadsafe
+    )
+    logging.getLogger().addHandler(web_log_handler)
+    app.state.web_log_handler = web_log_handler
+
     ipc = IpcClient(
         push_url=settings.worker_push_url,
         sub_url=settings.worker_sub_url,
         bus=bus,
+        log_ring=log_ring,
     )
     ipc.start()
     app.state.ipc_client = ipc
@@ -82,6 +101,7 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         log.info("shutting down ipc client")
+        logging.getLogger().removeHandler(web_log_handler)
         await ipc.close()
         await async_engine.dispose()
 
@@ -134,6 +154,7 @@ def create_app(settings: WebSettings | None = None, static_dir: Path | None = No
     app.include_router(auth_router.router)
     app.include_router(health_router.router)
     app.include_router(events_router.router)
+    app.include_router(logs_router.router)
     app.include_router(instances_router.router)
     app.include_router(schedule_router.router)
     app.include_router(notifications_router.router)

@@ -8,6 +8,7 @@ import { Dashboard } from "./pages/Dashboard";
 import { InstancesPage } from "./pages/Instances";
 import { BackupsPage } from "./pages/Backups";
 import { BackupDiffPage } from "./pages/BackupDiff";
+import { LogsPage } from "./pages/Logs";
 import { SchedulePage } from "./pages/Schedule";
 import { NotificationsPage } from "./pages/Notifications";
 import { SettingsPage } from "./pages/Settings";
@@ -41,6 +42,7 @@ export default function App() {
         <Route path="backups/diff/:a/:b" element={<BackupDiffPage />} />
         <Route path="schedule" element={<SchedulePage />} />
         <Route path="notifications" element={<NotificationsPage />} />
+        <Route path="logs" element={<LogsPage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>
     </Routes>

@@ -18,15 +18,19 @@ from pydantic import ValidationError
 from pfsense_shared.schemas import IpcCommand
 
 from .event_bus import EventBus
+from .log_ring import LogRing
 
 log = logging.getLogger(__name__)
 
 
 class IpcClient:
-    def __init__(self, push_url: str, sub_url: str, bus: EventBus) -> None:
+    def __init__(
+        self, push_url: str, sub_url: str, bus: EventBus, log_ring: LogRing | None = None
+    ) -> None:
         self._push_url = push_url
         self._sub_url = sub_url
         self._bus = bus
+        self._log_ring = log_ring
 
         self._ctx = zmq.asyncio.Context.instance()
         self._push: zmq.asyncio.Socket = self._ctx.socket(zmq.PUSH)
@@ -79,6 +83,12 @@ class IpcClient:
                     data = json.loads(payload_bytes.decode("utf-8"))
                 except Exception as exc:
                     log.error("Non-JSON frame on topic %s: %s", topic, exc)
+                    continue
+                # Worker log frames go to the dedicated LogRing — they'd spam
+                # the events feed if they landed on the general EventBus.
+                if topic == "log":
+                    if self._log_ring is not None:
+                        self._log_ring.post_threadsafe(data)
                     continue
                 await self._bus.publish(topic, data)
             except asyncio.CancelledError:
