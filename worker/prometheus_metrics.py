@@ -28,21 +28,21 @@ class PrometheusMetrics:
         
         # Backup operation counters
         self.backup_total = Counter(
-            'pfsense_backup_total',
+            'pfsense_backups_total',
             'Total number of backup attempts',
             ['instance', 'status'],
             registry=self.registry
         )
         
         self.backup_success_total = Counter(
-            'pfsense_backup_success_total',
+            'pfsense_backups_success_total',
             'Total number of successful backups',
             ['instance'],
             registry=self.registry
         )
         
         self.backup_failed_total = Counter(
-            'pfsense_backup_failed_total',
+            'pfsense_backups_failed_total',
             'Total number of failed backups',
             ['instance', 'error_type'],
             registry=self.registry
@@ -50,7 +50,7 @@ class PrometheusMetrics:
         
         # Backup timing metrics
         self.backup_duration_seconds = Histogram(
-            'pfsense_backup_duration_seconds',
+            'pfsense_backups_duration_seconds',
             'Time spent performing backup operations',
             ['instance', 'operation'],
             buckets=[1, 5, 10, 30, 60, 120, 300, 600],
@@ -59,14 +59,14 @@ class PrometheusMetrics:
         
         # Backup file metrics
         self.backup_file_size_bytes = Gauge(
-            'pfsense_backup_file_size_bytes',
+            'pfsense_backups_file_size_bytes',
             'Size of backup files in bytes',
             ['instance'],
             registry=self.registry
         )
         
         self.backup_files_retained = Gauge(
-            'pfsense_backup_files_retained',
+            'pfsense_backups_files_retained',
             'Number of backup files currently retained',
             ['instance'],
             registry=self.registry
@@ -120,15 +120,15 @@ class PrometheusMetrics:
         
         # Application info
         self.app_info = Info(
-            'pfsense_backup_info',
-            'Information about the pfSense backup application',
+            'pfsense_backups_info',
+            'Information about the pfSense backups application',
             registry=self.registry
         )
         
         # Set application info
         self.app_info.info({
             'version': '1.0.0',
-            'component': 'pfsense-backup'
+            'component': 'pfsense-backups'
         })
         
         # Instance configuration metrics
