@@ -66,7 +66,7 @@ export const api = {
   patch: <T>(p: string, body?: unknown) => request<T>("PATCH", p, body),
   delete: <T = void>(p: string) => request<T>("DELETE", p),
 
-  // Binary download helper (used for "download one file").
+  // Binary download helper for GET (no CSRF needed).
   async downloadBlob(path: string): Promise<Blob> {
     const resp = await fetch(`${BASE}${path}`, { credentials: "include" });
     if (resp.status === 401) {
@@ -74,6 +74,44 @@ export const api = {
       throw new ApiError(401, null, "not authenticated");
     }
     if (!resp.ok) throw new ApiError(resp.status, null, resp.statusText);
+    return resp.blob();
+  },
+
+  // H2: unified POST-that-returns-a-blob helper. Includes CSRF and
+  // credentials on the same footing as the other mutating helpers.
+  async postForBlob(path: string, body?: unknown): Promise<Blob> {
+    const headers = new Headers({ Accept: "application/octet-stream, */*" });
+    if (body !== undefined && !(body instanceof FormData)) {
+      headers.set("Content-Type", "application/json");
+    }
+    const csrf = readCookie("csrftoken");
+    if (csrf) headers.set("X-CSRF-Token", csrf);
+
+    const resp = await fetch(`${BASE}${path}`, {
+      method: "POST",
+      credentials: "include",
+      headers,
+      body:
+        body === undefined
+          ? undefined
+          : body instanceof FormData
+            ? body
+            : JSON.stringify(body),
+    });
+    if (resp.status === 401) {
+      window.location.href = "/api/auth/login";
+      throw new ApiError(401, null, "not authenticated");
+    }
+    if (!resp.ok) {
+      // Try to parse a JSON error payload for the toast system.
+      let body: unknown = null;
+      try {
+        body = await resp.json();
+      } catch {
+        body = await resp.text();
+      }
+      throw new ApiError(resp.status, body, resp.statusText);
+    }
     return resp.blob();
   },
 

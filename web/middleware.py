@@ -48,14 +48,21 @@ def _wants_json(request: Request) -> bool:
 
 
 class AuthRequiredMiddleware(BaseHTTPMiddleware):
+    """H1: the CSRF cookie is set on EVERY response (not only when missing)
+    so the first mutating request from a brand-new client sees a valid
+    double-submit pair in its own response cycle rather than racing against
+    a later GET.
+    """
+
     async def dispatch(
         self,
         request: Request,
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
-        # CSRF cookie is ensured on every response so the SPA can pick it up on first GET.
-        needs_csrf_cookie = CSRF_COOKIE not in request.cookies
         csrf_value = request.cookies.get(CSRF_COOKIE) or secrets.token_urlsafe(32)
+        # Cookie flag respects app.state.settings.dev_mode (H13) so local-dev
+        # over http://localhost doesn't drop the cookie.
+        cookie_secure = not getattr(request.app.state.settings, "dev_mode", False)
 
         path = request.url.path
         if not _is_public(path):
@@ -69,7 +76,7 @@ class AuthRequiredMiddleware(BaseHTTPMiddleware):
                     response = RedirectResponse(
                         url="/api/auth/login", status_code=302
                     )
-                self._ensure_csrf_cookie(response, csrf_value, needs_csrf_cookie)
+                self._set_csrf_cookie(response, csrf_value, cookie_secure)
                 return response
 
             # CSRF: double-submit check on mutating requests (outside /api/auth/).
@@ -81,22 +88,20 @@ class AuthRequiredMiddleware(BaseHTTPMiddleware):
                     response = JSONResponse(
                         status_code=403, content={"detail": "CSRF token missing or invalid"}
                     )
-                    self._ensure_csrf_cookie(response, csrf_value, needs_csrf_cookie)
+                    self._set_csrf_cookie(response, csrf_value, cookie_secure)
                     return response
 
         response = await call_next(request)
-        self._ensure_csrf_cookie(response, csrf_value, needs_csrf_cookie)
+        self._set_csrf_cookie(response, csrf_value, cookie_secure)
         return response
 
     @staticmethod
-    def _ensure_csrf_cookie(response: Response, value: str, needs_cookie: bool) -> None:
-        if not needs_cookie:
-            return
+    def _set_csrf_cookie(response: Response, value: str, secure: bool) -> None:
         response.set_cookie(
             key=CSRF_COOKIE,
             value=value,
             httponly=False,   # SPA must read it to echo via X-CSRF-Token
-            secure=True,
+            secure=secure,
             samesite="lax",
             path="/",
         )

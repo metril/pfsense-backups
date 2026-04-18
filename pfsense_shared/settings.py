@@ -32,6 +32,9 @@ class WorkerSettings(CommonSettings):
 
 class WebSettings(CommonSettings):
     web_port: int = Field(default=8080)
+    # H13: flip to true to drop the Secure/https_only flag so local dev over
+    # plain http://localhost works without Traefik.
+    dev_mode: bool = Field(default=False)
 
     session_secret: str
     oidc_issuer: str

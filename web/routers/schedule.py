@@ -12,7 +12,7 @@ from pfsense_shared.schemas import ReloadScheduleCommand, ScheduleUpdate
 
 from ..dependencies import CurrentUser, DbSession, Ipc
 from ..services import audit
-from ..services.cron_utils import describe, next_runs, validate
+from ..services.cron_utils import describe, next_runs, validate, validate_tz
 
 router = APIRouter(prefix="/api/schedule", tags=["schedule"])
 
@@ -40,13 +40,13 @@ def _schedule_row(inst: Instance) -> dict[str, Any]:
 
 @router.get("")
 async def list_schedules(db: DbSession) -> list[dict[str, Any]]:
-    rows = db.execute(select(Instance).order_by(Instance.name)).scalars().all()
+    rows = (await db.scalars(select(Instance).order_by(Instance.name))).all()
     return [_schedule_row(r) for r in rows]
 
 
 @router.get("/{instance_id}")
 async def get_schedule(instance_id: int, db: DbSession) -> dict[str, Any]:
-    inst = db.get(Instance, instance_id)
+    inst = await db.get(Instance, instance_id)
     if inst is None:
         raise HTTPException(404, "instance not found")
     return _schedule_row(inst)
@@ -60,7 +60,7 @@ async def put_schedule(
     user: CurrentUser,
     ipc: Ipc,
 ) -> dict[str, Any]:
-    inst = db.get(Instance, instance_id)
+    inst = await db.get(Instance, instance_id)
     if inst is None:
         raise HTTPException(404, "instance not found")
 
@@ -69,6 +69,10 @@ async def put_schedule(
             validate(payload.cron_expression)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from None
+    try:
+        validate_tz(payload.cron_timezone)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
 
     inst.cron_expression = payload.cron_expression
     inst.cron_timezone = payload.cron_timezone
@@ -86,7 +90,7 @@ async def put_schedule(
             "enabled": payload.enabled,
         },
     )
-    db.commit()
+    await db.commit()
     await ipc.send(ReloadScheduleCommand(instance_id=instance_id))
     return _schedule_row(inst)
 
@@ -99,6 +103,7 @@ async def preview(cron: str, tz: str = "UTC") -> dict[str, Any]:
     """
     try:
         validate(cron)
+        validate_tz(tz)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from None
     return {

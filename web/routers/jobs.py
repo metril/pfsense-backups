@@ -23,13 +23,13 @@ async def list_jobs(
     stmt = select(Job).order_by(Job.requested_at.desc()).limit(limit).offset(offset)
     if instance_id is not None:
         stmt = stmt.where(Job.instance_id == instance_id)
-    rows = db.execute(stmt).scalars().all()
+    rows = (await db.scalars(stmt)).all()
     return [JobRead.model_validate(r) for r in rows]
 
 
 @router.get("/{job_id}", response_model=JobRead)
 async def get_job(job_id: int, db: DbSession) -> JobRead:
-    job = db.get(Job, job_id)
+    job = await db.get(Job, job_id)
     if job is None:
         raise HTTPException(404, "job not found")
     return JobRead.model_validate(job)

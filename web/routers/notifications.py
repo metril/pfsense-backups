@@ -43,7 +43,7 @@ def _to_read(row: Notification) -> NotificationRead:
 
 @router.get("", response_model=list[NotificationRead])
 async def list_notifications(db: DbSession) -> list[NotificationRead]:
-    rows = db.execute(select(Notification).order_by(Notification.name)).scalars().all()
+    rows = (await db.scalars(select(Notification).order_by(Notification.name))).all()
     return [_to_read(r) for r in rows]
 
 
@@ -65,12 +65,12 @@ async def create_notification(
         ),
     )
     db.add(row)
-    db.flush()
+    await db.flush()
     audit.record(
         db, actor_email=user["email"], action="create", resource="notification",
         resource_id=row.id, details={"name": row.name},
     )
-    db.commit()
+    await db.commit()
     return _to_read(row)
 
 
@@ -78,7 +78,7 @@ async def create_notification(
 async def update_notification(
     notification_id: int, payload: NotificationUpdate, db: DbSession, user: CurrentUser
 ) -> NotificationRead:
-    row = db.get(Notification, notification_id)
+    row = await db.get(Notification, notification_id)
     if row is None:
         raise HTTPException(404, "notification not found")
 
@@ -106,7 +106,7 @@ async def update_notification(
             db, actor_email=user["email"], action="update", resource="notification",
             resource_id=row.id, details=changed,
         )
-        db.commit()
+        await db.commit()
     return _to_read(row)
 
 
@@ -114,32 +114,32 @@ async def update_notification(
 async def delete_notification(
     notification_id: int, db: DbSession, user: CurrentUser
 ) -> None:
-    row = db.get(Notification, notification_id)
+    row = await db.get(Notification, notification_id)
     if row is None:
         raise HTTPException(404, "notification not found")
     name = row.name
-    db.delete(row)
+    await db.delete(row)
     audit.record(
         db, actor_email=user["email"], action="delete", resource="notification",
         resource_id=notification_id, details={"name": name},
     )
-    db.commit()
+    await db.commit()
 
 
 @router.post("/{notification_id}/test")
 async def send_test(
     notification_id: int, db: DbSession, user: CurrentUser, ipc: Ipc
 ) -> dict[str, int]:
-    if db.get(Notification, notification_id) is None:
+    if (await db.get(Notification, notification_id)) is None:
         raise HTTPException(404, "notification not found")
     job = Job(kind="test_notification", requested_by=user["email"])
     db.add(job)
-    db.flush()
+    await db.flush()
     audit.record(
         db, actor_email=user["email"], action="trigger", resource="notification_test",
         resource_id=notification_id,
     )
-    db.commit()
+    await db.commit()
     await ipc.send(
         SendTestNotificationCommand(notification_id=notification_id, job_id=job.id)
     )

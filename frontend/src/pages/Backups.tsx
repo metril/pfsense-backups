@@ -33,16 +33,11 @@ export function BackupsPage() {
       const blob = await api.downloadBlob(`/api/backups/${id}/download`);
       triggerDownload(blob, row.filename);
     } else {
-      const resp = await fetch("/api/backups/download-zip", {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          "X-CSRF-Token": document.cookie.match(/(?:^|; )csrftoken=([^;]*)/)?.[1] ?? "",
-        },
-        body: JSON.stringify({ ids: selectedIds }),
+      // H2: use the unified helper so CSRF + 401 handling stay in one place.
+      const blob = await api.postForBlob("/api/backups/download-zip", {
+        ids: selectedIds,
       });
-      triggerDownload(await resp.blob(), "pfsense-backups.zip");
+      triggerDownload(blob, "pfsense-backups.zip");
     }
   }
 

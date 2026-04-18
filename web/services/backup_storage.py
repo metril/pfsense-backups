@@ -27,12 +27,39 @@ def stream_raw(path: Path, chunk_size: int = 65536) -> Iterator[bytes]:
             yield chunk
 
 
-def zip_files(paths: list[Path]) -> bytes:
-    """Build an in-memory zip archive containing ``paths``.
+class _RollingBuffer(io.RawIOBase):
+    """Write-only buffer that lets the producer drain bytes as they arrive.
 
-    Each file is stored under its basename; duplicates get a suffix.
+    Used to feed ``zipfile.ZipFile`` without ever materializing the whole
+    archive in memory. After each write, the consumer calls ``drain()`` to
+    pull bytes off and send them to the client.
     """
-    buf = io.BytesIO()
+
+    def __init__(self) -> None:
+        self._buf = bytearray()
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, b) -> int:  # type: ignore[override]
+        data = bytes(b)
+        self._buf.extend(data)
+        return len(data)
+
+    def drain(self) -> bytes:
+        out = bytes(self._buf)
+        self._buf.clear()
+        return out
+
+
+def zip_stream(paths: list[Path], chunk_size: int = 65536) -> Iterator[bytes]:
+    """Yield a zip archive containing ``paths`` one chunk at a time.
+
+    Each file is written into a rolling buffer via ``zipfile.ZipFile``, and
+    we yield drained chunks after every write. Duplicate basenames get
+    a ``__N`` suffix.
+    """
+    buf = _RollingBuffer()
     seen: dict[str, int] = {}
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for p in paths:
@@ -43,5 +70,22 @@ def zip_files(paths: list[Path]) -> bytes:
                 name = f"{stem}__{seen[name]}{dot}{suffix}" if dot else f"{stem}__{seen[name]}"
             else:
                 seen[name] = 1
-            zf.write(p, arcname=name)
-    return buf.getvalue()
+
+            with zf.open(name, "w") as entry:
+                with open(p, "rb") as src:
+                    while True:
+                        chunk = src.read(chunk_size)
+                        if not chunk:
+                            break
+                        entry.write(chunk)
+                        drained = buf.drain()
+                        if drained:
+                            yield drained
+            # Flush any bytes emitted during central-directory/local-header writes.
+            drained = buf.drain()
+            if drained:
+                yield drained
+    # Final central directory bytes.
+    tail = buf.drain()
+    if tail:
+        yield tail

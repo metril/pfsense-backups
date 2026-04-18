@@ -1,17 +1,22 @@
-"""Audit-log helper. Call from mutating routes after a successful write."""
+"""Audit-log helper. Call from mutating routes after a successful write.
+
+`session.add` is still synchronous on AsyncSession — it's the flush/commit
+that's async. Callers are expected to `await session.commit()` themselves
+(the audit entry rides along in the same transaction).
+"""
 
 from __future__ import annotations
 
 import json
 from typing import Any
 
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from pfsense_shared.models import AuditLog
 
 
 def record(
-    session: Session,
+    session: AsyncSession,
     *,
     actor_email: str,
     action: str,

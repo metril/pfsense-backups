@@ -18,6 +18,12 @@ from pathlib import Path
 from alembic.config import Config as AlembicConfig
 from sqlalchemy import event, select
 from sqlalchemy.engine import Engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from sqlalchemy.orm import Session, sessionmaker
 
 from alembic import command
@@ -57,6 +63,47 @@ def make_engine(url: str) -> Engine:
 
 def make_session_factory(engine: Engine) -> sessionmaker[Session]:
     return sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+
+
+# --------------------------------------------------------------------- #
+# Async engine (web service)
+# --------------------------------------------------------------------- #
+
+
+def _async_url(url: str) -> str:
+    """Translate a sync SQLite URL into its aiosqlite equivalent.
+
+    Leaves non-sqlite URLs untouched for future-proofing (postgres+asyncpg,
+    mysql+aiomysql, etc. can be adopted by prepending the right driver).
+    """
+    if url.startswith("sqlite:///") and "+aiosqlite" not in url:
+        return url.replace("sqlite:///", "sqlite+aiosqlite:///", 1)
+    return url
+
+
+def make_async_engine(url: str) -> AsyncEngine:
+    async_url = _async_url(url)
+    connect_args = {}
+    if async_url.startswith("sqlite"):
+        connect_args["check_same_thread"] = False
+
+    engine = create_async_engine(async_url, connect_args=connect_args, pool_pre_ping=True)
+
+    # WAL + foreign_keys + busy_timeout on every connection. The sync event
+    # listener receives DBAPI connections synchronously even for the async
+    # engine (aiosqlite wraps sqlite3 in a thread), so the same hook works.
+    if async_url.startswith("sqlite"):
+        # aiosqlite's sync callback signature passes the raw sqlite3.Connection,
+        # so the same _sqlite_pragmas body applies.
+        event.listen(engine.sync_engine, "connect", _sqlite_pragmas)
+
+    return engine
+
+
+def make_async_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
+    return async_sessionmaker(
+        bind=engine, autoflush=False, autocommit=False, expire_on_commit=False
+    )
 
 
 # --------------------------------------------------------------------- #

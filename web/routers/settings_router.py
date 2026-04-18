@@ -22,8 +22,8 @@ router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 @router.get("")
 async def get_all(db: DbSession) -> dict[str, Any]:
-    bs = db.get(BackupSettings, 1)
-    ls = db.get(LoggingSettings, 1)
+    bs = await db.get(BackupSettings, 1)
+    ls = await db.get(LoggingSettings, 1)
     return {
         "backup": BackupSettingsRead.model_validate(bs).model_dump() if bs else None,
         "logging": LoggingSettingsRead.model_validate(ls).model_dump() if ls else None,
@@ -34,7 +34,7 @@ async def get_all(db: DbSession) -> dict[str, Any]:
 async def put_backup(
     payload: BackupSettingsUpdate, db: DbSession, user: CurrentUser
 ) -> BackupSettingsRead:
-    row = db.get(BackupSettings, 1)
+    row = await db.get(BackupSettings, 1)
     if row is None:
         row = BackupSettings(id=1)
         db.add(row)
@@ -49,7 +49,7 @@ async def put_backup(
             db, actor_email=user["email"], action="update", resource="backup_settings",
             resource_id=1, details=changed,
         )
-    db.commit()
+    await db.commit()
     return BackupSettingsRead.model_validate(row)
 
 
@@ -57,7 +57,7 @@ async def put_backup(
 async def put_logging(
     payload: LoggingSettingsUpdate, db: DbSession, user: CurrentUser
 ) -> LoggingSettingsRead:
-    row = db.get(LoggingSettings, 1)
+    row = await db.get(LoggingSettings, 1)
     if row is None:
         row = LoggingSettings(id=1)
         db.add(row)
@@ -72,5 +72,5 @@ async def put_logging(
             db, actor_email=user["email"], action="update", resource="logging_settings",
             resource_id=1, details=changed,
         )
-    db.commit()
+    await db.commit()
     return LoggingSettingsRead.model_validate(row)

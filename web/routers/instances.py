@@ -22,6 +22,7 @@ from pfsense_shared.schemas import (
 from ..dependencies import CryptoDep, CurrentUser, DbSession, Ipc
 from ..services import audit
 from ..services.cron_utils import validate as validate_cron
+from ..services.cron_utils import validate_tz
 
 log = logging.getLogger(__name__)
 
@@ -52,13 +53,13 @@ def _to_read(inst: Instance, crypto) -> InstanceRead:
 
 @router.get("", response_model=list[InstanceRead])
 async def list_instances(db: DbSession, crypto: CryptoDep) -> list[InstanceRead]:
-    rows = db.execute(select(Instance).order_by(Instance.name)).scalars().all()
+    rows = (await db.scalars(select(Instance).order_by(Instance.name))).all()
     return [_to_read(r, crypto) for r in rows]
 
 
 @router.get("/{instance_id}", response_model=InstanceRead)
 async def get_instance(instance_id: int, db: DbSession, crypto: CryptoDep) -> InstanceRead:
-    inst = db.get(Instance, instance_id)
+    inst = await db.get(Instance, instance_id)
     if inst is None:
         raise HTTPException(404, "instance not found")
     return _to_read(inst, crypto)
@@ -73,6 +74,10 @@ async def create_instance(
             validate_cron(payload.cron_expression)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from None
+    try:
+        validate_tz(payload.cron_timezone)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
 
     inst = Instance(
         name=payload.name,
@@ -90,12 +95,12 @@ async def create_instance(
         compress=payload.compress,
     )
     db.add(inst)
-    db.flush()
+    await db.flush()
     audit.record(
         db, actor_email=user["email"], action="create", resource="instance",
         resource_id=inst.id, details={"name": inst.name},
     )
-    db.commit()
+    await db.commit()
     # Register the cron if one was provided.
     if inst.cron_expression:
         await ipc.send(ReloadScheduleCommand(instance_id=inst.id))
@@ -111,13 +116,18 @@ async def update_instance(
     user: CurrentUser,
     ipc: Ipc,
 ) -> InstanceRead:
-    inst = db.get(Instance, instance_id)
+    inst = await db.get(Instance, instance_id)
     if inst is None:
         raise HTTPException(404, "instance not found")
 
     if payload.cron_expression is not None and payload.cron_expression:
         try:
             validate_cron(payload.cron_expression)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from None
+    if payload.cron_timezone is not None:
+        try:
+            validate_tz(payload.cron_timezone)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from None
 
@@ -134,7 +144,8 @@ async def update_instance(
     if payload.username is not None:
         inst.username_ct = crypto.encrypt(payload.username)
         changed["username"] = "<updated>"
-    if payload.password:
+    # L2: treat whitespace-only password as "do not change".
+    if payload.password and payload.password.strip():
         inst.password_ct = crypto.encrypt(payload.password)
         changed["password"] = "<updated>"
 
@@ -146,10 +157,11 @@ async def update_instance(
         db, actor_email=user["email"], action="update", resource="instance",
         resource_id=inst.id, details=changed,
     )
-    db.commit()
+    await db.commit()
 
     # Any schedule-relevant change → tell the worker to reload.
-    if {"cron_expression", "cron_timezone", "enabled"} & changed.keys():
+    # H-adjacent: `name` belongs here too so log output catches the new name.
+    if {"cron_expression", "cron_timezone", "enabled", "name"} & changed.keys():
         await ipc.send(ReloadScheduleCommand(instance_id=inst.id))
 
     return _to_read(inst, crypto)
@@ -159,16 +171,16 @@ async def update_instance(
 async def delete_instance(
     instance_id: int, db: DbSession, user: CurrentUser, ipc: Ipc
 ) -> None:
-    inst = db.get(Instance, instance_id)
+    inst = await db.get(Instance, instance_id)
     if inst is None:
         raise HTTPException(404, "instance not found")
     name = inst.name
-    db.delete(inst)
+    await db.delete(inst)
     audit.record(
         db, actor_email=user["email"], action="delete", resource="instance",
         resource_id=instance_id, details={"name": name},
     )
-    db.commit()
+    await db.commit()
     await ipc.send(ReloadScheduleCommand(instance_id=instance_id))
 
 
@@ -176,16 +188,16 @@ async def delete_instance(
 async def test_connection(
     instance_id: int, db: DbSession, user: CurrentUser, ipc: Ipc
 ) -> dict[str, int]:
-    if db.get(Instance, instance_id) is None:
+    if (await db.get(Instance, instance_id)) is None:
         raise HTTPException(404, "instance not found")
     job = Job(instance_id=instance_id, kind="test_connection", requested_by=user["email"])
     db.add(job)
-    db.flush()
+    await db.flush()
     audit.record(
         db, actor_email=user["email"], action="trigger", resource="test_connection",
         resource_id=instance_id,
     )
-    db.commit()
+    await db.commit()
     await ipc.send(TestConnectionCommand(instance_id=instance_id, job_id=job.id))
     return {"job_id": job.id}
 
@@ -194,15 +206,15 @@ async def test_connection(
 async def backup_now(
     instance_id: int, db: DbSession, user: CurrentUser, ipc: Ipc
 ) -> dict[str, int]:
-    if db.get(Instance, instance_id) is None:
+    if (await db.get(Instance, instance_id)) is None:
         raise HTTPException(404, "instance not found")
     job = Job(instance_id=instance_id, kind="manual", requested_by=user["email"])
     db.add(job)
-    db.flush()
+    await db.flush()
     audit.record(
         db, actor_email=user["email"], action="trigger", resource="backup",
         resource_id=instance_id,
     )
-    db.commit()
+    await db.commit()
     await ipc.send(RunBackupCommand(instance_id=instance_id, job_id=job.id))
     return {"job_id": job.id}

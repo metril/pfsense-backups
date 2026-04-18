@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from cron_descriptor import ExpressionDescriptor
 from croniter import croniter
@@ -15,6 +15,19 @@ def validate(cron: str) -> None:
         raise ValueError(f"invalid cron expression: {cron!r}")
 
 
+def validate_tz(tz: str) -> None:
+    """Raise ValueError if ``tz`` isn't a known IANA timezone.
+
+    H9: previously a bad tz got all the way into cron_utils.next_runs and
+    raised ZoneInfoNotFoundError, which bubbled up as a 500. Router code
+    now catches ValueError uniformly.
+    """
+    try:
+        ZoneInfo(tz)
+    except ZoneInfoNotFoundError as exc:
+        raise ValueError(f"unknown timezone: {tz!r}") from exc
+
+
 def describe(cron: str) -> str:
     try:
         return ExpressionDescriptor(cron, use_24hour_time_format=True).get_description()
@@ -24,6 +37,7 @@ def describe(cron: str) -> str:
 
 def next_runs(cron: str, tz: str = "UTC", count: int = 3) -> list[datetime]:
     validate(cron)
+    validate_tz(tz)
     base = datetime.now(ZoneInfo(tz))
     it = croniter(cron, base)
     return [it.get_next(datetime) for _ in range(count)]

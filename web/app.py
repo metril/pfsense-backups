@@ -15,7 +15,12 @@ from starlette.middleware.sessions import SessionMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from pfsense_shared.crypto import Crypto
-from pfsense_shared.db import init_db, make_engine, make_session_factory
+from pfsense_shared.db import (
+    init_db,
+    make_async_engine,
+    make_async_session_factory,
+    make_engine,
+)
 from pfsense_shared.settings import WebSettings
 
 from .middleware import AuthRequiredMiddleware
@@ -40,10 +45,16 @@ log = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     settings: WebSettings = app.state.settings
 
-    engine = make_engine(settings.app_db_url)
-    init_db(engine)
-    app.state.engine = engine
-    app.state.session_factory = make_session_factory(engine)
+    # Migrations + seeding run on the sync engine (Alembic's command.upgrade
+    # uses a sync Connection internally; there's no async Alembic). The
+    # runtime request path uses the async engine for non-blocking DB I/O.
+    sync_engine = make_engine(settings.app_db_url)
+    init_db(sync_engine)
+    sync_engine.dispose()
+
+    async_engine = make_async_engine(settings.app_db_url)
+    app.state.engine = async_engine
+    app.state.session_factory = make_async_session_factory(async_engine)
     app.state.crypto = Crypto.from_file(settings.pfsense_backup_secret_key_file)
 
     bus = EventBus()
@@ -70,6 +81,7 @@ async def lifespan(app: FastAPI):
     finally:
         log.info("shutting down ipc client")
         await ipc.close()
+        await async_engine.dispose()
 
 
 def create_app(settings: WebSettings | None = None, static_dir: Path | None = None) -> FastAPI:
@@ -84,7 +96,8 @@ def create_app(settings: WebSettings | None = None, static_dir: Path | None = No
     app.add_middleware(
         SessionMiddleware,
         secret_key=settings.session_secret,
-        https_only=True,
+        # H13: flag drops in dev so http://localhost:8080 keeps the cookie.
+        https_only=not settings.dev_mode,
         same_site="lax",
         max_age=14 * 24 * 3600,
     )

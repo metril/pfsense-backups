@@ -1,12 +1,12 @@
-"""FastAPI dependencies: DB session, current user, IPC client, event bus, crypto."""
+"""FastAPI dependencies: async DB session, current user, IPC client, event bus, crypto."""
 
 from __future__ import annotations
 
-from collections.abc import Generator
+from collections.abc import AsyncGenerator
 from typing import Annotated, Any
 
 from fastapi import Depends, HTTPException, Request, status
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from pfsense_shared.crypto import Crypto
 
@@ -14,12 +14,9 @@ from .services.event_bus import EventBus
 from .services.ipc_client import IpcClient
 
 
-def get_db(request: Request) -> Generator[Session, None, None]:
-    session = request.app.state.session_factory()
-    try:
+async def get_db(request: Request) -> AsyncGenerator[AsyncSession, None]:
+    async with request.app.state.session_factory() as session:
         yield session
-    finally:
-        session.close()
 
 
 def get_ipc_client(request: Request) -> IpcClient:
@@ -41,7 +38,7 @@ def get_current_user(request: Request) -> dict[str, Any]:
     return user
 
 
-DbSession = Annotated[Session, Depends(get_db)]
+DbSession = Annotated[AsyncSession, Depends(get_db)]
 CurrentUser = Annotated[dict[str, Any], Depends(get_current_user)]
 Ipc = Annotated[IpcClient, Depends(get_ipc_client)]
 Events = Annotated[EventBus, Depends(get_event_bus)]
