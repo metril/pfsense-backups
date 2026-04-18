@@ -135,7 +135,7 @@ def _lock_path(db_url: str) -> Path:
     if db_url.startswith("sqlite:///"):
         db_file = Path(db_url.removeprefix("sqlite:///"))
         return db_file.parent / ".init.lock"
-    return Path("/tmp/pfsense-backup-init.lock")
+    return Path("/tmp/pfsense-backups-init.lock")
 
 
 @contextlib.contextmanager

@@ -27,7 +27,7 @@ class WorkerSettings(CommonSettings):
     zmq_pull_bind: str = Field(default="tcp://0.0.0.0:5555")
     zmq_pub_bind: str = Field(default="tcp://0.0.0.0:5556")
     heartbeat_seconds: float = Field(default=5.0)
-    hostname: str = Field(default="pfsense-backup")
+    hostname: str = Field(default="pfsense-backups")
 
 
 class WebSettings(CommonSettings):

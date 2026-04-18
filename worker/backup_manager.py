@@ -308,7 +308,7 @@ class PfSenseBackupManager:
     # M5: browser-like headers. Some hardened pfSense builds reject requests
     # without a sensible User-Agent / Accept.
     _BROWSER_HEADERS = {
-        "User-Agent": "Mozilla/5.0 (compatible; pfsense-backup/0.1)",
+        "User-Agent": "Mozilla/5.0 (compatible; pfsense-backups/0.2)",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.5",
     }

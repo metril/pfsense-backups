@@ -66,7 +66,7 @@ def _heartbeat_loop(publisher: IpcPublisher, stop: threading.Event, interval: fl
 def main() -> None:
     settings = WorkerSettings()
     _configure_logging(settings.log_level)
-    log.info("pfsense-backup worker starting")
+    log.info("pfsense-backups worker starting")
 
     engine = make_engine(settings.app_db_url)
     init_db(engine)

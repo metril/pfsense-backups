@@ -63,7 +63,7 @@ class Notifier:
         msg = self._format_message(
             hook,
             status="TEST",
-            details="This is a test notification from pfsense-backup.",
+            details="This is a test notification from pfsense-backups.",
             failed_instances=[],
         )
         try:
