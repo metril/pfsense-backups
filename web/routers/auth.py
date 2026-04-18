@@ -6,8 +6,8 @@ import logging
 import secrets
 from typing import Any
 
-from fastapi import APIRouter, Request, Response, status
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi import APIRouter, Request, Response
+from fastapi.responses import RedirectResponse
 
 from ..dependencies import CurrentUser
 from ..middleware import CSRF_COOKIE, CSRF_HEADER
@@ -36,23 +36,19 @@ async def callback(request: Request) -> Response:
         token = await oauth.oidc.authorize_access_token(request)
     except Exception as exc:
         log.error("OIDC callback failed: %s", exc)
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content={"detail": "OIDC exchange failed"},
-        )
+        # L9: redirect the browser to /login with an error query-param so the
+        # SPA can render a user-friendly message instead of raw JSON.
+        return RedirectResponse(url="/login?error=oidc_exchange_failed", status_code=302)
 
     claims = token.get("userinfo") or await oauth.oidc.userinfo(token=token)
     user = user_from_claims(dict(claims))
     if user is None:
-        return JSONResponse(status_code=403, content={"detail": "no email in ID token"})
+        return RedirectResponse(url="/login?error=no_email", status_code=302)
 
     allowed = {e.lower() for e in settings.oidc_allowed_emails}
     if user["email"].lower() not in allowed:
         log.warning("Login denied (not on allowlist): %s", user["email"])
-        return JSONResponse(
-            status_code=403,
-            content={"detail": f"access denied for {user['email']}"},
-        )
+        return RedirectResponse(url="/login?error=access_denied", status_code=302)
 
     request.session["user"] = user
     log.info("Login OK: %s", user["email"])

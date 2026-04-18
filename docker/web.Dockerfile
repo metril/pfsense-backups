@@ -4,24 +4,28 @@
 # `static_spa.py` returns a placeholder for non-API routes.
 
 # ------------------------------------------------------------------ #
-# Stage 1: frontend builder (only runs when frontend/ is present)
+# Stage 1: frontend builder
 # ------------------------------------------------------------------ #
 FROM node:20-alpine AS frontend
 WORKDIR /fe
-# COPY with a trailing dot fails if the source doesn't exist; work around by
-# copying the whole repo and filtering.
 COPY frontend/ ./frontend/
-# Fallback if no frontend yet: produce an empty dist/ so stage 2 COPY succeeds.
-RUN if [ -f frontend/package.json ]; then \
-      cd frontend && npm ci && npm run build; \
-    else \
-      mkdir -p frontend/dist && echo "<!doctype html><title>pfSense Backup</title><p>SPA not built in this image.</p>" > frontend/dist/index.html; \
-    fi
+# L3/L6: install ALL deps (including dev — build tools need them), then
+# produce dist. Only the built dist is copied into the runtime stage, so
+# the dev deps never reach the final image.
+RUN cd frontend && npm ci && npm run build
 
 # ------------------------------------------------------------------ #
 # Stage 2: Python runtime
 # ------------------------------------------------------------------ #
 FROM python:3.13-slim
+
+# L10: OCI image labels so GHCR + anything consuming the registry can show
+# where this image came from. Values are populated at build time by the
+# GitHub Actions release workflow via docker/metadata-action.
+LABEL org.opencontainers.image.title="pfsense-backup-web" \
+      org.opencontainers.image.description="pfSense backup — web/API service (FastAPI + React)" \
+      org.opencontainers.image.source="https://github.com/metril/pfsense-backup" \
+      org.opencontainers.image.licenses="MIT"
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

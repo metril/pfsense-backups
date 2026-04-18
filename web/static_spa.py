@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 log = logging.getLogger(__name__)
@@ -25,6 +25,23 @@ def mount_spa(app: FastAPI, static_dir: Path) -> None:
         app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
     else:
         log.warning("SPA assets dir missing at %s — serving placeholder on /", assets_dir)
+
+    # L4: explicit handlers for favicon so browsers don't get served index.html
+    # with a 200 status for /favicon.svg / /favicon.ico.
+    favicon_svg = static_dir / "favicon.svg"
+    favicon_ico = static_dir / "favicon.ico"
+
+    @app.get("/favicon.svg", include_in_schema=False)
+    async def favicon_svg_route():  # type: ignore[override]
+        if favicon_svg.is_file():
+            return FileResponse(str(favicon_svg), media_type="image/svg+xml")
+        return Response(status_code=204)
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def favicon_ico_route():  # type: ignore[override]
+        if favicon_ico.is_file():
+            return FileResponse(str(favicon_ico), media_type="image/x-icon")
+        return Response(status_code=204)
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def spa_catch_all(full_path: str, request: Request):  # type: ignore[override]

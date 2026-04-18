@@ -9,7 +9,25 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+# M1: chars we refuse in `name` and `backup_prefix`. These end up in glob
+# patterns and filesystem paths inside the worker; the unsafe set keeps
+# paths traversal-free and cleanup from walking outside the intended set.
+_FS_UNSAFE = set("/\\*?[]<>|\"\x00")
+
+
+def _no_fs_special(v: str) -> str:
+    bad = sorted(ch for ch in set(v) if ch in _FS_UNSAFE)
+    if bad:
+        raise ValueError(
+            f"contains filesystem-unsafe characters: {', '.join(repr(c) for c in bad)}"
+        )
+    if v.strip() != v:
+        raise ValueError("must not have leading or trailing whitespace")
+    if not v:
+        raise ValueError("must not be empty")
+    return v
 
 # --------------------------------------------------------------------- #
 # IPC commands (web → worker, ZMQ PUSH/PULL)
@@ -143,12 +161,25 @@ class InstanceCreate(BaseModel):
     subfolder: str | None = None
     backup_prefix: str = "daily"
     verify_ssl: bool = False
-    timeout_seconds: int = 30
+    timeout_seconds: int = Field(default=30, ge=1, le=3600)
     cron_expression: str | None = None
     cron_timezone: str = "UTC"
     enabled: bool = True
-    retention_count: int = 365
+    retention_count: int = Field(default=365, ge=0, le=10000)
     compress: bool = False
+
+    @field_validator("name", "backup_prefix")
+    @classmethod
+    def _no_unsafe_chars(cls, v: str) -> str:
+        return _no_fs_special(v)
+
+    @field_validator("subfolder")
+    @classmethod
+    def _subfolder_safe(cls, v: str | None) -> str | None:
+        if v is None or v == "":
+            return v
+        # Single-segment only; no path traversal.
+        return _no_fs_special(v)
 
 
 class InstanceUpdate(BaseModel):
@@ -159,12 +190,24 @@ class InstanceUpdate(BaseModel):
     subfolder: str | None = None
     backup_prefix: str | None = None
     verify_ssl: bool | None = None
-    timeout_seconds: int | None = None
+    timeout_seconds: int | None = Field(default=None, ge=1, le=3600)
     cron_expression: str | None = None
     cron_timezone: str | None = None
     enabled: bool | None = None
-    retention_count: int | None = None
+    retention_count: int | None = Field(default=None, ge=0, le=10000)
     compress: bool | None = None
+
+    @field_validator("name", "backup_prefix")
+    @classmethod
+    def _no_unsafe_chars(cls, v: str | None) -> str | None:
+        return None if v is None else _no_fs_special(v)
+
+    @field_validator("subfolder")
+    @classmethod
+    def _subfolder_safe(cls, v: str | None) -> str | None:
+        if v is None or v == "":
+            return v
+        return _no_fs_special(v)
 
 
 class InstanceRead(BaseModel):

@@ -1,5 +1,11 @@
 FROM python:3.13-slim
 
+# L10: OCI image labels — populated/overridden by the release workflow.
+LABEL org.opencontainers.image.title="pfsense-backup-worker" \
+      org.opencontainers.image.description="pfSense backup — scheduler + worker" \
+      org.opencontainers.image.source="https://github.com/metril/pfsense-backup" \
+      org.opencontainers.image.licenses="MIT"
+
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1

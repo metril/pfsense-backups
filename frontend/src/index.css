@@ -27,7 +27,14 @@ body {
     Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
 }
 
-*:focus-visible {
+/* L8: scope focus rings to interactive elements so default-rendered inputs
+   (which already show their own focus ring via Tailwind utility classes) do
+   not stack two rings. */
+button:focus-visible,
+a:focus-visible,
+[role="button"]:focus-visible,
+[role="switch"]:focus-visible,
+summary:focus-visible {
   outline: 2px solid hsl(var(--accent));
   outline-offset: 2px;
   border-radius: 4px;
