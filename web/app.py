@@ -37,7 +37,7 @@ from .routers import schedule as schedule_router
 from .routers import settings_router
 from .services.event_bus import EventBus
 from .services.ipc_client import IpcClient
-from .services.oidc import make_oauth
+from .services.oidc import make_oidc_provider
 from .services.rate_limit import configure_from_settings, limiter, rate_limit_exceeded_handler
 from .static_spa import mount_spa
 
@@ -71,12 +71,11 @@ async def lifespan(app: FastAPI):
     ipc.start()
     app.state.ipc_client = ipc
 
-    oauth = make_oauth(
+    app.state.oidc_provider = make_oidc_provider(
         issuer=settings.oidc_issuer,
         client_id=settings.oidc_client_id,
         client_secret=settings.oidc_client_secret,
     )
-    app.state.oauth = oauth
 
     log.info("web service ready")
     try:

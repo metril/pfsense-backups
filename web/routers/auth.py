@@ -1,4 +1,10 @@
-"""OIDC auth endpoints: login, callback, logout, me, csrf."""
+"""OIDC auth endpoints: login, callback, logout, me, csrf.
+
+Uses our own PyJWT-based `OIDCProvider` (web/services/oidc.py) rather than
+authlib. State + PKCE verifier + nonce are stashed in the server-side
+session (Starlette SessionMiddleware, signed cookie) keyed by state so the
+callback can retrieve them.
+"""
 
 from __future__ import annotations
 
@@ -11,76 +17,103 @@ from fastapi.responses import RedirectResponse
 
 from ..dependencies import CurrentUser
 from ..middleware import CSRF_COOKIE, CSRF_HEADER
-from ..services.oidc import user_from_claims
+from ..services.oidc import generate_pkce, user_from_claims
 from ..services.rate_limit import limiter, login_limit
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
+_OIDC_STATE_KEY = "oidc_pending"
+
 
 @router.get("/login")
 @limiter.limit(login_limit)
 async def login(request: Request) -> Response:
-    oauth = request.app.state.oauth
-    redirect_url = request.app.state.settings.oidc_redirect_url
-    # authlib fetches the IdP's OIDC discovery document on first call and
-    # stores state/nonce in the session. Any of: network unreachable,
-    # TLS cert mismatch, httpx timeout, or session-cookie write failure
-    # lands here. Log the traceback explicitly so operators don't have to
-    # guess from a 500 response with no context.
+    provider = request.app.state.oidc_provider
+    redirect_uri = request.app.state.settings.oidc_redirect_url
+
+    state = secrets.token_urlsafe(24)
+    nonce = secrets.token_urlsafe(24)
+    code_verifier, code_challenge = generate_pkce()
+
+    # Stash the per-request secrets in the signed-cookie session so the
+    # callback can validate state + exchange the code.
+    request.session[_OIDC_STATE_KEY] = {
+        "state": state,
+        "nonce": nonce,
+        "code_verifier": code_verifier,
+        "redirect_uri": redirect_uri,
+    }
+
     try:
-        return await oauth.oidc.authorize_redirect(request, redirect_url)
+        auth_url = await provider.authorization_url(
+            state=state,
+            code_challenge=code_challenge,
+            nonce=nonce,
+            redirect_uri=redirect_uri,
+        )
     except Exception:
         issuer = request.app.state.settings.oidc_issuer
-        log.exception("OIDC authorize_redirect failed (issuer=%s)", issuer)
-        return RedirectResponse(url="/login?error=authorize_redirect_failed", status_code=302)
+        log.exception("OIDC authorization_url failed (issuer=%s)", issuer)
+        return RedirectResponse(
+            url="/login?error=authorize_redirect_failed", status_code=302
+        )
+
+    return RedirectResponse(url=auth_url, status_code=302)
 
 
 @router.get("/callback")
 @limiter.limit(login_limit)
 async def callback(request: Request) -> Response:
-    oauth = request.app.state.oauth
+    provider = request.app.state.oidc_provider
     settings = request.app.state.settings
+
+    pending = request.session.pop(_OIDC_STATE_KEY, None)
+    if not pending:
+        log.warning("OIDC callback with no pending state — session expired or lost")
+        return RedirectResponse(url="/login?error=no_pending_state", status_code=302)
+
+    code = request.query_params.get("code")
+    state = request.query_params.get("state")
+    if not code or not state or state != pending.get("state"):
+        log.warning("OIDC callback state mismatch or missing code")
+        return RedirectResponse(url="/login?error=state_mismatch", status_code=302)
+
     try:
-        token = await oauth.oidc.authorize_access_token(request)
+        tokens = await provider.exchange_code(
+            code=code,
+            code_verifier=pending["code_verifier"],
+            redirect_uri=pending["redirect_uri"],
+        )
     except Exception:
         log.exception("OIDC token exchange failed")
-        # L9: redirect the browser to /login with an error query-param so the
-        # SPA can render a user-friendly message instead of raw JSON.
         return RedirectResponse(url="/login?error=oidc_exchange_failed", status_code=302)
 
-    # Everything past the token exchange needs its own guard: userinfo
-    # fetches, claim coercion, session writes can all raise. An uncaught
-    # exception here produces an opaque "Internal Server Error" page with
-    # the traceback buried in uvicorn's stderr. log.exception puts the
-    # traceback on the root logger so it lands in `docker logs` alongside
-    # the rest of our app output.
+    id_token = tokens.get("id_token")
+    if not id_token:
+        log.warning("OIDC token response missing id_token: keys=%s", list(tokens))
+        return RedirectResponse(url="/login?error=no_id_token", status_code=302)
+
     try:
-        claims = token.get("userinfo")
-        if not claims:
-            try:
-                claims = await oauth.oidc.userinfo(token=token)
-            except Exception:
-                log.exception("OIDC userinfo fetch failed; no id_token claims to fall back on")
-                return RedirectResponse(url="/login?error=userinfo_failed", status_code=302)
-
-        user = user_from_claims(dict(claims))
-        if user is None:
-            log.warning("OIDC claims had no usable email: %r", dict(claims))
-            return RedirectResponse(url="/login?error=no_email", status_code=302)
-
-        allowed = {e.lower() for e in settings.oidc_allowed_emails}
-        if user["email"].lower() not in allowed:
-            log.warning("Login denied (not on allowlist): %s", user["email"])
-            return RedirectResponse(url="/login?error=access_denied", status_code=302)
-
-        request.session["user"] = user
-        log.info("Login OK: %s", user["email"])
-        return RedirectResponse(url="/", status_code=302)
+        claims = await provider.validate_id_token(id_token, nonce=pending["nonce"])
     except Exception:
-        log.exception("OIDC callback pipeline failure")
-        return RedirectResponse(url="/login?error=server_error", status_code=302)
+        log.exception("OIDC id_token validation failed")
+        return RedirectResponse(url="/login?error=id_token_invalid", status_code=302)
+
+    user = user_from_claims(claims)
+    if user is None:
+        log.warning("OIDC claims had no usable email: %r", claims)
+        return RedirectResponse(url="/login?error=no_email", status_code=302)
+
+    allowed = {e.lower() for e in settings.oidc_allowed_emails}
+    if user["email"].lower() not in allowed:
+        log.warning("Login denied (not on allowlist): %s", user["email"])
+        return RedirectResponse(url="/login?error=access_denied", status_code=302)
+
+    request.session["user"] = user
+    log.info("Login OK: %s", user["email"])
+    return RedirectResponse(url="/", status_code=302)
 
 
 @router.post("/logout")
