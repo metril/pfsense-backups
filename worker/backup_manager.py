@@ -240,16 +240,29 @@ class PfSenseBackupManager:
                 row.id for row in s.query(Instance).filter(Instance.enabled.is_(True)).all()
             ]
 
+        # Fire Healthchecks /start pings before any per-instance work so
+        # the check transitions to "running" in the dashboard. A failure
+        # here is non-fatal — a broken endpoint must not stop backups.
+        try:
+            with self._session_factory() as s:
+                self._notifier.ping_starts(s)
+        except Exception as exc:
+            log.warning("Healthchecks start pings failed: %s", exc)
+
         success_count = 0
         failed_names: list[str] = []
+        succeeded_names: list[str] = []
         for iid in instance_ids:
-            if self.backup_instance(iid, job_id=job_id):
-                success_count += 1
-            else:
-                with self._session_factory() as s:
-                    inst = s.get(Instance, iid)
-                    if inst is not None:
-                        failed_names.append(inst.name)
+            ok = self.backup_instance(iid, job_id=job_id)
+            with self._session_factory() as s:
+                inst = s.get(Instance, iid)
+                if inst is None:
+                    continue
+                if ok:
+                    success_count += 1
+                    succeeded_names.append(inst.name)
+                else:
+                    failed_names.append(inst.name)
 
         total = len(instance_ids)
         is_success = not failed_names
@@ -265,6 +278,7 @@ class PfSenseBackupManager:
                     is_success=is_success,
                     details=summary,
                     failed_instances=failed_names,
+                    succeeded_instances=succeeded_names,
                 )
         except Exception as exc:
             log.error("Notifier summary send failed: %s", exc)

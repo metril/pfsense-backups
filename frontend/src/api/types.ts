@@ -72,9 +72,17 @@ export interface ScheduleRow {
   next_runs: string[];
 }
 
+export type NotificationKind =
+  | "discord"
+  | "home_assistant"
+  | "ntfy"
+  | "healthchecks"
+  | "webhook";
+
 export interface Notification {
   id: number;
   name: string;
+  kind: NotificationKind;
   url: string;
   trigger: "success" | "failure" | "always";
   enabled: boolean;
@@ -83,6 +91,10 @@ export interface Notification {
   timeout_seconds: number;
   headers: Record<string, string> | null;
   payload_template: Record<string, unknown> | null;
+  /** Kind-specific structured config. Secrets are returned as "__set__". */
+  config: Record<string, unknown> | null;
+  /** null or [] = all instances (default). */
+  instance_ids: number[] | null;
 }
 
 export interface AuditEntry {

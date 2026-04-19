@@ -270,20 +270,27 @@ class JobRead(BaseModel):
     message: str | None
 
 
+NotificationKind = Literal["discord", "home_assistant", "ntfy", "healthchecks", "webhook"]
+
+
 class NotificationCreate(BaseModel):
     name: str
-    url: str
-    trigger: Literal["success", "failure", "always"]
+    kind: NotificationKind = "webhook"
+    url: str = ""
+    trigger: Literal["success", "failure", "always"] = "always"
     enabled: bool = True
     message_format: str = "{status}: pfSense backup completed. {details}"
     include_instance_details: bool = True
     timeout_seconds: int = 10
     headers: dict[str, str] | None = None
     payload_template: dict[str, object] | None = None
+    config: dict[str, object] | None = None
+    instance_ids: list[int] | None = None
 
 
 class NotificationUpdate(BaseModel):
     name: str | None = None
+    kind: NotificationKind | None = None
     url: str | None = None
     trigger: Literal["success", "failure", "always"] | None = None
     enabled: bool | None = None
@@ -292,6 +299,8 @@ class NotificationUpdate(BaseModel):
     timeout_seconds: int | None = None
     headers: dict[str, str] | None = None
     payload_template: dict[str, object] | None = None
+    config: dict[str, object] | None = None
+    instance_ids: list[int] | None = None
 
 
 class NotificationRead(BaseModel):
@@ -299,6 +308,7 @@ class NotificationRead(BaseModel):
 
     id: int
     name: str
+    kind: NotificationKind
     url: str
     trigger: str
     enabled: bool
@@ -307,6 +317,8 @@ class NotificationRead(BaseModel):
     timeout_seconds: int
     headers: dict[str, str] | None = None
     payload_template: dict[str, object] | None = None
+    config: dict[str, object] | None = None
+    instance_ids: list[int] | None = None
 
 
 class BackupSettingsRead(BaseModel):

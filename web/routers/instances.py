@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,7 +12,7 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from pfsense_shared.models import Backup, BackupSettings, Instance, Job
+from pfsense_shared.models import Backup, BackupSettings, Instance, Job, Notification
 from pfsense_shared.schemas import (
     InstanceCreate,
     InstanceRead,
@@ -185,6 +186,24 @@ async def delete_instance(
     if inst is None:
         raise HTTPException(404, "instance not found")
     name = inst.name
+
+    # Prune this ID from every scoped notification so the scope filter
+    # doesn't carry a dangling reference. Empty lists get cleared so
+    # the "null = all" shortcut stays unambiguous.
+    scoped = (
+        await db.scalars(
+            select(Notification).where(Notification.instance_ids_json.is_not(None))
+        )
+    ).all()
+    for n in scoped:
+        try:
+            ids = json.loads(n.instance_ids_json or "[]")
+        except (TypeError, ValueError):
+            continue
+        if instance_id in ids:
+            ids = [i for i in ids if i != instance_id]
+            n.instance_ids_json = json.dumps(ids) if ids else None
+
     await db.delete(inst)
     audit.record(
         db, actor_email=user["email"], action="delete", resource="instance",
