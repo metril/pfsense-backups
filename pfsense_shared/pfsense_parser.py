@@ -34,7 +34,13 @@ from .pfsense_sections import (
     firewall as _firewall,
 )
 from .pfsense_sections import (
+    ha as _ha,
+)
+from .pfsense_sections import (
     interfaces as _interfaces,
+)
+from .pfsense_sections import (
+    layer2 as _layer2,
 )
 from .pfsense_sections import (
     nat as _nat,
@@ -58,7 +64,9 @@ from .pfsense_sections.aliases import Alias
 from .pfsense_sections.auth import AuthServer, Group, User
 from .pfsense_sections.cron import CronJob
 from .pfsense_sections.firewall import FirewallRule
+from .pfsense_sections.ha import HaSync, VirtualIP
 from .pfsense_sections.interfaces import Interface
+from .pfsense_sections.layer2 import Bridge, Ppp, QinQ, Tunnel, Vlan, WolHost
 from .pfsense_sections.nat import NatRule
 from .pfsense_sections.revision import Revision
 from .pfsense_sections.routing import Gateway, GatewayGroup, StaticRoute
@@ -146,9 +154,18 @@ class ParsedConfig(BaseModel):
     sysctl: list[SysctlTunable] = []
     cron: list[CronJob] = []
     interfaces: list[Interface] = []
+    vlans: list[Vlan] = []
+    bridges: list[Bridge] = []
+    gifs: list[Tunnel] = []
+    gres: list[Tunnel] = []
+    ppps: list[Ppp] = []
+    qinqs: list[QinQ] = []
+    wol: list[WolHost] = []
     gateways: list[Gateway] = []
     gateway_groups: list[GatewayGroup] = []
     static_routes: list[StaticRoute] = []
+    virtual_ips: list[VirtualIP] = []
+    hasync: HaSync | None = None
     firewall_rules: list[FirewallRule] = []
     nat_rules: list[NatRule] = []
     aliases: list[Alias] = []
@@ -188,9 +205,18 @@ def parse(xml_bytes: bytes | str) -> ParsedConfig:
         sysctl=_sysctl.parse(root),
         cron=_cron.parse(root),
         interfaces=_interfaces.parse(root),
+        vlans=_layer2.parse_vlans(root),
+        bridges=_layer2.parse_bridges(root),
+        gifs=_layer2.parse_gifs(root),
+        gres=_layer2.parse_gres(root),
+        ppps=_layer2.parse_ppps(root),
+        qinqs=_layer2.parse_qinqs(root),
+        wol=_layer2.parse_wol(root),
         gateways=gws,
         gateway_groups=ggroups,
         static_routes=_routing.parse_static_routes(root),
+        virtual_ips=_ha.parse_virtualips(root),
+        hasync=_ha.parse_hasync(root),
         firewall_rules=_firewall.parse(root),
         nat_rules=_nat.parse(root),
         aliases=_aliases.parse(root),

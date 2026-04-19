@@ -76,6 +76,91 @@ export interface Interface {
   blockbogons: boolean;
 }
 
+export interface Vlan {
+  key: string;
+  if_: string | null;
+  tag: string | null;
+  pcp: string | null;
+  vlanif: string | null;
+  descr: string | null;
+}
+
+export interface Bridge {
+  bridgeif: string;
+  members: string[];
+  descr: string | null;
+  enablestp: boolean;
+}
+
+export interface Tunnel {
+  kind: "gif" | "gre";
+  name: string;
+  if_: string | null;
+  remote_addr: string | null;
+  tunnel_local_addr: string | null;
+  tunnel_remote_addr: string | null;
+  tunnel_remote_net: string | null;
+  descr: string | null;
+}
+
+export interface Ppp {
+  ptpid: string;
+  type: string | null;
+  if_: string | null;
+  username: string | null;
+  provider: string | null;
+  phone: string | null;
+  descr: string | null;
+}
+
+export interface QinQ {
+  key: string;
+  if_: string | null;
+  tag: string | null;
+  members: string[];
+  descr: string | null;
+}
+
+export interface WolHost {
+  mac: string;
+  interface: string | null;
+  descr: string | null;
+}
+
+export interface VirtualIP {
+  key: string;
+  mode: string | null;
+  interface: string | null;
+  subnet: string | null;
+  subnet_bits: string | null;
+  vhid: string | null;
+  advbase: string | null;
+  advskew: string | null;
+  descr: string | null;
+  password: string | null;
+}
+
+export interface HaSync {
+  pfsyncenabled: boolean;
+  pfsyncinterface: string | null;
+  pfsyncpeerip: string | null;
+  synchronizetoip: string | null;
+  username: string | null;
+  password: string | null;
+  synchronizerules: boolean;
+  synchronizenat: boolean;
+  synchronizealiases: boolean;
+  synchronizeschedules: boolean;
+  synchronizedhcpd: boolean;
+  synchronizedhcrelay: boolean;
+  synchronizedns: boolean;
+  synchronizeopenvpn: boolean;
+  synchronizeipsec: boolean;
+  synchronizeusers: boolean;
+  synchronizeauthservers: boolean;
+  synchronizecerts: boolean;
+}
+
 export interface Gateway {
   name: string;
   interface: string | null;
@@ -238,9 +323,18 @@ export interface ParsedConfig {
   sysctl: SysctlTunable[];
   cron: CronJob[];
   interfaces: Interface[];
+  vlans: Vlan[];
+  bridges: Bridge[];
+  gifs: Tunnel[];
+  gres: Tunnel[];
+  ppps: Ppp[];
+  qinqs: QinQ[];
+  wol: WolHost[];
   gateways: Gateway[];
   gateway_groups: GatewayGroup[];
   static_routes: StaticRoute[];
+  virtual_ips: VirtualIP[];
+  hasync: HaSync | null;
   firewall_rules: FirewallRule[];
   nat_rules: NatRule[];
   aliases: Alias[];
@@ -287,9 +381,18 @@ export interface ConfigDiff {
   sysctl: SectionDiff;
   cron: SectionDiff;
   interfaces: SectionDiff;
+  vlans: SectionDiff;
+  bridges: SectionDiff;
+  gifs: SectionDiff;
+  gres: SectionDiff;
+  ppps: SectionDiff;
+  qinqs: SectionDiff;
+  wol: SectionDiff;
   gateways: SectionDiff;
   gateway_groups: SectionDiff;
   static_routes: SectionDiff;
+  virtual_ips: SectionDiff;
+  hasync: SectionDiff;
   firewall_rules: SectionDiff;
   nat_rules: SectionDiff;
   aliases: SectionDiff;

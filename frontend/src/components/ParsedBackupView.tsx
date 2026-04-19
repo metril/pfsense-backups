@@ -5,20 +5,28 @@ import { useParsedBackup } from "@/api/queries";
 import type {
   Alias,
   AuthServer,
+  Bridge,
   CronJob,
   DhcpServer,
   DnsConfig,
   FirewallRule,
   Gateway,
   Group,
+  HaSync,
   Interface,
   NatRule,
   ParsedConfig,
+  Ppp,
+  QinQ,
   RawSection,
   StaticRoute,
   SysctlTunable,
   SystemInfo,
+  Tunnel,
   User,
+  VirtualIP,
+  Vlan,
+  WolHost,
 } from "@/api/parsedTypes";
 
 /** Render a server-parsed pfSense config as collapsible sections.
@@ -65,6 +73,51 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
         {data.interfaces.length > 0 && (
           <Section title="Interfaces" count={data.interfaces.length}>
             <InterfacesTable rows={data.interfaces} />
+          </Section>
+        )}
+        {data.vlans.length > 0 && (
+          <Section title="VLANs" count={data.vlans.length}>
+            <VlansTable rows={data.vlans} />
+          </Section>
+        )}
+        {data.bridges.length > 0 && (
+          <Section title="Bridges" count={data.bridges.length}>
+            <BridgesTable rows={data.bridges} />
+          </Section>
+        )}
+        {data.gifs.length > 0 && (
+          <Section title="GIF tunnels" count={data.gifs.length}>
+            <TunnelsTable rows={data.gifs} />
+          </Section>
+        )}
+        {data.gres.length > 0 && (
+          <Section title="GRE tunnels" count={data.gres.length}>
+            <TunnelsTable rows={data.gres} />
+          </Section>
+        )}
+        {data.ppps.length > 0 && (
+          <Section title="PPP interfaces" count={data.ppps.length}>
+            <PppsTable rows={data.ppps} />
+          </Section>
+        )}
+        {data.qinqs.length > 0 && (
+          <Section title="QinQ" count={data.qinqs.length}>
+            <QinqTable rows={data.qinqs} />
+          </Section>
+        )}
+        {data.wol.length > 0 && (
+          <Section title="Wake-on-LAN" count={data.wol.length}>
+            <WolTable rows={data.wol} />
+          </Section>
+        )}
+        {data.virtual_ips.length > 0 && (
+          <Section title="Virtual IPs / CARP" count={data.virtual_ips.length}>
+            <VirtualIpsTable rows={data.virtual_ips} />
+          </Section>
+        )}
+        {data.hasync && (
+          <Section title="HA / CARP sync" count={1}>
+            <HaSyncPanel h={data.hasync} />
           </Section>
         )}
         {data.gateways.length > 0 && (
@@ -187,6 +240,16 @@ function TableOfContents({ cfg }: { cfg: ParsedConfig }) {
   if (cfg.system) entries.push(["System", 1]);
   if (cfg.revision) entries.push(["Last revision", 1]);
   if (cfg.interfaces.length) entries.push(["Interfaces", cfg.interfaces.length]);
+  if (cfg.vlans.length) entries.push(["VLANs", cfg.vlans.length]);
+  if (cfg.bridges.length) entries.push(["Bridges", cfg.bridges.length]);
+  if (cfg.gifs.length) entries.push(["GIF tunnels", cfg.gifs.length]);
+  if (cfg.gres.length) entries.push(["GRE tunnels", cfg.gres.length]);
+  if (cfg.ppps.length) entries.push(["PPP interfaces", cfg.ppps.length]);
+  if (cfg.qinqs.length) entries.push(["QinQ", cfg.qinqs.length]);
+  if (cfg.wol.length) entries.push(["Wake-on-LAN", cfg.wol.length]);
+  if (cfg.virtual_ips.length)
+    entries.push(["Virtual IPs / CARP", cfg.virtual_ips.length]);
+  if (cfg.hasync) entries.push(["HA / CARP sync", 1]);
   if (cfg.gateways.length) entries.push(["Gateways", cfg.gateways.length]);
   if (cfg.static_routes.length)
     entries.push(["Static routes", cfg.static_routes.length]);
@@ -645,6 +708,142 @@ function CronTable({ rows }: { rows: CronJob[] }) {
           {c.command ?? ""}
         </span>,
       ])}
+    />
+  );
+}
+
+function VlansTable({ rows }: { rows: Vlan[] }) {
+  return (
+    <Table
+      headers={["Parent", "Tag", "PCP", "Device", "Description"]}
+      rows={rows.map((v) => [
+        v.if_ ?? "—",
+        v.tag ?? "—",
+        v.pcp ?? "—",
+        v.vlanif ?? "—",
+        v.descr ?? "—",
+      ])}
+    />
+  );
+}
+
+function BridgesTable({ rows }: { rows: Bridge[] }) {
+  return (
+    <Table
+      headers={["Bridge", "Members", "STP", "Description"]}
+      rows={rows.map((b) => [
+        b.bridgeif,
+        b.members.join(", ") || "—",
+        b.enablestp ? "yes" : "",
+        b.descr ?? "—",
+      ])}
+    />
+  );
+}
+
+function TunnelsTable({ rows }: { rows: Tunnel[] }) {
+  return (
+    <Table
+      headers={["Device", "Outer if", "Remote", "Tunnel local", "Tunnel remote", "Description"]}
+      rows={rows.map((t) => [
+        t.name,
+        t.if_ ?? "—",
+        t.remote_addr ?? "—",
+        t.tunnel_local_addr ?? "—",
+        t.tunnel_remote_addr ?? t.tunnel_remote_net ?? "—",
+        t.descr ?? "—",
+      ])}
+    />
+  );
+}
+
+function PppsTable({ rows }: { rows: Ppp[] }) {
+  return (
+    <Table
+      headers={["Type", "Interface", "Username", "Provider", "Description"]}
+      rows={rows.map((p) => [
+        p.type ?? "—",
+        p.if_ ?? "—",
+        p.username ?? "—",
+        p.provider ?? "—",
+        p.descr ?? "—",
+      ])}
+    />
+  );
+}
+
+function QinqTable({ rows }: { rows: QinQ[] }) {
+  return (
+    <Table
+      headers={["Parent", "Outer tag", "Inner tags", "Description"]}
+      rows={rows.map((q) => [
+        q.if_ ?? "—",
+        q.tag ?? "—",
+        q.members.join(", ") || "—",
+        q.descr ?? "—",
+      ])}
+    />
+  );
+}
+
+function WolTable({ rows }: { rows: WolHost[] }) {
+  return (
+    <Table
+      headers={["MAC", "Interface", "Description"]}
+      rows={rows.map((w) => [w.mac, w.interface ?? "—", w.descr ?? "—"])}
+    />
+  );
+}
+
+function VirtualIpsTable({ rows }: { rows: VirtualIP[] }) {
+  return (
+    <Table
+      headers={["Mode", "Interface", "Subnet", "VHID", "CARP pwd", "Description"]}
+      rows={rows.map((v) => [
+        v.mode ?? "—",
+        v.interface ?? "—",
+        v.subnet
+          ? `${v.subnet}${v.subnet_bits ? "/" + v.subnet_bits : ""}`
+          : "—",
+        v.vhid ?? "—",
+        v.password === "***redacted***" ? <Redacted /> : "—",
+        v.descr ?? "—",
+      ])}
+    />
+  );
+}
+
+function HaSyncPanel({ h }: { h: HaSync }) {
+  const synced = [
+    ["rules", h.synchronizerules],
+    ["nat", h.synchronizenat],
+    ["aliases", h.synchronizealiases],
+    ["schedules", h.synchronizeschedules],
+    ["dhcp", h.synchronizedhcpd],
+    ["dhcp relay", h.synchronizedhcrelay],
+    ["dns", h.synchronizedns],
+    ["openvpn", h.synchronizeopenvpn],
+    ["ipsec", h.synchronizeipsec],
+    ["users", h.synchronizeusers],
+    ["authservers", h.synchronizeauthservers],
+    ["certs", h.synchronizecerts],
+  ]
+    .filter(([, on]) => on)
+    .map(([label]) => label as string);
+  return (
+    <Dl
+      items={[
+        [
+          "pfsync",
+          h.pfsyncenabled
+            ? `enabled on ${h.pfsyncinterface ?? "?"} (peer ${h.pfsyncpeerip ?? "?"})`
+            : "disabled",
+        ],
+        ["XMLRPC peer", h.synchronizetoip ?? "—"],
+        ["Sync user", h.username ?? "—"],
+        ["Sync password", <RV v={h.password} key="p" />],
+        ["Sections synced", synced.length ? synced.join(", ") : "—"],
+      ]}
     />
   );
 }

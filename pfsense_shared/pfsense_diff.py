@@ -83,9 +83,18 @@ class ConfigDiff(BaseModel):
     sysctl: SectionDiff = SectionDiff()
     cron: SectionDiff = SectionDiff()
     interfaces: SectionDiff = SectionDiff()
+    vlans: SectionDiff = SectionDiff()
+    bridges: SectionDiff = SectionDiff()
+    gifs: SectionDiff = SectionDiff()
+    gres: SectionDiff = SectionDiff()
+    ppps: SectionDiff = SectionDiff()
+    qinqs: SectionDiff = SectionDiff()
+    wol: SectionDiff = SectionDiff()
     gateways: SectionDiff = SectionDiff()
     gateway_groups: SectionDiff = SectionDiff()
     static_routes: SectionDiff = SectionDiff()
+    virtual_ips: SectionDiff = SectionDiff()
+    hasync: SectionDiff = SectionDiff()
     firewall_rules: SectionDiff = SectionDiff()
     nat_rules: SectionDiff = SectionDiff()
     aliases: SectionDiff = SectionDiff()
@@ -109,6 +118,15 @@ def diff_configs(a: ParsedConfig, b: ParsedConfig) -> ConfigDiff:
         interfaces=_diff_list(
             a.interfaces, b.interfaces, key="key", label_fn=_label_interface
         ),
+        vlans=_diff_list(a.vlans, b.vlans, key="key", label_fn=_label_named),
+        bridges=_diff_list(
+            a.bridges, b.bridges, key="bridgeif", label_fn=_label_bridge
+        ),
+        gifs=_diff_list(a.gifs, b.gifs, key="name", label_fn=_label_tunnel),
+        gres=_diff_list(a.gres, b.gres, key="name", label_fn=_label_tunnel),
+        ppps=_diff_list(a.ppps, b.ppps, key="ptpid", label_fn=_label_ppp),
+        qinqs=_diff_list(a.qinqs, b.qinqs, key="key", label_fn=_label_named),
+        wol=_diff_list(a.wol, b.wol, key="mac", label_fn=_label_wol),
         gateways=_diff_list(a.gateways, b.gateways, key="name", label_fn=_label_named),
         gateway_groups=_diff_list(
             a.gateway_groups, b.gateway_groups, key="name", label_fn=_label_named
@@ -116,6 +134,10 @@ def diff_configs(a: ParsedConfig, b: ParsedConfig) -> ConfigDiff:
         static_routes=_diff_list(
             a.static_routes, b.static_routes, key="key", label_fn=_label_route
         ),
+        virtual_ips=_diff_list(
+            a.virtual_ips, b.virtual_ips, key="key", label_fn=_label_vip
+        ),
+        hasync=_diff_optional_model(a.hasync, b.hasync, "hasync"),
         firewall_rules=_diff_list(
             a.firewall_rules,
             b.firewall_rules,
@@ -195,6 +217,41 @@ def _label_route(m: dict[str, Any]) -> str:
 
 def _label_dhcp(m: dict[str, Any]) -> str:
     return f"DHCP: {m.get('interface') or '?'}"
+
+
+def _label_bridge(m: dict[str, Any]) -> str:
+    name = m.get("bridgeif") or "?"
+    members = m.get("members") or []
+    return f"{name} ({', '.join(members) if members else 'no members'})"
+
+
+def _label_tunnel(m: dict[str, Any]) -> str:
+    kind = m.get("kind") or "?"
+    name = m.get("name") or "?"
+    remote = m.get("remote_addr") or "?"
+    return f"[{kind}] {name} → {remote}"
+
+
+def _label_ppp(m: dict[str, Any]) -> str:
+    kind = m.get("type") or "?"
+    ifname = m.get("if_") or m.get("ptpid") or "?"
+    return f"[{kind}] {ifname}"
+
+
+def _label_wol(m: dict[str, Any]) -> str:
+    iface = m.get("interface") or ""
+    descr = m.get("descr") or ""
+    suffix = " — ".join(x for x in (iface, descr) if x)
+    return f"{m.get('mac') or '?'}{' — ' + suffix if suffix else ''}"
+
+
+def _label_vip(m: dict[str, Any]) -> str:
+    mode = m.get("mode") or "?"
+    iface = m.get("interface") or "?"
+    subnet = m.get("subnet") or "?"
+    vhid = m.get("vhid")
+    vhid_str = f" vhid={vhid}" if vhid else ""
+    return f"[{mode}] {iface} {subnet}{vhid_str}"
 
 
 # ---------- building blocks -------------------------------------------------
