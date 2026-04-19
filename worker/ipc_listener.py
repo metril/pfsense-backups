@@ -18,8 +18,11 @@ from datetime import UTC, datetime
 import zmq
 from sqlalchemy.orm import sessionmaker
 
+from pfsense_shared.crypto import Crypto
 from pfsense_shared.schemas import (
     NotificationSent,
+    ReencryptAllBackupsCommand,
+    ReencryptBackupsCommand,
     ReloadScheduleCommand,
     RunBackupAllCommand,
     RunBackupCommand,
@@ -46,6 +49,7 @@ class IpcListener:
         notifier: Notifier,
         publisher: IpcPublisher,
         instance_locks: InstanceLocks,
+        crypto: Crypto,
         max_workers: int = 4,
         shutdown_grace_seconds: float = 60.0,
     ) -> None:
@@ -56,6 +60,7 @@ class IpcListener:
         self._notifier = notifier
         self._publisher = publisher
         self._instance_locks = instance_locks
+        self._crypto = crypto
         self._shutdown_grace_seconds = shutdown_grace_seconds
 
         self._ctx = zmq.Context.instance()
@@ -117,6 +122,8 @@ class IpcListener:
             "test_connection": self._handle_test_connection,
             "reload_schedule": self._handle_reload_schedule,
             "send_test_notification": self._handle_send_test_notification,
+            "reencrypt_backups": self._handle_reencrypt_backups,
+            "reencrypt_all_backups": self._handle_reencrypt_all_backups,
         }.get(cmd)
         if handler is None:
             log.error("Unknown IPC command: %s", cmd)
@@ -133,11 +140,32 @@ class IpcListener:
     def _handle_run_backup(self, payload: dict) -> None:
         c = RunBackupCommand.model_validate(payload)
         with self._instance_locks.for_instance(c.instance_id):
-            self._manager.backup_instance(c.instance_id, c.job_id)
+            self._manager.backup_instance(
+                c.instance_id, c.job_id, overrides=c.overrides
+            )
 
     def _handle_run_backup_all(self, payload: dict) -> None:
         c = RunBackupAllCommand.model_validate(payload)
-        self._manager.backup_all(c.job_id)
+        self._manager.backup_all(c.job_id, overrides=c.overrides)
+
+    def _handle_reencrypt_backups(self, payload: dict) -> None:
+        c = ReencryptBackupsCommand.model_validate(payload)
+        # Serialize per-instance re-encrypt with any other per-instance
+        # work (scheduled backup, test connection) so a backup can't
+        # race the file rewrite.
+        with self._instance_locks.for_instance(c.instance_id):
+            self._manager.reencrypt_backups(c.instance_id, c.job_id)
+
+    def _handle_reencrypt_all_backups(self, payload: dict) -> None:
+        c = ReencryptAllBackupsCommand.model_validate(payload)
+        # Fernet-decrypt here rather than in the manager so plaintext
+        # lives only in this handler's scope until the run completes.
+        plaintext = self._crypto.decrypt(c.new_password_ct)
+        self._manager.reencrypt_all_backups(
+            c.job_id,
+            new_password=plaintext,
+            also_update_instance_passwords=c.also_update_instance_passwords,
+        )
 
     def _handle_test_connection(self, payload: dict) -> None:
         c = TestConnectionCommand.model_validate(payload)

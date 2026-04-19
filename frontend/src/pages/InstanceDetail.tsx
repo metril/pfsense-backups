@@ -1,8 +1,9 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, Eye, Play, Plug, Split } from "lucide-react";
+import { ArrowLeft, Eye, Play, Plug, Settings2, Split } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { BackupOverridesDialog } from "@/components/BackupOverridesDialog";
 import {
   useBackupNow,
   useBackups,
@@ -33,6 +34,7 @@ export function InstanceDetailPage() {
   const jobs = useJobs(id);
   const backupNow = useBackupNow();
   const test = useTestConnection();
+  const [overridesOpen, setOverridesOpen] = useState(false);
 
   const schedule = schedules.data?.find((s) => s.instance_id === id);
   const nameOf = useMemo(() => {
@@ -101,7 +103,7 @@ export function InstanceDetailPage() {
   }
 
   const busy =
-    (backupNow.isPending && backupNow.variables === id) ||
+    (backupNow.isPending && backupNow.variables?.id === id) ||
     (test.isPending && test.variables === id);
 
   return (
@@ -125,14 +127,35 @@ export function InstanceDetailPage() {
           <div className="mt-1 truncate font-mono text-xs text-muted-fg">{inst.url}</div>
         </div>
         <div className="flex shrink-0 gap-2">
-          <Button size="sm" onClick={() => backupNow.mutate(id)} disabled={busy}>
+          <Button size="sm" onClick={() => backupNow.mutate({ id })} disabled={busy}>
             <Play className="h-4 w-4" /> Backup now
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setOverridesOpen(true)}
+            disabled={busy}
+            aria-label={`Backup ${inst.name} with options`}
+            title="Backup now with options…"
+          >
+            <Settings2 className="h-4 w-4" />
           </Button>
           <Button variant="secondary" size="sm" onClick={() => test.mutate(id)} disabled={busy}>
             <Plug className="h-4 w-4" /> Test
           </Button>
         </div>
       </div>
+
+      {overridesOpen && (
+        <BackupOverridesDialog
+          title={`Backup ${inst.name} with options`}
+          mode="single"
+          onClose={() => setOverridesOpen(false)}
+          onRun={async (overrides) => {
+            await backupNow.mutateAsync({ id, overrides });
+          }}
+        />
+      )}
 
       {/* Stats grid */}
       <div className="mt-5 grid grid-cols-2 gap-4 md:grid-cols-4">
@@ -216,6 +239,7 @@ export function InstanceDetailPage() {
             <tr>
               <th className="text-left font-normal">Started</th>
               <th className="text-left font-normal">File</th>
+              <th className="text-left font-normal">Contents</th>
               <th className="text-left font-normal">Size</th>
               <th className="text-left font-normal">Duration</th>
               <th className="text-left font-normal">Tag</th>
@@ -228,6 +252,15 @@ export function InstanceDetailPage() {
               <tr key={b.id} className="border-t border-border">
                 <td className="py-2 text-xs">{new Date(b.started_at).toLocaleString()}</td>
                 <td className="py-2 font-mono text-xs">{b.filename}</td>
+                <td className="py-2">
+                  <span className="inline-flex flex-wrap items-center gap-1">
+                    {b.area && <Badge tone="muted" title={`Area: ${b.area}`}>{b.area}</Badge>}
+                    {b.included_rrd && <Badge tone="success" title="Includes RRD">RRD</Badge>}
+                    {b.included_packages && <Badge tone="success" title="Includes packages">pkgs</Badge>}
+                    {b.included_ssh && <Badge tone="success" title="Includes SSH keys">ssh</Badge>}
+                    {b.encrypted && <Badge tone="warn" title="Encrypted at rest">encrypted</Badge>}
+                  </span>
+                </td>
                 <td className="py-2">{Math.round(b.size_bytes / 1024)} KB</td>
                 <td className="py-2 text-xs">{b.duration_seconds.toFixed(1)}s</td>
                 <td className="py-2">
@@ -262,7 +295,7 @@ export function InstanceDetailPage() {
             ))}
             {(backups.data ?? []).length === 0 && (
               <tr>
-                <td colSpan={7} className="py-8 text-center text-sm text-muted-fg">
+                <td colSpan={8} className="py-8 text-center text-sm text-muted-fg">
                   No backups yet for {inst.name}.
                 </td>
               </tr>

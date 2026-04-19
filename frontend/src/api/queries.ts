@@ -13,6 +13,7 @@ import type {
   AuditFacets,
   AuthUser,
   BackupListItem,
+  BackupOverridesRequest,
   Instance,
   InstanceCreate,
   InstanceUpdate,
@@ -20,6 +21,7 @@ import type {
   Notification,
   PreflightRequest,
   PreflightResponse,
+  ReencryptAllRequest,
   ScheduleRow,
   SettingsBackup,
   SettingsLogging,
@@ -76,11 +78,19 @@ export function useCreateInstance() {
   });
 }
 
+/**
+ * Response from PUT /api/instances/{id}. When the operator ticks
+ * "re-encrypt existing backups" and the password actually changes,
+ * the server adds a `reencrypt_job_id` so the UI can open the progress
+ * toast that listens on reencrypt.* events.
+ */
+export type InstanceUpdateResponse = Instance & { reencrypt_job_id?: number };
+
 export function useUpdateInstance() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, patch }: { id: number; patch: InstanceUpdate }) =>
-      api.put<Instance>(`/api/instances/${id}`, patch),
+      api.put<InstanceUpdateResponse>(`/api/instances/${id}`, patch),
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ["instances", vars.id] });
       invalidateInstanceViews(qc);
@@ -112,7 +122,17 @@ export function usePreflight() {
 export function useBackupNow() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: number) => api.post<{ job_id: number }>(`/api/instances/${id}/backup-now`),
+    mutationFn: ({
+      id,
+      overrides,
+    }: {
+      id: number;
+      overrides?: BackupOverridesRequest;
+    }) =>
+      api.post<{ job_id: number }>(
+        `/api/instances/${id}/backup-now`,
+        overrides,
+      ),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["jobs"] }),
   });
 }
@@ -120,7 +140,17 @@ export function useBackupNow() {
 export function useBackupAll() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => api.post<{ job_id: number }>("/api/backups/run-all"),
+    mutationFn: (overrides?: BackupOverridesRequest) =>
+      api.post<{ job_id: number }>("/api/backups/run-all", overrides),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["jobs"] }),
+  });
+}
+
+export function useReencryptAll() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: ReencryptAllRequest) =>
+      api.post<{ job_id: number }>("/api/backups/reencrypt-all", payload),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["jobs"] }),
   });
 }

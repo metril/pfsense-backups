@@ -129,6 +129,7 @@ def main() -> None:
         notifier=notifier,
         publisher=publisher,
         instance_locks=instance_locks,
+        crypto=crypto,
     )
     listener.start()
 

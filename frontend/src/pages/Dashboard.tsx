@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
-import { Play, PlayCircle, Plug } from "lucide-react";
+import { Play, PlayCircle, Plug, Settings2 } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { BackupOverridesDialog } from "@/components/BackupOverridesDialog";
 import {
   useBackupAll,
   useBackupNow,
@@ -10,7 +12,7 @@ import {
   useSchedules,
   useTestConnection,
 } from "@/api/queries";
-import type { Instance, ScheduleRow } from "@/api/types";
+import type { BackupOverridesRequest, Instance, ScheduleRow } from "@/api/types";
 
 export function Dashboard() {
   const instances = useInstances();
@@ -20,6 +22,9 @@ export function Dashboard() {
   const backupNow = useBackupNow();
   const backupAll = useBackupAll();
   const test = useTestConnection();
+
+  // Which dialog is open: "all" (top-bar), a number = instance id, or null.
+  const [overridesOpen, setOverridesOpen] = useState<"all" | number | null>(null);
 
   if (instances.isPending) return <div className="text-sm text-muted-fg">Loading…</div>;
   if (instances.error) return <div className="text-sm text-danger">Failed to load instances.</div>;
@@ -31,15 +36,27 @@ export function Dashboard() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Dashboard</h1>
         <div className="flex items-center gap-4">
-          <Button
-            size="sm"
-            onClick={() => backupAll.mutate()}
-            disabled={backupAll.isPending || (instances.data?.length ?? 0) === 0}
-            title="Back up every enabled instance in parallel"
-          >
-            <PlayCircle className="h-4 w-4" />
-            {backupAll.isPending ? "Starting…" : "Backup all"}
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button
+              size="sm"
+              onClick={() => backupAll.mutate(undefined)}
+              disabled={backupAll.isPending || (instances.data?.length ?? 0) === 0}
+              title="Back up every enabled instance in parallel"
+            >
+              <PlayCircle className="h-4 w-4" />
+              {backupAll.isPending ? "Starting…" : "Backup all"}
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setOverridesOpen("all")}
+              disabled={backupAll.isPending || (instances.data?.length ?? 0) === 0}
+              aria-label="Backup all with options"
+              title="Backup all with options…"
+            >
+              <Settings2 className="h-4 w-4" />
+            </Button>
+          </div>
           <Link to="/instances" className="text-sm text-accent hover:underline">
             Manage instances →
           </Link>
@@ -54,6 +71,26 @@ export function Dashboard() {
         </div>
       )}
 
+      {overridesOpen !== null && (
+        <BackupOverridesDialog
+          key={String(overridesOpen)}
+          title={
+            overridesOpen === "all"
+              ? "Backup all with options"
+              : `Backup ${instances.data!.find((i) => i.id === overridesOpen)?.name ?? ""} with options`
+          }
+          mode={overridesOpen === "all" ? "all" : "single"}
+          onClose={() => setOverridesOpen(null)}
+          onRun={async (overrides: BackupOverridesRequest | undefined) => {
+            if (overridesOpen === "all") {
+              await backupAll.mutateAsync(overrides);
+            } else {
+              await backupNow.mutateAsync({ id: overridesOpen, overrides });
+            }
+          }}
+        />
+      )}
+
       <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
         {instances.data!.map((inst) => (
           <Tile
@@ -61,13 +98,14 @@ export function Dashboard() {
             instance={inst}
             schedule={byId.get(inst.id)}
             lastBackup={backups.data?.find((b) => b.instance_id === inst.id)}
-            onBackupNow={() => backupNow.mutate(inst.id)}
+            onBackupNow={() => backupNow.mutate({ id: inst.id })}
+            onBackupNowWithOptions={() => setOverridesOpen(inst.id)}
             onTest={() => test.mutate(inst.id)}
             // H3: per-instance busy flag. TanStack Query exposes the last
             // mutation's `variables`; compare to this tile's id so clicking
             // one tile doesn't freeze every tile's buttons.
             busy={
-              (backupNow.isPending && backupNow.variables === inst.id) ||
+              (backupNow.isPending && backupNow.variables?.id === inst.id) ||
               (test.isPending && test.variables === inst.id)
             }
           />
@@ -82,6 +120,7 @@ function Tile({
   schedule,
   lastBackup,
   onBackupNow,
+  onBackupNowWithOptions,
   onTest,
   busy,
 }: {
@@ -89,6 +128,7 @@ function Tile({
   schedule?: ScheduleRow;
   lastBackup?: { started_at: string; size_bytes: number; success: boolean };
   onBackupNow: () => void;
+  onBackupNowWithOptions: () => void;
   onTest: () => void;
   busy: boolean;
 }) {
@@ -144,6 +184,16 @@ function Tile({
         <Button size="sm" onClick={onBackupNow} disabled={busy}>
           <Play className="h-3.5 w-3.5" />
           Backup Now
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={onBackupNowWithOptions}
+          disabled={busy}
+          aria-label={`Backup ${instance.name} with options`}
+          title="Backup now with options…"
+        >
+          <Settings2 className="h-3.5 w-3.5" />
         </Button>
         <Button variant="secondary" size="sm" onClick={onTest} disabled={busy}>
           <Plug className="h-3.5 w-3.5" />

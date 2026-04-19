@@ -14,9 +14,11 @@ from sqlalchemy import select
 
 from pfsense_shared.models import Backup, BackupSettings, Instance, Job, Notification
 from pfsense_shared.schemas import (
+    BackupOverrides,
     InstanceCreate,
     InstanceRead,
     InstanceUpdate,
+    ReencryptBackupsCommand,
     ReloadScheduleCommand,
     RunBackupCommand,
     TestConnectionCommand,
@@ -27,6 +29,10 @@ from ..services import audit
 from ..services.cron_utils import validate as validate_cron
 from ..services.cron_utils import validate_tz
 from ..services.pfsense_preflight import probe as preflight_probe
+
+# Sentinel returned by InstanceRead when a secret is stored; the editor
+# sends it back unchanged to signal "keep what's already there".
+_SECRET_SENTINEL = "__set__"
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +55,15 @@ def _to_read(inst: Instance, crypto) -> InstanceRead:
             "enabled": inst.enabled,
             "retention_count": inst.retention_count,
             "compress": inst.compress,
+            "backup_area": inst.backup_area or "",
+            "backup_include_rrd": inst.backup_include_rrd,
+            "backup_include_packages": inst.backup_include_packages,
+            "backup_include_ssh": inst.backup_include_ssh,
+            "backup_encrypt": inst.backup_encrypt,
+            # Redact: emit the sentinel when a ciphertext is present, else None.
+            "backup_encrypt_password": (
+                _SECRET_SENTINEL if inst.backup_encrypt_password_ct else None
+            ),
             "created_at": inst.created_at,
             "updated_at": inst.updated_at,
         }
@@ -83,6 +98,20 @@ async def create_instance(
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from None
 
+    # Encryption needs a password. Refuse the create rather than
+    # committing a row the worker can't actually use.
+    encrypt_password_ct: bytes | None = None
+    if payload.backup_encrypt:
+        if not payload.backup_encrypt_password or not payload.backup_encrypt_password.strip():
+            raise HTTPException(400, "backup_encrypt=true requires a backup_encrypt_password")
+        encrypt_password_ct = crypto.encrypt(payload.backup_encrypt_password)
+    elif payload.backup_encrypt_password:
+        # Disallow sending a password without enabling encryption — keeps
+        # the stored state unambiguous.
+        raise HTTPException(
+            400, "backup_encrypt_password was provided but backup_encrypt is false"
+        )
+
     inst = Instance(
         name=payload.name,
         url=payload.url,
@@ -97,6 +126,12 @@ async def create_instance(
         enabled=payload.enabled,
         retention_count=payload.retention_count,
         compress=payload.compress,
+        backup_area=payload.backup_area,
+        backup_include_rrd=payload.backup_include_rrd,
+        backup_include_packages=payload.backup_include_packages,
+        backup_include_ssh=payload.backup_include_ssh,
+        backup_encrypt=payload.backup_encrypt,
+        backup_encrypt_password_ct=encrypt_password_ct,
     )
     db.add(inst)
     await db.flush()
@@ -111,7 +146,7 @@ async def create_instance(
     return _to_read(inst, crypto)
 
 
-@router.put("/{instance_id}", response_model=InstanceRead)
+@router.put("/{instance_id}")
 async def update_instance(
     instance_id: int,
     payload: InstanceUpdate,
@@ -119,7 +154,7 @@ async def update_instance(
     crypto: CryptoDep,
     user: CurrentUser,
     ipc: Ipc,
-) -> InstanceRead:
+) -> dict[str, Any]:
     inst = await db.get(Instance, instance_id)
     if inst is None:
         raise HTTPException(404, "instance not found")
@@ -145,6 +180,8 @@ async def update_instance(
         "name", "url", "subfolder", "backup_prefix", "verify_ssl",
         "timeout_seconds", "cron_expression", "cron_timezone",
         "enabled", "retention_count", "compress",
+        "backup_area", "backup_include_rrd", "backup_include_packages",
+        "backup_include_ssh",
     ):
         if field not in sent:
             continue
@@ -160,14 +197,65 @@ async def update_instance(
         inst.password_ct = crypto.encrypt(payload.password)
         changed["password"] = "<updated>"
 
+    # Encryption password: "__set__" = no-op (keep ciphertext), None =
+    # clear, any other string = new plaintext to Fernet-encrypt.
+    password_actually_changed = False
+    if "backup_encrypt_password" in sent:
+        pw = payload.backup_encrypt_password
+        if pw == _SECRET_SENTINEL:
+            pass  # keep existing ciphertext
+        elif pw is None or (isinstance(pw, str) and pw == ""):
+            if inst.backup_encrypt_password_ct is not None:
+                inst.backup_encrypt_password_ct = None
+                changed["backup_encrypt_password"] = "<cleared>"
+                password_actually_changed = True
+        else:
+            inst.backup_encrypt_password_ct = crypto.encrypt(pw)
+            changed["backup_encrypt_password"] = "<updated>"
+            password_actually_changed = True
+
+    if "backup_encrypt" in sent and inst.backup_encrypt != sent["backup_encrypt"]:
+        inst.backup_encrypt = sent["backup_encrypt"]
+        changed["backup_encrypt"] = sent["backup_encrypt"]
+
+    # Invariant check after everything's applied: if encryption is on,
+    # a ciphertext must exist. Refuse saves that would leave the row in
+    # a non-runnable state (encrypt=on, no password).
+    if inst.backup_encrypt and inst.backup_encrypt_password_ct is None:
+        raise HTTPException(
+            400,
+            "backup_encrypt=true requires a backup_encrypt_password "
+            "(send the new plaintext or keep the existing one via '__set__').",
+        )
+
     if not changed:
-        return _to_read(inst, crypto)
+        return _to_read(inst, crypto).model_dump()
 
     inst.updated_at = datetime.now(UTC)
     audit.record(
         db, actor_email=user["email"], action="update", resource="instance",
         resource_id=inst.id, details=changed,
     )
+
+    # Fire a re-encrypt Job when the operator ticked the box AND the
+    # password actually moved. Do it in the same commit so a subsequent
+    # worker restart can still resume from a consistent state.
+    reencrypt_job_id: int | None = None
+    if payload.reencrypt_existing_backups and password_actually_changed:
+        if not inst.backup_encrypt or inst.backup_encrypt_password_ct is None:
+            raise HTTPException(
+                400,
+                "re-encrypt requested but encryption is not enabled on this instance",
+            )
+        job = Job(
+            instance_id=inst.id,
+            kind="reencrypt",
+            requested_by=user["email"],
+        )
+        db.add(job)
+        await db.flush()
+        reencrypt_job_id = job.id
+
     await db.commit()
 
     # Any schedule-relevant change → tell the worker to reload.
@@ -175,7 +263,16 @@ async def update_instance(
     if {"cron_expression", "cron_timezone", "enabled", "name"} & changed.keys():
         await ipc.send(ReloadScheduleCommand(instance_id=inst.id))
 
-    return _to_read(inst, crypto)
+    if reencrypt_job_id is not None:
+        await ipc.send(
+            ReencryptBackupsCommand(instance_id=inst.id, job_id=reencrypt_job_id)
+        )
+
+    payload_dict = _to_read(inst, crypto).model_dump()
+    if reencrypt_job_id is not None:
+        # The frontend uses this to open the progress toast + poll /jobs.
+        payload_dict["reencrypt_job_id"] = reencrypt_job_id
+    return payload_dict
 
 
 @router.delete("/{instance_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -296,9 +393,58 @@ async def test_connection(
     return {"job_id": job.id}
 
 
+class BackupNowRequest(BaseModel):
+    """Optional one-shot overrides for a manual "Backup now" run.
+
+    Any field left unset inherits the stored Instance value; none of
+    these are persisted back to the Instance row.
+    """
+
+    backup_area: str | None = None
+    backup_include_rrd: bool | None = None
+    backup_include_packages: bool | None = None
+    backup_include_ssh: bool | None = None
+    backup_encrypt: bool | None = None
+    # Plaintext on the wire; we Fernet-encrypt before shipping the IPC.
+    backup_encrypt_password: str | None = None
+
+
+def _build_overrides(
+    req: BackupNowRequest | None, crypto
+) -> BackupOverrides | None:
+    """Translate a web-side override request into a wire-safe BackupOverrides.
+
+    Returns None when the caller didn't set anything — avoids paying
+    the IPC cost for default runs.
+    """
+    if req is None:
+        return None
+    set_fields = req.model_dump(exclude_unset=True)
+    if not set_fields:
+        return None
+    ct: bytes | None = None
+    if "backup_encrypt_password" in set_fields:
+        pw = set_fields["backup_encrypt_password"]
+        if pw:
+            ct = crypto.encrypt(pw)
+    return BackupOverrides(
+        backup_area=set_fields.get("backup_area"),
+        backup_include_rrd=set_fields.get("backup_include_rrd"),
+        backup_include_packages=set_fields.get("backup_include_packages"),
+        backup_include_ssh=set_fields.get("backup_include_ssh"),
+        backup_encrypt=set_fields.get("backup_encrypt"),
+        backup_encrypt_password_ct=ct,
+    )
+
+
 @router.post("/{instance_id}/backup-now")
 async def backup_now(
-    instance_id: int, db: DbSession, user: CurrentUser, ipc: Ipc
+    instance_id: int,
+    db: DbSession,
+    user: CurrentUser,
+    ipc: Ipc,
+    crypto: CryptoDep,
+    overrides: BackupNowRequest | None = None,
 ) -> dict[str, int]:
     if (await db.get(Instance, instance_id)) is None:
         raise HTTPException(404, "instance not found")
@@ -310,7 +456,13 @@ async def backup_now(
         resource_id=instance_id,
     )
     await db.commit()
-    await ipc.send(RunBackupCommand(instance_id=instance_id, job_id=job.id))
+    await ipc.send(
+        RunBackupCommand(
+            instance_id=instance_id,
+            job_id=job.id,
+            overrides=_build_overrides(overrides, crypto),
+        )
+    )
     return {"job_id": job.id}
 
 
@@ -363,6 +515,11 @@ async def import_backups(
             continue
         stat = p.stat()
         ts = datetime.fromtimestamp(stat.st_mtime, tz=UTC)
+        # Adopted files have no capture-time provenance; the Backup
+        # row defaults (area="", rrd=False, packages=True, ssh=True,
+        # encrypted=False) describe "unknown but assume historical
+        # behavior" which matches how these files were produced
+        # before this version shipped.
         db.add(
             Backup(
                 instance_id=inst.id,

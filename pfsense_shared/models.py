@@ -41,6 +41,19 @@ class Instance(Base):
     retention_count: Mapped[int] = mapped_column(Integer, default=365)
     compress: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # What to pull from pfSense's diag_backup.php. Defaults mirror the old
+    # hard-coded behavior so upgrades don't change what gets captured.
+    backup_area: Mapped[str] = mapped_column(String(64), default="")
+    backup_include_rrd: Mapped[bool] = mapped_column(Boolean, default=False)
+    backup_include_packages: Mapped[bool] = mapped_column(Boolean, default=True)
+    backup_include_ssh: Mapped[bool] = mapped_column(Boolean, default=True)
+    backup_encrypt: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Fernet-encrypted (same Crypto service as password_ct); nullable when
+    # the row has encryption disabled.
+    backup_encrypt_password_ct: Mapped[bytes | None] = mapped_column(
+        LargeBinary, default=None, nullable=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
@@ -156,6 +169,21 @@ class Backup(Base):
     # retention/cleanup does not consult these.
     tag: Mapped[str | None] = mapped_column(String(64), default=None, nullable=True)
     note: Mapped[str | None] = mapped_column(Text, default=None, nullable=True)
+
+    # What was captured on this row — mirrors the instance's settings at
+    # capture time so a later rotation of the Instance doesn't mislead us
+    # about what this file actually contains.
+    area: Mapped[str] = mapped_column(String(64), default="")
+    included_rrd: Mapped[bool] = mapped_column(Boolean, default=False)
+    included_packages: Mapped[bool] = mapped_column(Boolean, default=True)
+    included_ssh: Mapped[bool] = mapped_column(Boolean, default=True)
+    encrypted: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Fernet-encrypted copy of the password used for THIS backup.
+    # Stored per row so rotating the instance password doesn't strand
+    # older encrypted backups.
+    encrypt_password_ct: Mapped[bytes | None] = mapped_column(
+        LargeBinary, default=None, nullable=True
+    )
 
     instance: Mapped[Instance] = relationship(back_populates="backups")
 

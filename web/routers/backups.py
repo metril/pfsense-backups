@@ -16,9 +16,18 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pfsense_shared.models import Backup, Instance, Job
-from pfsense_shared.schemas import BackupUpdate, RunBackupAllCommand
+from pfsense_shared.pfsense_crypto import (
+    PfSenseCryptoError,
+    decrypt_pfsense_backup,
+    looks_encrypted,
+)
+from pfsense_shared.schemas import (
+    BackupUpdate,
+    ReencryptAllBackupsCommand,
+    RunBackupAllCommand,
+)
 
-from ..dependencies import CurrentUser, DbSession, Ipc
+from ..dependencies import CryptoDep, CurrentUser, DbSession, Ipc
 from ..services import audit
 from ..services.backup_storage import read_content, stream_raw, zip_stream
 
@@ -41,20 +50,54 @@ class BackupListItem(BaseModel):
     tag: str | None = None
     note: str | None = None
 
+    # Contents snapshot — mirrors what was captured at run time.
+    area: str = ""
+    included_rrd: bool = False
+    included_packages: bool = True
+    included_ssh: bool = True
+    encrypted: bool = False
+
 
 class ZipRequest(BaseModel):
     ids: list[int]
 
 
+class BackupAllRequest(BaseModel):
+    """Optional overrides applied uniformly to every instance in the sweep."""
+
+    backup_area: str | None = None
+    backup_include_rrd: bool | None = None
+    backup_include_packages: bool | None = None
+    backup_include_ssh: bool | None = None
+    backup_encrypt: bool | None = None
+    backup_encrypt_password: str | None = None
+
+
+class ReencryptAllRequest(BaseModel):
+    new_password: str
+    # Confirm field kept even though the UI will already have checked —
+    # a typo mismatch here gives a 400 instead of silent acceptance.
+    confirm_password: str
+    also_update_instance_passwords: bool = True
+
+
 @router.post("/run-all")
 async def run_all_backups(
-    db: DbSession, user: CurrentUser, ipc: Ipc
+    db: DbSession,
+    user: CurrentUser,
+    ipc: Ipc,
+    crypto: CryptoDep,
+    overrides: BackupAllRequest | None = None,
 ) -> dict[str, int]:
     """Kick off a parallel backup sweep across every enabled instance.
 
     Returns immediately with the parent Job id; per-instance progress
-    arrives on the existing /api/events WebSocket stream.
+    arrives on the existing /api/events WebSocket stream. Optional
+    `overrides` apply the same one-shot settings to every instance
+    without touching their stored configuration.
     """
+    from pfsense_shared.schemas import BackupOverrides
+
     job = Job(kind="run_backup_all", requested_by=user["email"])
     db.add(job)
     await db.flush()
@@ -63,7 +106,65 @@ async def run_all_backups(
         resource="backup_all", resource_id=None,
     )
     await db.commit()
-    await ipc.send(RunBackupAllCommand(job_id=job.id))
+
+    ipc_overrides: BackupOverrides | None = None
+    if overrides is not None:
+        sent = overrides.model_dump(exclude_unset=True)
+        if sent:
+            ct: bytes | None = None
+            if "backup_encrypt_password" in sent and sent["backup_encrypt_password"]:
+                ct = crypto.encrypt(sent["backup_encrypt_password"])
+            ipc_overrides = BackupOverrides(
+                backup_area=sent.get("backup_area"),
+                backup_include_rrd=sent.get("backup_include_rrd"),
+                backup_include_packages=sent.get("backup_include_packages"),
+                backup_include_ssh=sent.get("backup_include_ssh"),
+                backup_encrypt=sent.get("backup_encrypt"),
+                backup_encrypt_password_ct=ct,
+            )
+
+    await ipc.send(RunBackupAllCommand(job_id=job.id, overrides=ipc_overrides))
+    return {"job_id": job.id}
+
+
+@router.post("/reencrypt-all")
+async def reencrypt_all(
+    body: ReencryptAllRequest,
+    db: DbSession,
+    user: CurrentUser,
+    ipc: Ipc,
+    crypto: CryptoDep,
+) -> dict[str, int]:
+    """Re-encrypt every encrypted Backup across every instance.
+
+    Creates a parent Job and hands the worker a Fernet-encrypted copy
+    of the new password. When ``also_update_instance_passwords`` is
+    True (default), each encrypted Instance's stored password gets
+    flipped to the new one in the same run so future backups keep
+    working without extra configuration.
+    """
+    if body.new_password != body.confirm_password:
+        raise HTTPException(400, "new_password and confirm_password must match")
+    if not body.new_password or not body.new_password.strip():
+        raise HTTPException(400, "new_password must not be blank")
+
+    job = Job(kind="reencrypt_all", requested_by=user["email"])
+    db.add(job)
+    await db.flush()
+    audit.record(
+        db, actor_email=user["email"], action="trigger",
+        resource="reencrypt_all", resource_id=None,
+        details={"also_update_instance_passwords": body.also_update_instance_passwords},
+    )
+    await db.commit()
+
+    await ipc.send(
+        ReencryptAllBackupsCommand(
+            job_id=job.id,
+            new_password_ct=crypto.encrypt(body.new_password),
+            also_update_instance_passwords=body.also_update_instance_passwords,
+        )
+    )
     return {"job_id": job.id}
 
 
@@ -119,6 +220,11 @@ async def list_backups(
             success=b.success,
             tag=b.tag,
             note=b.note,
+            area=b.area or "",
+            included_rrd=b.included_rrd,
+            included_packages=b.included_packages,
+            included_ssh=b.included_ssh,
+            encrypted=b.encrypted,
         )
         for b, name in rows
     ]
@@ -156,6 +262,11 @@ async def get_backup(backup_id: int, db: DbSession) -> dict[str, Any]:
         "error_message": b.error_message,
         "tag": b.tag,
         "note": b.note,
+        "area": b.area or "",
+        "included_rrd": b.included_rrd,
+        "included_packages": b.included_packages,
+        "included_ssh": b.included_ssh,
+        "encrypted": b.encrypted,
     }
 
 
@@ -247,19 +358,101 @@ async def delete_backup(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+def _row_encrypt_password(row: Backup, crypto) -> str:
+    """Fernet-decrypt the per-backup encryption password, or raise 409.
+
+    Prefers the per-row ciphertext so a rotated instance-level password
+    still lets us open historical backups. Refusing rather than falling
+    back to the instance password keeps the contract explicit.
+    """
+    if not row.encrypt_password_ct:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "cannot decrypt backup: no per-row password stored. "
+            "Download the raw encrypted file and decrypt offline.",
+        )
+    try:
+        return crypto.decrypt(row.encrypt_password_ct)
+    except Exception as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"cannot decrypt backup password: {exc}",
+        ) from exc
+
+
+def _decrypt_row_content(row: Backup, path: Path, crypto) -> bytes:
+    """Read the on-disk blob and return plaintext XML bytes.
+
+    Handles gzipped rows transparently, picks the KDF based on wrapper
+    headers (with fallback), and translates known failure modes into
+    HTTPException so the frontend can show a sensible error toast.
+    """
+    import gzip
+
+    if path.suffix == ".gz" or row.compressed:
+        with gzip.open(path, "rb") as gz:
+            raw = gz.read()
+    else:
+        raw = path.read_bytes()
+    if not looks_encrypted(raw):
+        # Marked encrypted in the DB but the file looks like plain XML —
+        # happens with historical rows imported before this feature. Fall
+        # through to returning the raw content.
+        return raw
+    password = _row_encrypt_password(row, crypto)
+    try:
+        return decrypt_pfsense_backup(raw, password)
+    except PfSenseCryptoError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"cannot decrypt backup — password missing or KDF mismatch ({exc})",
+        ) from exc
+
+
 @router.get("/{backup_id}/content")
-async def get_content(backup_id: int, db: DbSession) -> Response:
-    """Decompressed XML text (used by the diff view)."""
-    _, path = await _load(db, backup_id)
-    # File read is blocking on a small-ish file; offload to thread.
-    content = await asyncio.to_thread(read_content, path)
+async def get_content(backup_id: int, db: DbSession, crypto: CryptoDep) -> Response:
+    """Decompressed XML text (used by the diff view).
+
+    When the row is encrypted, we Fernet-decrypt the stored per-backup
+    password, then decrypt the on-disk blob into plaintext XML — all
+    in memory. The decrypted XML never lands on disk.
+    """
+    row, path = await _load(db, backup_id)
+    if row.encrypted:
+        content = await asyncio.to_thread(_decrypt_row_content, row, path, crypto)
+    else:
+        content = await asyncio.to_thread(read_content, path)
     return Response(content=content, media_type="application/xml")
 
 
-@router.get("/{backup_id}/download")
-async def download(backup_id: int, db: DbSession) -> StreamingResponse:
-    """Raw bytes (gzipped if stored that way)."""
-    _, path = await _load(db, backup_id)
+@router.get("/{backup_id}/download", response_model=None)
+async def download(
+    backup_id: int, db: DbSession, crypto: CryptoDep, raw: bool = False
+) -> StreamingResponse | Response:
+    """Download backup bytes.
+
+    For encrypted rows, the default behavior is to serve the decrypted
+    XML (same UX as pfSense's post-import decrypt). Pass ``?raw=1`` to
+    download the still-encrypted file as-is (for offline inspection or
+    round-trip into pfSense's import flow).
+    """
+    row, path = await _load(db, backup_id)
+
+    if row.encrypted and not raw:
+        plaintext = await asyncio.to_thread(_decrypt_row_content, row, path, crypto)
+        download_name = path.name
+        # Strip .gz / .enc-ish suffixes so the user gets a `.xml` they
+        # can open directly.
+        for suffix in (".gz",):
+            if download_name.endswith(suffix):
+                download_name = download_name[: -len(suffix)]
+        return Response(
+            content=plaintext,
+            media_type="application/xml",
+            headers={
+                "Content-Disposition": f'attachment; filename="{download_name}"'
+            },
+        )
 
     async def body() -> AsyncIterator[bytes]:
         for chunk in await asyncio.to_thread(lambda: list(stream_raw(path))):
@@ -304,12 +497,27 @@ async def _async_iter(it) -> AsyncIterator[bytes]:
 
 
 @router.get("/diff/pair")
-async def diff_pair(a: int, b: int, db: DbSession) -> dict[str, Any]:
-    """Return both backups' decompressed XML content for a side-by-side diff view."""
+async def diff_pair(
+    a: int, b: int, db: DbSession, crypto: CryptoDep
+) -> dict[str, Any]:
+    """Return both backups' decompressed XML content for a side-by-side diff view.
+
+    Encrypted rows get decrypted in memory using their per-backup
+    password so the diff view sees plaintext XML on either side.
+    """
     a_row, a_path = await _load(db, a)
     b_row, b_path = await _load(db, b)
-    a_content = await asyncio.to_thread(read_content, a_path)
-    b_content = await asyncio.to_thread(read_content, b_path)
+
+    def _get(row: Backup, path: Path) -> bytes:
+        if row.encrypted:
+            return _decrypt_row_content(row, path, crypto)
+        return read_content(path)
+
+    def _as_str(v: bytes | str) -> str:
+        return v.decode("utf-8", errors="replace") if isinstance(v, bytes) else v
+
+    a_content = _as_str(await asyncio.to_thread(_get, a_row, a_path))
+    b_content = _as_str(await asyncio.to_thread(_get, b_row, b_path))
     return {
         "a": {
             "id": a_row.id,

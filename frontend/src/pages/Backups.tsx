@@ -7,6 +7,8 @@ import {
   ArrowUpDown,
   Download,
   Eye,
+  KeyRound,
+  Lock,
   Split,
   Tag as TagIcon,
   Trash2,
@@ -15,15 +17,21 @@ import {
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
+import { Dialog } from "@/components/ui/Dialog";
+import { Input } from "@/components/ui/Input";
+import { Label } from "@/components/ui/Label";
+import { useToast } from "@/components/ui/Toast";
 import {
   useBackups,
   useDeleteBackup,
   useInstances,
+  useReencryptAll,
   type BackupFilter,
   type BackupOrder,
   type BackupSort,
 } from "@/api/queries";
 import { api, triggerDownload } from "@/api/client";
+import type { BackupListItem } from "@/api/types";
 import { cn } from "@/lib/cn";
 
 // Convert a <input type="date"> value (YYYY-MM-DD, local) into an ISO-8601
@@ -55,8 +63,11 @@ export function BackupsPage() {
   const backups = useBackups(filter);
   const instances = useInstances();
   const del = useDeleteBackup();
+  const reencryptAll = useReencryptAll();
   const confirm = useConfirm();
+  const toast = useToast();
   const nav = useNavigate();
+  const [reencryptOpen, setReencryptOpen] = useState(false);
 
   // M9: preserve selection ORDER — the first-selected row is "A" in the diff
   // and the second-selected is "B", rather than silently sorting by id.
@@ -190,6 +201,15 @@ export function BackupsPage() {
             <Split className="h-4 w-4" />
             Diff selected
           </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setReencryptOpen(true)}
+            title="Re-encrypt every encrypted backup with a new password"
+          >
+            <KeyRound className="h-4 w-4" />
+            Re-encrypt all…
+          </Button>
         </div>
       </div>
 
@@ -238,6 +258,7 @@ export function BackupsPage() {
                   b.filename
                 )}{" "}
                 {b.compressed && <Badge tone="muted">gz</Badge>}
+                <ContentsBadges b={b} />
               </td>
               <td className="py-2">{Math.round(b.size_bytes / 1024)} KB</td>
               <td className="py-2">
@@ -293,7 +314,153 @@ export function BackupsPage() {
           )}
         </tbody>
       </table>
+
+      {reencryptOpen && (
+        <ReencryptAllDialog
+          encryptedCount={rows.filter((r) => r.encrypted).length}
+          instanceCount={
+            new Set(rows.filter((r) => r.encrypted).map((r) => r.instance_id)).size
+          }
+          onClose={() => setReencryptOpen(false)}
+          onConfirm={async (payload) => {
+            const r = await reencryptAll.mutateAsync(payload);
+            toast.info(
+              `Job #${r.job_id} is re-encrypting all encrypted backups. Watch progress in the Jobs page.`,
+              "Re-encryption started",
+            );
+            setReencryptOpen(false);
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+function ContentsBadges({ b }: { b: BackupListItem }) {
+  return (
+    <span className="ml-1 inline-flex flex-wrap items-center gap-1 align-middle">
+      {b.area ? (
+        <Badge tone="muted" title={`pfSense backup area: ${b.area}`}>
+          {b.area}
+        </Badge>
+      ) : null}
+      {b.included_rrd && <Badge tone="success" title="Includes RRD graph data">RRD</Badge>}
+      {b.included_packages && (
+        <Badge tone="success" title="Includes package information">pkgs</Badge>
+      )}
+      {b.included_ssh && (
+        <Badge tone="success" title="Includes SSH host keys">ssh</Badge>
+      )}
+      {b.encrypted && (
+        <Badge tone="warn" title="Encrypted at rest — view decrypts in memory">
+          <span className="inline-flex items-center gap-1">
+            <Lock className="h-3 w-3" />
+            encrypted
+          </span>
+        </Badge>
+      )}
+    </span>
+  );
+}
+
+function ReencryptAllDialog({
+  encryptedCount,
+  instanceCount,
+  onClose,
+  onConfirm,
+}: {
+  encryptedCount: number;
+  instanceCount: number;
+  onClose: () => void;
+  onConfirm: (p: {
+    new_password: string;
+    confirm_password: string;
+    also_update_instance_passwords: boolean;
+  }) => Promise<void>;
+}) {
+  const [pw, setPw] = useState("");
+  const [confirmPw, setConfirmPw] = useState("");
+  const [alsoUpdate, setAlsoUpdate] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const mismatch = pw !== confirmPw && confirmPw.length > 0;
+  const canSubmit =
+    pw.length > 0 && !mismatch && pw === confirmPw && !submitting;
+
+  async function submit() {
+    if (!canSubmit) return;
+    setErr(null);
+    setSubmitting(true);
+    try {
+      await onConfirm({
+        new_password: pw,
+        confirm_password: confirmPw,
+        also_update_instance_passwords: alsoUpdate,
+      });
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()} title="Re-encrypt all backups">
+      <div className="space-y-3">
+        <p className="text-sm text-muted-fg">
+          {encryptedCount === 0
+            ? "No encrypted backups are visible in the current filter, but the worker re-encrypts every encrypted row it finds across the entire fleet."
+            : `${encryptedCount} visible encrypted backup(s) across ${instanceCount} instance(s) will be re-encrypted with the new password.`}
+          {" "}
+          The old password will no longer decrypt those files. This cannot be undone by the app.
+        </p>
+        <div>
+          <Label>New encryption password</Label>
+          <Input
+            type="password"
+            value={pw}
+            onChange={(e) => setPw(e.target.value)}
+            autoFocus
+          />
+        </div>
+        <div>
+          <Label>Confirm password</Label>
+          <Input
+            type="password"
+            value={confirmPw}
+            onChange={(e) => setConfirmPw(e.target.value)}
+          />
+          {mismatch && (
+            <p className="mt-1 text-xs text-danger">Passwords don't match.</p>
+          )}
+        </div>
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={alsoUpdate}
+            onChange={(e) => setAlsoUpdate(e.target.checked)}
+            className="mt-0.5"
+          />
+          <span>
+            Also update every instance's stored password to this one.
+            <span className="block text-xs text-muted-fg">
+              Recommended — otherwise future backups will encrypt with the old
+              password while the historical files use the new one.
+            </span>
+          </span>
+        </label>
+        {err && (
+          <p className="text-xs text-danger">{err}</p>
+        )}
+      </div>
+      <div className="mt-6 flex justify-end gap-2">
+        <Button variant="secondary" onClick={onClose}>Cancel</Button>
+        <Button onClick={submit} disabled={!canSubmit}>
+          {submitting ? "Starting…" : "Re-encrypt all"}
+        </Button>
+      </div>
+    </Dialog>
   );
 }
 

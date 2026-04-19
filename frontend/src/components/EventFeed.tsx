@@ -37,6 +37,34 @@ function format(event: EventEnvelope, nameOf: NameLookup): { line: string; tone:
       };
     case "worker.heartbeat":
       return { line: "heartbeat", tone: "text-muted-fg" };
+    case "reencrypt.started": {
+      const scope = event.instance_id
+        ? nameOf(event.instance_id)
+        : "all instances";
+      return {
+        line: `re-encrypt started (${scope}, ${event.total} file${event.total === 1 ? "" : "s"})`,
+        tone: "text-accent",
+      };
+    }
+    case "reencrypt.progress": {
+      const scope = event.instance_id ? nameOf(event.instance_id) : "all";
+      return {
+        line: `re-encrypt ${scope} — ${event.processed}/${event.total}${
+          event.current_filename ? ` (${event.current_filename})` : ""
+        }`,
+        tone: "text-muted-fg",
+      };
+    }
+    case "reencrypt.finished": {
+      const scope = event.instance_id ? nameOf(event.instance_id) : "all";
+      return {
+        line:
+          event.failure_count === 0
+            ? `re-encrypt ${scope} — ${event.success_count} ok`
+            : `re-encrypt ${scope} — ${event.success_count} ok / ${event.failure_count} failed`,
+        tone: event.failure_count === 0 ? "text-ok" : "text-danger",
+      };
+    }
   }
 }
 

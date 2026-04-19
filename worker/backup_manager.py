@@ -13,9 +13,10 @@ from __future__ import annotations
 
 import gzip
 import logging
+import os
 import shutil
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -27,6 +28,7 @@ from sqlalchemy.orm import sessionmaker
 
 from pfsense_shared.crypto import Crypto
 from pfsense_shared.models import Backup, BackupSettings, Instance, Job
+from pfsense_shared.pfsense_crypto import looks_encrypted
 from pfsense_shared.pfsense_probe import (
     BROWSER_HEADERS,
     DASHBOARD_MARKERS,
@@ -36,8 +38,12 @@ from pfsense_shared.pfsense_probe import (
 from pfsense_shared.schemas import (
     BackupFailed,
     BackupFinished,
+    BackupOverrides,
     BackupProgress,
     BackupStarted,
+    ReencryptFinished,
+    ReencryptProgress,
+    ReencryptStarted,
     TestConnectionResult,
 )
 
@@ -49,6 +55,84 @@ from .prometheus_metrics import MetricsTimer, PrometheusMetrics
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 log = logging.getLogger(__name__)
+
+
+def _reencrypt_one_subprocess(task: dict) -> dict:
+    """Top-level subprocess worker for ProcessPoolExecutor.
+
+    Runs inside a *spawned* interpreter — cannot touch the parent's
+    ZMQ sockets, DB session, or Prometheus metrics. The parent reads
+    only the returned dict and applies DB updates back on the main
+    process.
+
+    task keys: backup_id, path, compressed, old_password, new_password.
+    Result keys: backup_id, ok, new_size (on success), error (on fail).
+    """
+    # Local imports so the parent doesn't need to pay their cost every
+    # submit call and so the child picks up a clean module graph.
+    import gzip
+    import os
+    from pathlib import Path
+
+    from pfsense_shared.pfsense_crypto import (
+        PfSenseCryptoError,
+        decrypt_pfsense_backup,
+        encrypt_pfsense_backup,
+    )
+
+    backup_id = task["backup_id"]
+    path_str: str = task["path"]
+    compressed: bool = task["compressed"]
+    old_password: str = task["old_password"]
+    new_password: str = task["new_password"]
+
+    path = Path(path_str)
+    try:
+        # Read the file — decompress gz on the fly.
+        if compressed:
+            with gzip.open(path, "rb") as gz:
+                raw = gz.read()
+        else:
+            raw = path.read_bytes()
+
+        plaintext = decrypt_pfsense_backup(raw, old_password)
+        new_wrapped = encrypt_pfsense_backup(plaintext, new_password)
+
+        # Re-compress if the row is stored gzipped so the on-disk shape
+        # doesn't flip under the user's feet.
+        if compressed:
+            import io
+            buf = io.BytesIO()
+            with gzip.GzipFile(fileobj=buf, mode="wb") as gz_out:
+                gz_out.write(new_wrapped)
+            out_bytes = buf.getvalue()
+        else:
+            out_bytes = new_wrapped
+
+        # Atomic replace via same-directory tmp so a crash mid-write
+        # can't leave a truncated backup.
+        tmp_path = path.with_name(f".{path.name}.tmp.{os.getpid()}")
+        try:
+            with open(tmp_path, "wb") as out:
+                out.write(out_bytes)
+                out.flush()
+                os.fsync(out.fileno())
+            os.replace(tmp_path, path)
+        except Exception:
+            # Clean up the tmp on any error so we don't orphan files.
+            try:
+                os.unlink(tmp_path)
+            except FileNotFoundError:
+                pass
+            raise
+
+        return {"backup_id": backup_id, "ok": True, "new_size": len(out_bytes)}
+    except PfSenseCryptoError as exc:
+        return {"backup_id": backup_id, "ok": False, "error": f"crypto: {exc}"}
+    except FileNotFoundError:
+        return {"backup_id": backup_id, "ok": False, "error": "file missing on disk"}
+    except Exception as exc:
+        return {"backup_id": backup_id, "ok": False, "error": str(exc)}
 
 
 @dataclass(frozen=True)
@@ -69,6 +153,17 @@ class _InstanceSnapshot:
     directory: str
     filename_format: str
     timestamp_format: str
+
+    # Backup contents — what to pull from pfSense's diag_backup.php.
+    backup_area: str
+    backup_include_rrd: bool
+    backup_include_packages: bool
+    backup_include_ssh: bool
+    backup_encrypt: bool
+    # Plaintext encryption password, only populated when backup_encrypt
+    # is True. Decrypted from Instance.backup_encrypt_password_ct via
+    # the shared Crypto service.
+    backup_encrypt_password: str | None
 
 
 @dataclass
@@ -102,7 +197,12 @@ class PfSenseBackupManager:
     # ------------------------------------------------------------------ #
 
     def backup_instance(
-        self, instance_id: int, job_id: int, *, notify: bool = True
+        self,
+        instance_id: int,
+        job_id: int,
+        *,
+        notify: bool = True,
+        overrides: BackupOverrides | None = None,
     ) -> bool:
         """Run a backup for one instance. Returns True on success.
 
@@ -111,10 +211,33 @@ class PfSenseBackupManager:
         manual "Backup now" and scheduled per-instance cron fires both
         alert users. ``backup_all`` passes ``notify=False`` in its
         loop and sends a single aggregate summary instead.
+
+        ``overrides`` applies a one-shot BackupOverrides on top of the
+        stored instance settings. The instance row is never mutated;
+        the override only affects this run and gets captured on the
+        resulting Backup row.
         """
-        snap = self._snapshot(instance_id)
+        snap = self._snapshot(instance_id, overrides=overrides)
         if snap is None:
             self._fail_job(job_id, f"Instance {instance_id} not found")
+            return False
+
+        # Surface a config-time refusal rather than hitting pfSense and
+        # letting it fail with an opaque "no password" error.
+        if snap.backup_encrypt and not snap.backup_encrypt_password:
+            msg = (
+                f"Backup refused: encryption is on for '{snap.name}' but "
+                f"no encryption password is configured."
+            )
+            self._publisher.publish(
+                BackupFailed(
+                    job_id=job_id,
+                    instance_id=snap.id,
+                    error=msg,
+                    ts=datetime.now(UTC),
+                )
+            )
+            self._fail_job(job_id, msg)
             return False
 
         def _notify_result(ok: bool, detail: str) -> None:
@@ -186,6 +309,7 @@ class PfSenseBackupManager:
                 result=result,
                 success=True,
                 error=None,
+                snap=snap,
             )
             self._mark_job(job_id, status="success", finished_at=finished_at)
             self._publisher.publish(
@@ -222,6 +346,7 @@ class PfSenseBackupManager:
                 result=None,
                 success=False,
                 error=err,
+                snap=snap,
             )
             self._mark_job(job_id, status="failure", finished_at=finished_at, message=err)
             self._publisher.publish(
@@ -283,8 +408,14 @@ class PfSenseBackupManager:
     _BACKUP_ALL_DEFAULT_WORKERS = 4
     _BACKUP_ALL_MAX_BOUND = 32
 
-    def backup_all(self, job_id: int) -> None:
-        """Run backups for every enabled instance in parallel, then send a summary."""
+    def backup_all(
+        self, job_id: int, overrides: BackupOverrides | None = None
+    ) -> None:
+        """Run backups for every enabled instance in parallel, then send a summary.
+
+        ``overrides`` applies the same one-shot settings to every instance
+        in the sweep. Per-instance settings stay untouched on disk.
+        """
         with self._session_factory() as s:
             instance_ids: list[int] = [
                 row.id for row in s.query(Instance).filter(Instance.enabled.is_(True)).all()
@@ -318,7 +449,9 @@ class PfSenseBackupManager:
             # backups + scheduled cron fires, so the same instance never races
             # itself. Different instances run concurrently.
             with self._instance_locks.for_instance(iid):
-                ok = self.backup_instance(iid, job_id=job_id, notify=False)
+                ok = self.backup_instance(
+                    iid, job_id=job_id, notify=False, overrides=overrides
+                )
             return iid, ok
 
         if instance_ids:
@@ -370,15 +503,339 @@ class PfSenseBackupManager:
             log.error("Notifier summary send failed: %s", exc)
 
     # ------------------------------------------------------------------ #
+    # Re-encryption (per-instance + global)
+    # ------------------------------------------------------------------ #
+
+    def _reencrypt_max_workers(self) -> int:
+        """Reuse the Backup-all worker cap for re-encrypt parallelism."""
+        with self._session_factory() as s:
+            settings = s.get(BackupSettings, 1)
+        configured = (
+            settings.backup_all_max_workers
+            if settings is not None
+            else self._BACKUP_ALL_DEFAULT_WORKERS
+        )
+        return max(1, min(self._BACKUP_ALL_MAX_BOUND, int(configured or 1)))
+
+    def reencrypt_backups(self, instance_id: int, job_id: int) -> None:
+        """Re-encrypt every encrypted Backup row for a single instance.
+
+        Reads the *new* password from the already-updated Instance row
+        (the web router committed it before firing this command), so
+        plaintext never crosses the ZMQ wire.
+        """
+        self._mark_job(job_id, status="running")
+
+        # Scope the DB session tightly: pull only the tuples we need and
+        # close the session before fanning out the plaintext decrypt
+        # loop. Prevents the connection from being held for the entire
+        # job runtime on large fleets.
+        with self._session_factory() as s:
+            inst = s.get(Instance, instance_id)
+            if inst is None:
+                self._fail_job(job_id, f"Instance {instance_id} not found")
+                return
+            if not inst.backup_encrypt or not inst.backup_encrypt_password_ct:
+                self._fail_job(
+                    job_id,
+                    f"Instance '{inst.name}' has no encryption password "
+                    f"configured; nothing to re-encrypt.",
+                )
+                return
+            new_password_ct = inst.backup_encrypt_password_ct
+            instance_name = inst.name
+            raw_rows = (
+                s.query(
+                    Backup.id, Backup.path, Backup.compressed, Backup.encrypt_password_ct
+                )
+                .filter(
+                    Backup.instance_id == instance_id,
+                    Backup.encrypted.is_(True),
+                    Backup.encrypt_password_ct.is_not(None),
+                )
+                .order_by(Backup.id.asc())
+                .all()
+            )
+
+        # Session closed. Decrypt plaintexts now.
+        new_password = self._crypto.decrypt(new_password_ct)
+        tasks = [
+            {
+                "backup_id": r.id,
+                "path": r.path,
+                "compressed": r.compressed,
+                "old_password": self._crypto.decrypt(r.encrypt_password_ct),
+                "new_password": new_password,
+            }
+            for r in raw_rows
+        ]
+
+        success = 0
+        failure = 0
+        try:
+            success, failure, _ = self._reencrypt_rows(
+                job_id=job_id,
+                tasks=tasks,
+                instance_id=instance_id,
+                instance_name=instance_name,
+                new_password=new_password,
+            )
+        finally:
+            # Clear plaintext passwords from the task list promptly, and
+            # always finalize the Job row so a mid-run exception doesn't
+            # leave a "running" Job that the UI can't drain.
+            del tasks
+            self._finalize_reencrypt_job(job_id, success, failure)
+
+    def reencrypt_all_backups(
+        self,
+        job_id: int,
+        new_password: str,
+        also_update_instance_passwords: bool,
+    ) -> None:
+        """Re-encrypt every encrypted Backup row across every instance.
+
+        Optionally flips every encrypted Instance's stored password to
+        ``new_password`` so future backups keep using it — done in a
+        single transaction after the file work completes so a crash
+        can't leave the fleet half-updated.
+        """
+        self._mark_job(job_id, status="running")
+        with self._session_factory() as s:
+            raw_rows = (
+                s.query(
+                    Backup.id, Backup.path, Backup.compressed, Backup.encrypt_password_ct
+                )
+                .filter(
+                    Backup.encrypted.is_(True),
+                    Backup.encrypt_password_ct.is_not(None),
+                )
+                .order_by(Backup.instance_id.asc(), Backup.id.asc())
+                .all()
+            )
+
+        tasks = [
+            {
+                "backup_id": r.id,
+                "path": r.path,
+                "compressed": r.compressed,
+                "old_password": self._crypto.decrypt(r.encrypt_password_ct),
+                "new_password": new_password,
+            }
+            for r in raw_rows
+        ]
+
+        success = 0
+        failure = 0
+        try:
+            success, failure, _ = self._reencrypt_rows(
+                job_id=job_id,
+                tasks=tasks,
+                instance_id=None,
+                instance_name=None,
+                new_password=new_password,
+            )
+
+            if also_update_instance_passwords:
+                try:
+                    new_ct = self._crypto.encrypt(new_password)
+                    with self._session_factory() as s:
+                        to_update = (
+                            s.query(Instance)
+                            .filter(Instance.backup_encrypt.is_(True))
+                            .all()
+                        )
+                        for inst in to_update:
+                            inst.backup_encrypt_password_ct = new_ct
+                        s.commit()
+                    log.info(
+                        "reencrypt_all: rotated encryption password on %d instance(s)",
+                        len(to_update),
+                    )
+                except Exception as exc:
+                    log.error(
+                        "reencrypt_all: instance password rotation failed: %s", exc
+                    )
+        finally:
+            del tasks
+            self._finalize_reencrypt_job(job_id, success, failure)
+
+    def _finalize_reencrypt_job(self, job_id: int, success: int, failure: int) -> None:
+        total = success + failure
+        status = "success" if failure == 0 else "failure"
+        if total == 0:
+            msg = "No encrypted backups to re-encrypt"
+        elif failure == 0:
+            msg = f"Re-encrypted {success}/{total} backup(s)"
+        else:
+            msg = f"Re-encrypted {success}/{total} backup(s); {failure} failed"
+        self._mark_job(job_id, status=status, finished_at=datetime.now(UTC), message=msg)
+
+    def _reencrypt_rows(
+        self,
+        *,
+        job_id: int,
+        tasks: list[dict],
+        instance_id: int | None,
+        instance_name: str | None,
+        new_password: str,
+    ) -> tuple[int, int, list[dict]]:
+        """Run re-encryption tasks in a ProcessPoolExecutor.
+
+        Why processes rather than threads: pfSense's KDF (PBKDF2-SHA256
+        @ 100 000 iters) runs through cryptography/CFFI which holds the
+        GIL for the whole derive call. Threads would serialize; separate
+        interpreters genuinely parallelize across cores.
+        """
+        import multiprocessing
+
+        total = len(tasks)
+        self._publisher.publish(
+            ReencryptStarted(
+                job_id=job_id,
+                instance_id=instance_id,
+                instance_name=instance_name,
+                total=total,
+                ts=datetime.now(UTC),
+            )
+        )
+
+        failures: list[dict] = []
+        success = 0
+        if total == 0:
+            self._publisher.publish(
+                ReencryptFinished(
+                    job_id=job_id,
+                    instance_id=instance_id,
+                    success_count=0,
+                    failure_count=0,
+                    failures=[],
+                    ts=datetime.now(UTC),
+                )
+            )
+            return 0, 0, []
+
+        workers = min(self._reencrypt_max_workers(), len(tasks))
+        # spawn (not fork) keeps the child out of our ZMQ context /
+        # SQLAlchemy engine — both of which are not fork-safe.
+        ctx = multiprocessing.get_context("spawn")
+        new_password_ct_cache = self._crypto.encrypt(new_password)
+
+        processed = 0
+        with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as pool:
+            future_to_task = {
+                pool.submit(_reencrypt_one_subprocess, t): t for t in tasks
+            }
+            for fut in as_completed(future_to_task):
+                task = future_to_task[fut]
+                filename = os.path.basename(task["path"])
+                try:
+                    result = fut.result()
+                except Exception as exc:
+                    result = {
+                        "backup_id": task["backup_id"],
+                        "ok": False,
+                        "error": f"subprocess crashed: {exc}",
+                    }
+                processed += 1
+                self._publisher.publish(
+                    ReencryptProgress(
+                        job_id=job_id,
+                        instance_id=instance_id,
+                        processed=processed,
+                        total=total,
+                        current_backup_id=result.get("backup_id"),
+                        current_filename=filename,
+                        ts=datetime.now(UTC),
+                    )
+                )
+                if result.get("ok"):
+                    # Apply DB updates on the parent (child has no
+                    # session). Reuse the pre-computed ciphertext so
+                    # we don't re-run Fernet encrypt for every row.
+                    try:
+                        with self._session_factory() as s:
+                            row = s.get(Backup, result["backup_id"])
+                            if row is not None:
+                                row.encrypt_password_ct = new_password_ct_cache
+                                new_size = result.get("new_size")
+                                if isinstance(new_size, int):
+                                    row.size_bytes = new_size
+                                s.commit()
+                        success += 1
+                    except Exception as exc:
+                        failures.append(
+                            {
+                                "backup_id": task["backup_id"],
+                                "filename": filename,
+                                "error": f"db update failed: {exc}",
+                            }
+                        )
+                else:
+                    failures.append(
+                        {
+                            "backup_id": task["backup_id"],
+                            "filename": filename,
+                            "error": result.get("error", "unknown error"),
+                        }
+                    )
+
+        self._publisher.publish(
+            ReencryptFinished(
+                job_id=job_id,
+                instance_id=instance_id,
+                success_count=success,
+                failure_count=len(failures),
+                failures=failures,
+                ts=datetime.now(UTC),
+            )
+        )
+        return success, len(failures), failures
+
+    # ------------------------------------------------------------------ #
     # Data loading
     # ------------------------------------------------------------------ #
 
-    def _snapshot(self, instance_id: int) -> _InstanceSnapshot | None:
+    def _snapshot(
+        self, instance_id: int, overrides: BackupOverrides | None = None
+    ) -> _InstanceSnapshot | None:
         with self._session_factory() as s:
             inst = s.get(Instance, instance_id)
             if inst is None:
                 return None
             settings = s.query(BackupSettings).filter(BackupSettings.id == 1).one()
+
+            # Base values come from the DB row.
+            backup_area = inst.backup_area or ""
+            include_rrd = inst.backup_include_rrd
+            include_packages = inst.backup_include_packages
+            include_ssh = inst.backup_include_ssh
+            encrypt = inst.backup_encrypt
+            encrypt_password: str | None = (
+                self._crypto.decrypt(inst.backup_encrypt_password_ct)
+                if inst.backup_encrypt and inst.backup_encrypt_password_ct
+                else None
+            )
+
+            # Apply one-shot overrides on top. Each field flips only if
+            # the caller explicitly set it — None means "inherit".
+            if overrides is not None:
+                if overrides.backup_area is not None:
+                    backup_area = overrides.backup_area
+                if overrides.backup_include_rrd is not None:
+                    include_rrd = overrides.backup_include_rrd
+                if overrides.backup_include_packages is not None:
+                    include_packages = overrides.backup_include_packages
+                if overrides.backup_include_ssh is not None:
+                    include_ssh = overrides.backup_include_ssh
+                if overrides.backup_encrypt is not None:
+                    encrypt = overrides.backup_encrypt
+                if overrides.backup_encrypt_password_ct is not None:
+                    # Plaintext only lives in memory after this decrypt.
+                    encrypt_password = self._crypto.decrypt(
+                        overrides.backup_encrypt_password_ct
+                    )
+
             return _InstanceSnapshot(
                 id=inst.id,
                 name=inst.name,
@@ -394,6 +851,12 @@ class PfSenseBackupManager:
                 directory=settings.directory,
                 filename_format=settings.filename_format,
                 timestamp_format=settings.timestamp_format,
+                backup_area=backup_area,
+                backup_include_rrd=include_rrd,
+                backup_include_packages=include_packages,
+                backup_include_ssh=include_ssh,
+                backup_encrypt=encrypt,
+                backup_encrypt_password=encrypt_password,
             )
 
     # ------------------------------------------------------------------ #
@@ -481,6 +944,32 @@ class PfSenseBackupManager:
                 )
             return ok
 
+    @staticmethod
+    def build_backup_form_data(snap: _InstanceSnapshot) -> dict[str, str]:
+        """Translate a snapshot's content toggles into diag_backup.php form fields.
+
+        Separated out so unit tests can assert the wire-level payload
+        without spinning up HTTP. Defaults mirror pfSense's semantics:
+        ``backuparea=""`` means "Everything", the include toggles are
+        expressed as their *exclusion* counterparts (``donotbackuprrd``,
+        ``nopackages``) because that's how pfSense's own form posts.
+        """
+        data: dict[str, str] = {"download": "download"}
+        # pfSense's dropdown uses "" for "Everything"; sending the key
+        # explicitly is a no-op, but keeps our POST self-documenting.
+        data["backuparea"] = snap.backup_area or ""
+        if not snap.backup_include_rrd:
+            data["donotbackuprrd"] = "yes"
+        if not snap.backup_include_packages:
+            data["nopackages"] = "yes"
+        if snap.backup_include_ssh:
+            data["backupssh"] = "yes"
+        if snap.backup_encrypt and snap.backup_encrypt_password:
+            data["encrypt"] = "yes"
+            data["encrypt_password"] = snap.backup_encrypt_password
+            data["encrypt_password_confirm"] = snap.backup_encrypt_password
+        return data
+
     def _download_config(self, http: requests.Session, snap: _InstanceSnapshot) -> str | None:
         with MetricsTimer(self._metrics, snap.name, "download"):
             backup_url = urljoin(snap.url, "/diag_backup.php")
@@ -495,7 +984,7 @@ class PfSenseBackupManager:
 
             csrf_token = self._extract_csrf(resp.text)
 
-            data = {"download": "download", "donotbackuprrd": "yes", "backupssh": "yes"}
+            data = self.build_backup_form_data(snap)
             if csrf_token:
                 data["__csrf_magic"] = csrf_token
             post_headers = {**self._BROWSER_HEADERS, "Referer": backup_url}
@@ -509,15 +998,22 @@ class PfSenseBackupManager:
             resp.raise_for_status()
             self._metrics.record_network_request(snap.name, "backup_download", resp.status_code)
 
+            body = resp.text
+            # When encryption is on pfSense returns the ---- BEGIN config.xml ----
+            # wrapper instead of raw XML. Accept that as a valid response.
+            if snap.backup_encrypt and looks_encrypted(body):
+                return body
             content_type = resp.headers.get("content-type", "").lower()
             ct_ok = any(content_type.startswith(p) for p in self._XML_CONTENT_TYPE_PREFIXES)
-            if ct_ok or resp.text.lstrip().startswith("<?xml"):
-                return resp.text
+            if ct_ok or body.lstrip().startswith("<?xml"):
+                return body
+            # Don't leak the whole error page (may include pfSense's
+            # session cookie values); trim + single-line it.
             log.error(
-                "Unexpected response format from %s (content-type=%s, first 100 chars: %s)",
+                "Unexpected response format from %s (content-type=%s, first 200 chars: %s)",
                 snap.name,
                 content_type or "<absent>",
-                resp.text[:100].replace("\n", " "),
+                body[:200].replace("\n", " "),
             )
             return None
 
@@ -620,8 +1116,25 @@ class PfSenseBackupManager:
         result: _SaveResult | None,
         success: bool,
         error: str | None,
+        snap: _InstanceSnapshot | None = None,
     ) -> None:
         with self._session_factory() as s:
+            # Carry forward what was actually captured. When snap is None
+            # (the instance disappeared before the snapshot call) we leave
+            # the historical defaults in place — the migration already
+            # set them to match the old hard-coded behavior.
+            area = snap.backup_area if snap else ""
+            included_rrd = snap.backup_include_rrd if snap else False
+            included_packages = snap.backup_include_packages if snap else True
+            included_ssh = snap.backup_include_ssh if snap else True
+            encrypted = bool(snap and snap.backup_encrypt and success)
+            # Only persist the per-row password when the file on disk is
+            # actually encrypted — a failed encrypt run leaves nothing
+            # to decrypt, so there's no password worth storing.
+            encrypt_password_ct: bytes | None = None
+            if encrypted and snap is not None and snap.backup_encrypt_password:
+                encrypt_password_ct = self._crypto.encrypt(snap.backup_encrypt_password)
+
             row = Backup(
                 instance_id=instance_id,
                 job_id=job_id,
@@ -634,6 +1147,12 @@ class PfSenseBackupManager:
                 compressed=result.compressed if result else False,
                 success=success,
                 error_message=error,
+                area=area,
+                included_rrd=included_rrd,
+                included_packages=included_packages,
+                included_ssh=included_ssh,
+                encrypted=encrypted,
+                encrypt_password_ct=encrypt_password_ct,
             )
             s.add(row)
             s.commit()

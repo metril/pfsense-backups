@@ -23,7 +23,11 @@ import {
 } from "@/api/queries";
 import type { Instance, InstanceCreate } from "@/api/types";
 
-type Draft = InstanceCreate & { id?: number };
+type Draft = InstanceCreate & {
+  id?: number;
+  /** Pairs with a password change to trigger the re-encrypt job. */
+  reencrypt_existing_backups?: boolean;
+};
 
 const blank = (): Draft => ({
   name: "",
@@ -40,7 +44,58 @@ const blank = (): Draft => ({
   enabled: true,
   retention_count: 365,
   compress: false,
+  backup_area: "",
+  backup_include_rrd: false,
+  backup_include_packages: true,
+  backup_include_ssh: true,
+  backup_encrypt: false,
+  backup_encrypt_password: null,
+  reencrypt_existing_backups: false,
 });
+
+// Canonical pfSense subsystem IDs for the Area dropdown. "" = Everything.
+// Must match pfsense_shared/schemas.py::PFSENSE_BACKUP_AREAS; keeping
+// them literal here avoids dragging the list over the wire on every page
+// load. Adding a subsystem is a two-line edit (here + schemas.py).
+const PFSENSE_BACKUP_AREAS: { value: string; label: string }[] = [
+  { value: "", label: "Everything (default)" },
+  { value: "aliases", label: "aliases" },
+  { value: "captiveportal", label: "captiveportal" },
+  { value: "certs", label: "certs" },
+  { value: "cron", label: "cron" },
+  { value: "dhcpd", label: "dhcpd" },
+  { value: "dhcpdv6", label: "dhcpdv6" },
+  { value: "dnsmasq", label: "dnsmasq" },
+  { value: "filter", label: "filter (firewall rules)" },
+  { value: "firewallshaper", label: "firewallshaper" },
+  { value: "ifgroups", label: "ifgroups" },
+  { value: "installedpackages", label: "installedpackages" },
+  { value: "interfaces", label: "interfaces" },
+  { value: "ipsec", label: "ipsec" },
+  { value: "load_balancer", label: "load_balancer" },
+  { value: "nat", label: "nat" },
+  { value: "openvpn", label: "openvpn" },
+  { value: "ppps", label: "ppps" },
+  { value: "rrddata", label: "rrddata" },
+  { value: "schedules", label: "schedules" },
+  { value: "snmpd", label: "snmpd" },
+  { value: "staticroutes", label: "staticroutes" },
+  { value: "syslog", label: "syslog" },
+  { value: "sysctl", label: "sysctl" },
+  { value: "system", label: "system" },
+  { value: "system_advanced_admin", label: "system_advanced_admin" },
+  { value: "system_advanced_firewall", label: "system_advanced_firewall" },
+  { value: "system_advanced_misc", label: "system_advanced_misc" },
+  { value: "system_advanced_network", label: "system_advanced_network" },
+  { value: "system_advanced_notifications", label: "system_advanced_notifications" },
+  { value: "system_advanced_sysctl", label: "system_advanced_sysctl" },
+  { value: "system_hasync", label: "system_hasync" },
+  { value: "unbound", label: "unbound" },
+  { value: "virtualip", label: "virtualip" },
+  { value: "voucher", label: "voucher" },
+  { value: "vpn", label: "vpn" },
+  { value: "wol", label: "wol" },
+];
 
 function scheduleSummary(cron: string | null): string {
   if (!cron) return "Disabled";
@@ -120,7 +175,7 @@ export function InstancesPage() {
                     <Button
                       variant="ghost"
                       size="icon"
-                      onClick={() => backup.mutate(inst.id)}
+                      onClick={() => backup.mutate({ id: inst.id })}
                       aria-label={`Backup ${inst.name} now`}
                       title="Backup now"
                     >
@@ -222,7 +277,14 @@ export function InstancesPage() {
               const { id, ...patch } = d;
               // Avoid sending an empty password — backend keeps existing ciphertext when blank.
               if (!patch.password) delete (patch as Record<string, unknown>).password;
-              await update.mutateAsync({ id, patch });
+              const response = await update.mutateAsync({ id, patch });
+              if (response?.reencrypt_job_id) {
+                toast.info(
+                  `Job #${response.reencrypt_job_id} is rewriting previously ` +
+                    `encrypted backups with the new password. Watch progress in the Jobs page.`,
+                  "Re-encrypting existing backups",
+                );
+              }
             }
             setEditing(null);
           }}
@@ -248,6 +310,15 @@ function toDraft(inst: Instance): Draft {
     enabled: inst.enabled,
     retention_count: inst.retention_count,
     compress: inst.compress,
+    backup_area: inst.backup_area ?? "",
+    backup_include_rrd: inst.backup_include_rrd,
+    backup_include_packages: inst.backup_include_packages,
+    backup_include_ssh: inst.backup_include_ssh,
+    backup_encrypt: inst.backup_encrypt,
+    // "__set__" round-trip: if the server says one is stored, we keep
+    // that sentinel so an unchanged save leaves the ciphertext alone.
+    backup_encrypt_password: inst.backup_encrypt_password,
+    reencrypt_existing_backups: false,
   };
 }
 
@@ -353,6 +424,10 @@ function EditorDialog({
             onTimezoneChange={(v) => setD({ ...d, cron_timezone: v })}
           />
         </div>
+
+        <div className="col-span-2 border-t border-border pt-4">
+          <BackupContentsSection d={d} setD={setD} isNew={isNew} />
+        </div>
       </div>
 
       {preflightMsg && (
@@ -402,6 +477,147 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     <div>
       <Label>{label}</Label>
       <div className="mt-1">{children}</div>
+    </div>
+  );
+}
+
+function BackupContentsSection({
+  d,
+  setD,
+  isNew,
+}: {
+  d: Draft;
+  setD: (v: Draft) => void;
+  isNew: boolean;
+}) {
+  const hasStoredPassword = d.backup_encrypt_password === "__set__";
+  // The re-encrypt checkbox is only meaningful when Encrypt is on AND
+  // the user is supplying a new plaintext password (not the sentinel).
+  const canReencrypt =
+    !isNew &&
+    d.backup_encrypt === true &&
+    typeof d.backup_encrypt_password === "string" &&
+    d.backup_encrypt_password !== "__set__" &&
+    d.backup_encrypt_password.trim().length > 0;
+
+  return (
+    <div>
+      <h3 className="text-sm font-semibold">Backup contents</h3>
+      <p className="mt-1 text-xs text-muted-fg">
+        Maps onto pfSense's <code>Diagnostics → Backup &amp; Restore</code> form.
+        Defaults mirror today's behavior so upgrades don't change what gets captured.
+      </p>
+      <div className="mt-3 grid grid-cols-2 gap-4">
+        <Field label="Area">
+          <select
+            value={d.backup_area ?? ""}
+            onChange={(e) => setD({ ...d, backup_area: e.target.value })}
+            aria-label="Backup area"
+            className="h-9 w-full rounded-md border border-border bg-bg px-2 text-sm"
+          >
+            {PFSENSE_BACKUP_AREAS.map((a) => (
+              <option key={a.value} value={a.value}>
+                {a.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Include RRD graph data">
+          <Switch
+            label="Include RRD graph data"
+            checked={d.backup_include_rrd ?? false}
+            onChange={(v) => setD({ ...d, backup_include_rrd: v })}
+          />
+        </Field>
+        <Field label="Include package information">
+          <Switch
+            label="Include package information"
+            checked={d.backup_include_packages ?? true}
+            onChange={(v) => setD({ ...d, backup_include_packages: v })}
+          />
+        </Field>
+        <Field label="Include SSH host keys">
+          <Switch
+            label="Include SSH host keys"
+            checked={d.backup_include_ssh ?? true}
+            onChange={(v) => setD({ ...d, backup_include_ssh: v })}
+          />
+        </Field>
+        <Field label="Encrypt backup">
+          <Switch
+            label="Encrypt backup"
+            checked={d.backup_encrypt ?? false}
+            onChange={(v) =>
+              setD({
+                ...d,
+                backup_encrypt: v,
+                // Turning encrypt off clears any pending password change
+                // so we don't submit ambiguous state.
+                backup_encrypt_password: v ? d.backup_encrypt_password : null,
+                reencrypt_existing_backups: v
+                  ? d.reencrypt_existing_backups
+                  : false,
+              })
+            }
+          />
+        </Field>
+        {d.backup_encrypt && (
+          <Field
+            label={
+              hasStoredPassword
+                ? "Encryption password (leave blank to keep)"
+                : "Encryption password"
+            }
+          >
+            <Input
+              type="password"
+              value={
+                d.backup_encrypt_password === "__set__"
+                  ? ""
+                  : (d.backup_encrypt_password ?? "")
+              }
+              placeholder={hasStoredPassword ? "•••••••• (stored)" : ""}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v === "" && hasStoredPassword) {
+                  // Empty + stored = keep existing. Reset to the sentinel
+                  // so the PUT doesn't clear the ciphertext.
+                  setD({ ...d, backup_encrypt_password: "__set__" });
+                } else {
+                  setD({ ...d, backup_encrypt_password: v });
+                }
+              }}
+            />
+          </Field>
+        )}
+      </div>
+      {canReencrypt && (
+        <label className="mt-3 flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={d.reencrypt_existing_backups ?? false}
+            onChange={(e) =>
+              setD({ ...d, reencrypt_existing_backups: e.target.checked })
+            }
+            className="mt-0.5"
+          />
+          <span>
+            Also re-encrypt existing backups with the new password.
+            <span className="block text-xs text-muted-fg">
+              Runs in the background. You can watch progress in the Jobs page.
+            </span>
+          </span>
+        </label>
+      )}
+      {d.backup_encrypt &&
+        (!d.backup_encrypt_password ||
+          (typeof d.backup_encrypt_password === "string" &&
+            d.backup_encrypt_password.trim() === "" &&
+            !hasStoredPassword)) && (
+          <p className="mt-2 text-xs text-danger">
+            Password required when encryption is on.
+          </p>
+        )}
     </div>
   );
 }
