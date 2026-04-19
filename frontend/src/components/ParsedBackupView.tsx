@@ -6,20 +6,30 @@ import type {
   Alias,
   AuthServer,
   Bridge,
+  CaptivePortalZone,
   CronJob,
+  DhcpRelayConfig,
   DhcpServer,
   DnsConfig,
+  DnShaperPipe,
   FirewallRule,
   Gateway,
   Group,
   HaSync,
   Interface,
+  LoadBalancerPool,
+  LoadBalancerVirtualServer,
   NatRule,
+  NtpdConfig,
   ParsedConfig,
   Ppp,
   QinQ,
   RawSection,
+  Schedule,
+  ShaperQueue,
+  SnmpdConfig,
   StaticRoute,
+  SyslogConfig,
   SysctlTunable,
   SystemInfo,
   Tunnel,
@@ -155,6 +165,60 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
             <DnsPanel d={data.dns} />
           </Section>
         )}
+        {data.dhcp_relays.length > 0 && (
+          <Section title="DHCP relay" count={data.dhcp_relays.length}>
+            <DhcpRelayTable rows={data.dhcp_relays} />
+          </Section>
+        )}
+        {data.ntpd && (
+          <Section title="NTP server" count={1}>
+            <NtpdPanel n={data.ntpd} />
+          </Section>
+        )}
+        {data.snmpd && (
+          <Section title="SNMP" count={1}>
+            <SnmpdPanel s={data.snmpd} />
+          </Section>
+        )}
+        {data.syslog && (
+          <Section title="Remote syslog" count={1}>
+            <SyslogPanel s={data.syslog} />
+          </Section>
+        )}
+        {data.schedules.length > 0 && (
+          <Section title="Schedules" count={data.schedules.length}>
+            <SchedulesTable rows={data.schedules} />
+          </Section>
+        )}
+        {data.shaper_queues.length > 0 && (
+          <Section title="Traffic shaper queues" count={data.shaper_queues.length}>
+            <ShaperTable rows={data.shaper_queues} />
+          </Section>
+        )}
+        {data.dnshaper_pipes.length > 0 && (
+          <Section title="Limiter pipes" count={data.dnshaper_pipes.length}>
+            <DnShaperTable rows={data.dnshaper_pipes} />
+          </Section>
+        )}
+        {(data.lb_pools.length > 0 || data.lb_virtual_servers.length > 0) && (
+          <Section
+            title="Load balancer"
+            count={data.lb_pools.length + data.lb_virtual_servers.length}
+          >
+            <LoadBalancerPanel
+              pools={data.lb_pools}
+              vservers={data.lb_virtual_servers}
+            />
+          </Section>
+        )}
+        {data.captive_portal_zones.length > 0 && (
+          <Section
+            title="Captive portal"
+            count={data.captive_portal_zones.length}
+          >
+            <CaptivePortalTable rows={data.captive_portal_zones} />
+          </Section>
+        )}
         {data.users.length > 0 && (
           <Section title="Users" count={data.users.length}>
             <UsersTable rows={data.users} />
@@ -260,6 +324,23 @@ function TableOfContents({ cfg }: { cfg: ParsedConfig }) {
   if (cfg.dhcp_servers.length)
     entries.push(["DHCP servers", cfg.dhcp_servers.length]);
   if (cfg.dns) entries.push(["DNS", 1]);
+  if (cfg.dhcp_relays.length)
+    entries.push(["DHCP relay", cfg.dhcp_relays.length]);
+  if (cfg.ntpd) entries.push(["NTP server", 1]);
+  if (cfg.snmpd) entries.push(["SNMP", 1]);
+  if (cfg.syslog) entries.push(["Remote syslog", 1]);
+  if (cfg.schedules.length) entries.push(["Schedules", cfg.schedules.length]);
+  if (cfg.shaper_queues.length)
+    entries.push(["Traffic shaper queues", cfg.shaper_queues.length]);
+  if (cfg.dnshaper_pipes.length)
+    entries.push(["Limiter pipes", cfg.dnshaper_pipes.length]);
+  if (cfg.lb_pools.length || cfg.lb_virtual_servers.length)
+    entries.push([
+      "Load balancer",
+      cfg.lb_pools.length + cfg.lb_virtual_servers.length,
+    ]);
+  if (cfg.captive_portal_zones.length)
+    entries.push(["Captive portal", cfg.captive_portal_zones.length]);
   if (cfg.users.length) entries.push(["Users", cfg.users.length]);
   if (cfg.groups.length) entries.push(["Groups", cfg.groups.length]);
   if (cfg.authservers.length)
@@ -844,6 +925,203 @@ function HaSyncPanel({ h }: { h: HaSync }) {
         ["Sync password", <RV v={h.password} key="p" />],
         ["Sections synced", synced.length ? synced.join(", ") : "—"],
       ]}
+    />
+  );
+}
+
+function DhcpRelayTable({ rows }: { rows: DhcpRelayConfig[] }) {
+  return (
+    <Table
+      headers={["Kind", "Enabled", "Interfaces", "Relay to", "Agent option"]}
+      rows={rows.map((r) => [
+        r.kind,
+        r.enable ? "yes" : "no",
+        r.interface.join(", ") || "—",
+        r.server.join(", ") || "—",
+        r.agentoption ? "yes" : "no",
+      ])}
+    />
+  );
+}
+
+function NtpdPanel({ n }: { n: NtpdConfig }) {
+  return (
+    <Dl
+      items={[
+        ["Enabled", n.enable ? "yes" : "no"],
+        ["Interfaces", n.interfaces.join(", ") || "—"],
+        ["Time servers", n.timeservers.join(", ") || "—"],
+        ["Orphan mode", n.orphan ?? "—"],
+        ["Leap second policy", n.leapsec ?? "—"],
+      ]}
+    />
+  );
+}
+
+function SnmpdPanel({ s }: { s: SnmpdConfig }) {
+  return (
+    <Dl
+      items={[
+        ["Enabled", s.enable ? "yes" : "no"],
+        ["Location", s.syslocation ?? "—"],
+        ["Contact", s.syscontact ?? "—"],
+        ["Poll port", s.pollport ?? "—"],
+        ["Bind", s.bindlan ? "LAN" : s.bindip ?? "—"],
+        ["RO community", <RV v={s.rocommunity} key="ro" />],
+        ["RW community", <RV v={s.rwcommunity} key="rw" />],
+        [
+          "Traps",
+          s.trapenable
+            ? `${s.trapserver ?? "?"}:${s.trapserverport ?? "?"}`
+            : "disabled",
+        ],
+      ]}
+    />
+  );
+}
+
+function SyslogPanel({ s }: { s: SyslogConfig }) {
+  const filters = [
+    ["system", s.system],
+    ["filter", s.filter_],
+    ["dhcp", s.dhcp],
+    ["portalauth", s.portalauth],
+    ["vpn", s.vpn],
+    ["dpinger", s.dpinger],
+    ["hostapd", s.hostapd],
+    ["resolver", s.resolver],
+    ["ppp", s.ppp],
+    ["routing", s.routing],
+    ["ntpd", s.ntpd],
+  ]
+    .filter(([, on]) => on)
+    .map(([k]) => k as string);
+  return (
+    <Dl
+      items={[
+        ["Enabled", s.enable ? "yes" : "no"],
+        ["Reverse display", s.reverse ? "yes" : "no"],
+        ["Local buffer entries", s.nentries ?? "—"],
+        [
+          "Remote destinations",
+          s.hosts.length > 0 ? s.hosts.map((h) => h.host).join(", ") : "—",
+        ],
+        ["Filters", filters.length ? filters.join(", ") : "—"],
+      ]}
+    />
+  );
+}
+
+function SchedulesTable({ rows }: { rows: Schedule[] }) {
+  return (
+    <Table
+      headers={["Name", "Description", "Time ranges"]}
+      rows={rows.map((s) => [
+        s.name,
+        s.descr ?? "—",
+        <span key="tr" className="font-mono text-xs">
+          {s.time_ranges.join(" · ") || "—"}
+        </span>,
+      ])}
+    />
+  );
+}
+
+function ShaperTable({ rows }: { rows: ShaperQueue[] }) {
+  return (
+    <Table
+      headers={["Name", "Interface", "Priority", "Bandwidth", "Description"]}
+      rows={rows.map((q) => [
+        q.name,
+        q.interface ?? "—",
+        q.priority ?? "—",
+        q.bandwidth
+          ? `${q.bandwidth}${q.bandwidthtype ? " " + q.bandwidthtype : ""}`
+          : "—",
+        q.descr ?? "—",
+      ])}
+    />
+  );
+}
+
+function DnShaperTable({ rows }: { rows: DnShaperPipe[] }) {
+  return (
+    <Table
+      headers={["Name", "Number", "Bandwidth", "Description"]}
+      rows={rows.map((p) => [
+        p.name,
+        p.number ?? "—",
+        p.bandwidth
+          ? `${p.bandwidth}${p.bandwidthtype ? " " + p.bandwidthtype : ""}`
+          : "—",
+        p.descr ?? "—",
+      ])}
+    />
+  );
+}
+
+function LoadBalancerPanel({
+  pools,
+  vservers,
+}: {
+  pools: LoadBalancerPool[];
+  vservers: LoadBalancerVirtualServer[];
+}) {
+  return (
+    <div className="space-y-3">
+      {pools.length > 0 && (
+        <div>
+          <div className="mb-1 text-xs uppercase text-muted-fg">Pools</div>
+          <Table
+            headers={["Name", "Behaviour", "Port", "Monitor", "Members", "Description"]}
+            rows={pools.map((p) => [
+              p.name,
+              p.behaviour ?? "—",
+              p.port ?? "—",
+              p.monitor ?? "—",
+              p.servers
+                .map((m) => (m.port ? `${m.ip}:${m.port}` : m.ip ?? "?"))
+                .join(", ") || "—",
+              p.descr ?? "—",
+            ])}
+          />
+        </div>
+      )}
+      {vservers.length > 0 && (
+        <div>
+          <div className="mb-1 text-xs uppercase text-muted-fg">
+            Virtual servers
+          </div>
+          <Table
+            headers={["Name", "Address", "Port", "Mode", "Pool", "Description"]}
+            rows={vservers.map((v) => [
+              v.name,
+              v.ipaddr ?? "—",
+              v.port ?? "—",
+              v.mode ?? "—",
+              v.poolname ?? "—",
+              v.descr ?? "—",
+            ])}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CaptivePortalTable({ rows }: { rows: CaptivePortalZone[] }) {
+  return (
+    <Table
+      headers={["Zone", "Zone ID", "Enabled", "Interfaces", "Auth", "RADIUS", "Redirect"]}
+      rows={rows.map((z) => [
+        z.zone,
+        z.zoneid ?? "—",
+        z.enable ? "yes" : "no",
+        z.interfaces.join(", ") || "—",
+        z.auth_method ?? "—",
+        z.radius_secret === "***redacted***" ? <Redacted /> : "—",
+        z.redirurl ?? "—",
+      ])}
     />
   );
 }

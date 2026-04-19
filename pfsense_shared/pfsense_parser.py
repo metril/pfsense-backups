@@ -55,6 +55,9 @@ from .pfsense_sections import (
     services as _services,
 )
 from .pfsense_sections import (
+    services_extra as _services_extra,
+)
+from .pfsense_sections import (
     sysctl as _sysctl,
 )
 from .pfsense_sections import (
@@ -71,6 +74,18 @@ from .pfsense_sections.nat import NatRule
 from .pfsense_sections.revision import Revision
 from .pfsense_sections.routing import Gateway, GatewayGroup, StaticRoute
 from .pfsense_sections.services import DhcpServer, DnsConfig
+from .pfsense_sections.services_extra import (
+    CaptivePortalZone,
+    DhcpRelayConfig,
+    DnShaperPipe,
+    LoadBalancerPool,
+    LoadBalancerVirtualServer,
+    NtpdConfig,
+    Schedule,
+    ShaperQueue,
+    SnmpdConfig,
+    SyslogConfig,
+)
 from .pfsense_sections.sysctl import SysctlTunable
 from .pfsense_sections.system import SystemInfo
 
@@ -170,7 +185,17 @@ class ParsedConfig(BaseModel):
     nat_rules: list[NatRule] = []
     aliases: list[Alias] = []
     dhcp_servers: list[DhcpServer] = []
+    dhcp_relays: list[DhcpRelayConfig] = []
     dns: DnsConfig | None = None
+    ntpd: NtpdConfig | None = None
+    snmpd: SnmpdConfig | None = None
+    syslog: SyslogConfig | None = None
+    schedules: list[Schedule] = []
+    shaper_queues: list[ShaperQueue] = []
+    dnshaper_pipes: list[DnShaperPipe] = []
+    lb_pools: list[LoadBalancerPool] = []
+    lb_virtual_servers: list[LoadBalancerVirtualServer] = []
+    captive_portal_zones: list[CaptivePortalZone] = []
     users: list[User] = []
     groups: list[Group] = []
     authservers: list[AuthServer] = []
@@ -197,6 +222,7 @@ def parse(xml_bytes: bytes | str) -> ParsedConfig:
     # pfSense wraps everything in ``<pfsense>``; defusedxml gives us that
     # element as the root.
     gws, ggroups = _routing.parse_gateways(root)
+    lb_pools, lb_vservers = _services_extra.parse_load_balancer(root)
     ver_el = root.find("version")
     result = ParsedConfig(
         config_version=(ver_el.text or None) if ver_el is not None else None,
@@ -221,7 +247,17 @@ def parse(xml_bytes: bytes | str) -> ParsedConfig:
         nat_rules=_nat.parse(root),
         aliases=_aliases.parse(root),
         dhcp_servers=_services.parse_dhcp(root),
+        dhcp_relays=_services_extra.parse_dhcp_relay(root),
         dns=_services.parse_dns(root),
+        ntpd=_services_extra.parse_ntpd(root),
+        snmpd=_services_extra.parse_snmpd(root),
+        syslog=_services_extra.parse_syslog(root),
+        schedules=_services_extra.parse_schedules(root),
+        shaper_queues=_services_extra.parse_shaper(root),
+        dnshaper_pipes=_services_extra.parse_dnshaper(root),
+        lb_pools=lb_pools,
+        lb_virtual_servers=lb_vservers,
+        captive_portal_zones=_services_extra.parse_captive_portal(root),
         users=_auth.parse_users(root),
         groups=_auth.parse_groups(root),
         authservers=_auth.parse_authservers(root),

@@ -99,7 +99,17 @@ class ConfigDiff(BaseModel):
     nat_rules: SectionDiff = SectionDiff()
     aliases: SectionDiff = SectionDiff()
     dhcp_servers: SectionDiff = SectionDiff()
+    dhcp_relays: SectionDiff = SectionDiff()
     dns: SectionDiff = SectionDiff()
+    ntpd: SectionDiff = SectionDiff()
+    snmpd: SectionDiff = SectionDiff()
+    syslog: SectionDiff = SectionDiff()
+    schedules: SectionDiff = SectionDiff()
+    shaper_queues: SectionDiff = SectionDiff()
+    dnshaper_pipes: SectionDiff = SectionDiff()
+    lb_pools: SectionDiff = SectionDiff()
+    lb_virtual_servers: SectionDiff = SectionDiff()
+    captive_portal_zones: SectionDiff = SectionDiff()
     users: SectionDiff = SectionDiff()
     groups: SectionDiff = SectionDiff()
     authservers: SectionDiff = SectionDiff()
@@ -156,7 +166,37 @@ def diff_configs(a: ParsedConfig, b: ParsedConfig) -> ConfigDiff:
         dhcp_servers=_diff_list(
             a.dhcp_servers, b.dhcp_servers, key="interface", label_fn=_label_dhcp
         ),
+        dhcp_relays=_diff_list(
+            a.dhcp_relays, b.dhcp_relays, key="kind", label_fn=_label_dhcp_relay
+        ),
         dns=_diff_optional_model(a.dns, b.dns, "dns"),
+        ntpd=_diff_optional_model(a.ntpd, b.ntpd, "ntpd"),
+        snmpd=_diff_optional_model(a.snmpd, b.snmpd, "snmpd"),
+        syslog=_diff_optional_model(a.syslog, b.syslog, "syslog"),
+        schedules=_diff_list(
+            a.schedules, b.schedules, key="name", label_fn=_label_named
+        ),
+        shaper_queues=_diff_list(
+            a.shaper_queues, b.shaper_queues, key="name", label_fn=_label_queue
+        ),
+        dnshaper_pipes=_diff_list(
+            a.dnshaper_pipes, b.dnshaper_pipes, key="name", label_fn=_label_named
+        ),
+        lb_pools=_diff_list(
+            a.lb_pools, b.lb_pools, key="name", label_fn=_label_named
+        ),
+        lb_virtual_servers=_diff_list(
+            a.lb_virtual_servers,
+            b.lb_virtual_servers,
+            key="name",
+            label_fn=_label_named,
+        ),
+        captive_portal_zones=_diff_list(
+            a.captive_portal_zones,
+            b.captive_portal_zones,
+            key="zone",
+            label_fn=_label_portal,
+        ),
         users=_diff_list(a.users, b.users, key="name", label_fn=_label_named),
         groups=_diff_list(a.groups, b.groups, key="name", label_fn=_label_named),
         authservers=_diff_list(
@@ -243,6 +283,25 @@ def _label_wol(m: dict[str, Any]) -> str:
     descr = m.get("descr") or ""
     suffix = " — ".join(x for x in (iface, descr) if x)
     return f"{m.get('mac') or '?'}{' — ' + suffix if suffix else ''}"
+
+
+def _label_dhcp_relay(m: dict[str, Any]) -> str:
+    kind = m.get("kind") or "?"
+    ifs = m.get("interface") or []
+    servers = m.get("server") or []
+    return f"dhcrelay [{kind}] if={','.join(ifs) or '?'} → {','.join(servers) or '?'}"
+
+
+def _label_queue(m: dict[str, Any]) -> str:
+    iface = m.get("interface") or ""
+    name = m.get("name") or "?"
+    return f"{name} ({iface})" if iface else name
+
+
+def _label_portal(m: dict[str, Any]) -> str:
+    zone = m.get("zone") or "?"
+    ifaces = m.get("interfaces") or []
+    return f"{zone} on {','.join(ifaces) or '?'}"
 
 
 def _label_vip(m: dict[str, Any]) -> str:

@@ -277,6 +277,118 @@ export interface DnsConfig {
   domain_overrides: DnsDomainOverride[];
 }
 
+export interface NtpdConfig {
+  enable: boolean;
+  interfaces: string[];
+  timeservers: string[];
+  orphan: string | null;
+  leapsec: string | null;
+}
+
+export interface SnmpdConfig {
+  enable: boolean;
+  syslocation: string | null;
+  syscontact: string | null;
+  rocommunity: string | null;
+  rwcommunity: string | null;
+  pollport: string | null;
+  trapenable: boolean;
+  trapserver: string | null;
+  trapserverport: string | null;
+  trapstring: string | null;
+  bindlan: boolean;
+  bindip: string | null;
+}
+
+export interface SyslogHost {
+  key: string;
+  host: string;
+  sourceip: string | null;
+  ipprotocol: string | null;
+}
+
+export interface SyslogConfig {
+  enable: boolean;
+  reverse: boolean;
+  nentries: string | null;
+  filter_: boolean;
+  dhcp: boolean;
+  portalauth: boolean;
+  vpn: boolean;
+  dpinger: boolean;
+  hostapd: boolean;
+  system: boolean;
+  resolver: boolean;
+  ppp: boolean;
+  routing: boolean;
+  ntpd: boolean;
+  hosts: SyslogHost[];
+}
+
+export interface DhcpRelayConfig {
+  kind: "ipv4" | "ipv6";
+  enable: boolean;
+  interface: string[];
+  server: string[];
+  agentoption: boolean;
+}
+
+export interface Schedule {
+  name: string;
+  descr: string | null;
+  time_ranges: string[];
+}
+
+export interface ShaperQueue {
+  name: string;
+  interface: string | null;
+  priority: string | null;
+  bandwidth: string | null;
+  bandwidthtype: string | null;
+  descr: string | null;
+}
+
+export interface DnShaperPipe {
+  name: string;
+  number: string | null;
+  bandwidth: string | null;
+  bandwidthtype: string | null;
+  descr: string | null;
+}
+
+export interface LoadBalancerPoolMember {
+  ip: string | null;
+  port: string | null;
+}
+
+export interface LoadBalancerPool {
+  name: string;
+  descr: string | null;
+  behaviour: string | null;
+  port: string | null;
+  monitor: string | null;
+  servers: LoadBalancerPoolMember[];
+}
+
+export interface LoadBalancerVirtualServer {
+  name: string;
+  descr: string | null;
+  ipaddr: string | null;
+  port: string | null;
+  mode: string | null;
+  poolname: string | null;
+}
+
+export interface CaptivePortalZone {
+  zone: string;
+  zoneid: string | null;
+  enable: boolean;
+  interfaces: string[];
+  auth_method: string | null;
+  redirurl: string | null;
+  radius_secret: string | null;
+}
+
 export interface User {
   name: string;
   uid: string | null;
@@ -339,7 +451,17 @@ export interface ParsedConfig {
   nat_rules: NatRule[];
   aliases: Alias[];
   dhcp_servers: DhcpServer[];
+  dhcp_relays: DhcpRelayConfig[];
   dns: DnsConfig | null;
+  ntpd: NtpdConfig | null;
+  snmpd: SnmpdConfig | null;
+  syslog: SyslogConfig | null;
+  schedules: Schedule[];
+  shaper_queues: ShaperQueue[];
+  dnshaper_pipes: DnShaperPipe[];
+  lb_pools: LoadBalancerPool[];
+  lb_virtual_servers: LoadBalancerVirtualServer[];
+  captive_portal_zones: CaptivePortalZone[];
   users: User[];
   groups: Group[];
   authservers: AuthServer[];
@@ -397,7 +519,17 @@ export interface ConfigDiff {
   nat_rules: SectionDiff;
   aliases: SectionDiff;
   dhcp_servers: SectionDiff;
+  dhcp_relays: SectionDiff;
   dns: SectionDiff;
+  ntpd: SectionDiff;
+  snmpd: SectionDiff;
+  syslog: SectionDiff;
+  schedules: SectionDiff;
+  shaper_queues: SectionDiff;
+  dnshaper_pipes: SectionDiff;
+  lb_pools: SectionDiff;
+  lb_virtual_servers: SectionDiff;
+  captive_portal_zones: SectionDiff;
   users: SectionDiff;
   groups: SectionDiff;
   authservers: SectionDiff;
