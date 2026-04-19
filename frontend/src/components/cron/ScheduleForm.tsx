@@ -314,7 +314,10 @@ export function ScheduleForm({
                         emit({ ...state, days: nextDays });
                       }}
                       className={cn(
-                        "rounded-md px-2.5 py-1 text-xs tabular-nums",
+                        // w-12 + text-center keeps every pill the same width
+                        // regardless of Mon vs Wed vs Fri etc., so the row
+                        // reads as a single segmented control.
+                        "w-12 rounded-md py-1 text-center text-xs tabular-nums",
                         active
                           ? "bg-accent text-accent-fg"
                           : "border border-border text-fg hover:bg-muted",

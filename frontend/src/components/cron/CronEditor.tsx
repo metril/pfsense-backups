@@ -60,7 +60,11 @@ export function CronEditor({
     <div className="space-y-3">
       <ScheduleForm value={value} onChange={onChange} />
 
-      {onTimezoneChange && (
+      {/* Timezone only makes sense when a schedule is actually running —
+          cron_timezone is consumed only by the scheduler. Hide the picker
+          (and the description + next-runs preview) when the user has
+          disabled scheduling, to reduce visual noise. */}
+      {value !== null && onTimezoneChange && (
         // Real <select> (not an <input list>) — datalists render unreliably
         // inside portal-rendered modals on some browsers, which made the TZ
         // "dropdown" look stuck.
@@ -98,13 +102,13 @@ export function CronEditor({
         </div>
       )}
 
-      {error ? (
+      {value !== null && (error ? (
         <p className="text-xs text-danger">{error}</p>
       ) : (
         <p className="text-xs text-muted-fg">{description}</p>
-      )}
+      ))}
 
-      {nextRuns.length > 0 && (
+      {value !== null && nextRuns.length > 0 && (
         <ul className="space-y-0.5 text-xs text-muted-fg">
           {nextRuns.map((r) => (
             <li key={r}>Next: {new Date(r).toLocaleString()}</li>
