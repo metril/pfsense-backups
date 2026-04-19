@@ -163,7 +163,8 @@ class InstanceCreate(BaseModel):
     verify_ssl: bool = False
     timeout_seconds: int = Field(default=30, ge=1, le=3600)
     cron_expression: str | None = None
-    cron_timezone: str = "UTC"
+    # null = inherit BackupSettings.default_timezone.
+    cron_timezone: str | None = None
     enabled: bool = True
     retention_count: int = Field(default=365, ge=0, le=10000)
     compress: bool = False
@@ -222,7 +223,7 @@ class InstanceRead(BaseModel):
     verify_ssl: bool
     timeout_seconds: int
     cron_expression: str | None
-    cron_timezone: str
+    cron_timezone: str | None
     enabled: bool
     retention_count: int
     compress: bool
@@ -314,12 +315,14 @@ class BackupSettingsRead(BaseModel):
     filename_format: str
     timestamp_format: str
     directory: str
+    default_timezone: str
 
 
 class BackupSettingsUpdate(BaseModel):
     filename_format: str | None = None
     timestamp_format: str | None = None
     directory: str | None = None
+    default_timezone: str | None = None
 
 
 class LoggingSettingsRead(BaseModel):
@@ -336,5 +339,6 @@ class LoggingSettingsUpdate(BaseModel):
 
 class ScheduleUpdate(BaseModel):
     cron_expression: str | None = None
-    cron_timezone: str = "UTC"
+    # null = inherit BackupSettings.default_timezone.
+    cron_timezone: str | None = None
     enabled: bool = True

@@ -134,14 +134,21 @@ async def update_instance(
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from None
 
+    # Track which fields the client actually sent so a deliberate ``null``
+    # (e.g. clearing the cron_timezone override) can write through instead
+    # of being treated as "not provided". Fields not in ``sent`` are left
+    # untouched on the row.
+    sent = payload.model_dump(exclude_unset=True)
     changed: dict[str, Any] = {}
     for field in (
         "name", "url", "subfolder", "backup_prefix", "verify_ssl",
         "timeout_seconds", "cron_expression", "cron_timezone",
         "enabled", "retention_count", "compress",
     ):
-        val = getattr(payload, field)
-        if val is not None and getattr(inst, field) != val:
+        if field not in sent:
+            continue
+        val = sent[field]
+        if getattr(inst, field) != val:
             setattr(inst, field, val)
             changed[field] = val
     if payload.username is not None:

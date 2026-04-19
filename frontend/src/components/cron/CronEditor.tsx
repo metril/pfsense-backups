@@ -6,36 +6,31 @@ import { useEffect, useMemo, useState } from "react";
 import cronstrue from "cronstrue";
 import cronParser from "cron-parser";
 import { cn } from "@/lib/cn";
+import { supportedTimezones } from "@/lib/timezones";
 import { ScheduleForm } from "./ScheduleForm";
-
-// M12: Intl.supportedValuesOf is widely available in evergreen browsers;
-// fall back to a short curated list if missing so the app still works.
-function supportedTimezones(): string[] {
-  try {
-    const fn = (Intl as unknown as { supportedValuesOf?: (k: string) => string[] })
-      .supportedValuesOf;
-    if (typeof fn === "function") return fn("timeZone");
-  } catch {
-    // swallow
-  }
-  return ["UTC", "America/Los_Angeles", "America/New_York", "Europe/London", "Europe/Berlin"];
-}
 
 export function CronEditor({
   value,
   onChange,
-  timezone = "UTC",
+  timezone,
+  globalTimezone,
   onTimezoneChange,
 }: {
   value: string | null;
   onChange: (v: string | null) => void;
-  timezone?: string;
-  onTimezoneChange?: (v: string) => void;
+  /** Per-instance override. null = inherit globalTimezone. */
+  timezone: string | null;
+  /** Global default from BackupSettings.default_timezone. */
+  globalTimezone: string;
+  /** Pass null to clear the per-instance override back to "inherit". */
+  onTimezoneChange?: (v: string | null) => void;
 }) {
   const [description, setDescription] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [nextRuns, setNextRuns] = useState<string[]>([]);
   const tzList = useMemo(supportedTimezones, []);
+
+  const effectiveTz = timezone ?? globalTimezone;
 
   useEffect(() => {
     if (!value) {
@@ -46,7 +41,7 @@ export function CronEditor({
     }
     try {
       setDescription(cronstrue.toString(value, { use24HourTimeFormat: true }));
-      const it = cronParser.parseExpression(value, { tz: timezone });
+      const it = cronParser.parseExpression(value, { tz: effectiveTz });
       setNextRuns([it.next().toISOString(), it.next().toISOString(), it.next().toISOString()]);
       setError(null);
     } catch (e) {
@@ -54,51 +49,74 @@ export function CronEditor({
       setNextRuns([]);
       setDescription("");
     }
-  }, [value, timezone]);
+  }, [value, effectiveTz]);
+
+  const overrideActive = timezone != null;
 
   return (
     <div className="space-y-3">
       <ScheduleForm value={value} onChange={onChange} />
 
-      {/* Timezone only makes sense when a schedule is actually running —
-          cron_timezone is consumed only by the scheduler. Hide the picker
-          (and the description + next-runs preview) when the user has
-          disabled scheduling, to reduce visual noise. */}
+      {/* Timezone only makes sense when a schedule is actually running. */}
       {value !== null && onTimezoneChange && (
-        // Real <select> (not an <input list>) — datalists render unreliably
-        // inside portal-rendered modals on some browsers, which made the TZ
-        // "dropdown" look stuck.
-        <div>
-          <label className="block text-xs text-muted-fg" htmlFor="tz-picker">
-            Timezone
-          </label>
-          <select
-            id="tz-picker"
-            value={tzList.includes(timezone) ? timezone : "__custom__"}
-            onChange={(e) => {
-              const v = e.target.value;
-              if (v !== "__custom__") onTimezoneChange(v);
-            }}
-            aria-label="Timezone"
-            className={cn(
-              "mt-1 h-9 w-full rounded-md border border-border bg-bg px-3 text-sm",
-              "focus-visible:border-accent focus-visible:outline-none",
-            )}
-          >
-            {/* If the saved tz isn't in the browser's IANA list (e.g. an older
-                snapshot), keep it visible as a disabled option so the user
-                doesn't silently have it overwritten. */}
-            {!tzList.includes(timezone) && (
-              <option value="__custom__" disabled>
-                {timezone} (not in browser list)
-              </option>
-            )}
-            {tzList.map((tz) => (
-              <option key={tz} value={tz}>
-                {tz}
-              </option>
-            ))}
-          </select>
+        <div className="space-y-2">
+          {!overrideActive ? (
+            // Inheriting the global default — show a compact summary line
+            // with a link to reveal the picker. Keeps the editor uncluttered
+            // for the 95% case.
+            <div className="text-xs">
+              <span className="text-muted-fg">Runs in </span>
+              <span className="font-mono">{globalTimezone}</span>
+              <span className="text-muted-fg"> (global default)</span>
+              <button
+                type="button"
+                onClick={() => onTimezoneChange(globalTimezone)}
+                className="ml-2 text-accent hover:underline"
+              >
+                Use a different timezone for this instance →
+              </button>
+            </div>
+          ) : (
+            <div>
+              <div className="flex items-center justify-between">
+                <label className="text-xs text-muted-fg" htmlFor="tz-picker">
+                  Timezone override
+                </label>
+                <button
+                  type="button"
+                  onClick={() => onTimezoneChange(null)}
+                  className="text-xs text-muted-fg hover:text-accent"
+                  title="Clear override and inherit the global default"
+                >
+                  Use global ({globalTimezone})
+                </button>
+              </div>
+              <select
+                id="tz-picker"
+                value={tzList.includes(timezone!) ? timezone! : "__custom__"}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v !== "__custom__") onTimezoneChange(v);
+                }}
+                aria-label="Timezone override"
+                className={cn(
+                  "mt-1 h-9 w-full rounded-md border border-border bg-bg px-3 text-sm",
+                  "focus-visible:border-accent focus-visible:outline-none",
+                )}
+              >
+                {!tzList.includes(timezone!) && (
+                  <option value="__custom__" disabled>
+                    {timezone} (not in browser list)
+                  </option>
+                )}
+                {tzList.map((tz) => (
+                  <option key={tz} value={tz}>
+                    {tz}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
       )}
 

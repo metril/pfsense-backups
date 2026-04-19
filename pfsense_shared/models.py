@@ -31,7 +31,11 @@ class Instance(Base):
     timeout_seconds: Mapped[int] = mapped_column(Integer, default=30)
 
     cron_expression: Mapped[str | None] = mapped_column(String(64), default=None, nullable=True)
-    cron_timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    # null = inherit BackupSettings.default_timezone. A non-null string here
+    # is the per-instance override the UI exposes behind a disclosure.
+    cron_timezone: Mapped[str | None] = mapped_column(
+        String(64), default=None, nullable=True
+    )
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
     retention_count: Mapped[int] = mapped_column(Integer, default=365)
@@ -58,6 +62,9 @@ class BackupSettings(Base):
     )
     timestamp_format: Mapped[str] = mapped_column(String(64), default="%Y-%m-%d_%H-%M-%S")
     directory: Mapped[str] = mapped_column(String(512), default="/backups")
+    # Global default scheduler timezone. Applied whenever Instance.cron_timezone
+    # is NULL. Consumed by worker/scheduler + web/routers/schedule.
+    default_timezone: Mapped[str] = mapped_column(String(64), default="UTC")
 
 
 class LoggingSettings(Base):

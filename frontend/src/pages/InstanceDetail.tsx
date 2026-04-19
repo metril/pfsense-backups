@@ -168,8 +168,11 @@ export function InstanceDetailPage() {
           <div className="text-xs uppercase tracking-wider text-muted-fg">Schedule</div>
           <div className="mt-2 font-mono text-sm">
             {inst.cron_expression ?? <span className="text-muted-fg">none</span>}
-            {inst.cron_expression && (
-              <span className="ml-2 text-xs text-muted-fg">({inst.cron_timezone})</span>
+            {inst.cron_expression && schedule?.effective_timezone && (
+              <span className="ml-2 text-xs text-muted-fg">
+                ({schedule.effective_timezone}
+                {inst.cron_timezone === null && " · global"})
+              </span>
             )}
           </div>
           {schedule?.description && (

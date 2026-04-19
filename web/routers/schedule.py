@@ -7,21 +7,27 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import select
 
-from pfsense_shared.models import Instance
+from pfsense_shared.models import BackupSettings, Instance
 from pfsense_shared.schemas import ReloadScheduleCommand, ScheduleUpdate
 
 from ..dependencies import CurrentUser, DbSession, Ipc
 from ..services import audit
-from ..services.cron_utils import describe, next_runs, validate, validate_tz
+from ..services.cron_utils import describe, next_runs, resolve_tz, validate, validate_tz
 
 router = APIRouter(prefix="/api/schedule", tags=["schedule"])
 
 
-def _schedule_row(inst: Instance) -> dict[str, Any]:
+async def _get_default_tz(db: DbSession) -> str:
+    bs = await db.get(BackupSettings, 1)
+    return (bs.default_timezone if bs else None) or "UTC"
+
+
+def _schedule_row(inst: Instance, default_tz: str) -> dict[str, Any]:
+    effective_tz = resolve_tz(inst.cron_timezone, default_tz)
     description = describe(inst.cron_expression) if inst.cron_expression else ""
     try:
         nxt = (
-            [r.isoformat() for r in next_runs(inst.cron_expression, inst.cron_timezone, 3)]
+            [r.isoformat() for r in next_runs(inst.cron_expression, effective_tz, 3)]
             if inst.cron_expression
             else []
         )
@@ -31,7 +37,10 @@ def _schedule_row(inst: Instance) -> dict[str, Any]:
         "instance_id": inst.id,
         "instance_name": inst.name,
         "cron_expression": inst.cron_expression,
+        # cron_timezone carries the override (null or string);
+        # effective_timezone is what the scheduler will actually use.
         "cron_timezone": inst.cron_timezone,
+        "effective_timezone": effective_tz,
         "enabled": inst.enabled,
         "description": description,
         "next_runs": nxt,
@@ -40,8 +49,9 @@ def _schedule_row(inst: Instance) -> dict[str, Any]:
 
 @router.get("")
 async def list_schedules(db: DbSession) -> list[dict[str, Any]]:
+    default_tz = await _get_default_tz(db)
     rows = (await db.scalars(select(Instance).order_by(Instance.name))).all()
-    return [_schedule_row(r) for r in rows]
+    return [_schedule_row(r, default_tz) for r in rows]
 
 
 @router.get("/{instance_id}")
@@ -49,7 +59,8 @@ async def get_schedule(instance_id: int, db: DbSession) -> dict[str, Any]:
     inst = await db.get(Instance, instance_id)
     if inst is None:
         raise HTTPException(404, "instance not found")
-    return _schedule_row(inst)
+    default_tz = await _get_default_tz(db)
+    return _schedule_row(inst, default_tz)
 
 
 @router.put("/{instance_id}")
@@ -69,10 +80,12 @@ async def put_schedule(
             validate(payload.cron_expression)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from None
-    try:
-        validate_tz(payload.cron_timezone)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from None
+    # cron_timezone is null-ok (means "inherit global"); only validate when set.
+    if payload.cron_timezone is not None:
+        try:
+            validate_tz(payload.cron_timezone)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from None
 
     inst.cron_expression = payload.cron_expression
     inst.cron_timezone = payload.cron_timezone
@@ -92,7 +105,8 @@ async def put_schedule(
     )
     await db.commit()
     await ipc.send(ReloadScheduleCommand(instance_id=instance_id))
-    return _schedule_row(inst)
+    default_tz = await _get_default_tz(db)
+    return _schedule_row(inst, default_tz)
 
 
 @router.get("/_tools/preview")

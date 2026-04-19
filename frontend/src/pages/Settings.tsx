@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Label } from "@/components/ui/Label";
+import { cn } from "@/lib/cn";
+import { supportedTimezones } from "@/lib/timezones";
 import { useSettings, useUpdateBackupSettings, useUpdateLoggingSettings } from "@/api/queries";
 
 export function SettingsPage() {
@@ -9,10 +11,14 @@ export function SettingsPage() {
   const updateBackup = useUpdateBackupSettings();
   const updateLogging = useUpdateLoggingSettings();
 
-  const [backup, setBackup] = useState<{ filename_format: string; timestamp_format: string; directory: string }>(
-    { filename_format: "", timestamp_format: "", directory: "" },
-  );
+  const [backup, setBackup] = useState<{
+    filename_format: string;
+    timestamp_format: string;
+    directory: string;
+    default_timezone: string;
+  }>({ filename_format: "", timestamp_format: "", directory: "", default_timezone: "UTC" });
   const [logging, setLogging] = useState<{ level: string; format: string }>({ level: "INFO", format: "" });
+  const tzList = useMemo(supportedTimezones, []);
 
   useEffect(() => {
     if (settings.data?.backup) setBackup(settings.data.backup);
@@ -35,6 +41,35 @@ export function SettingsPage() {
         </Field>
         <Field label="Directory">
           <Input value={backup.directory} onChange={(e) => setBackup({ ...backup, directory: e.target.value })} />
+        </Field>
+        <Field label="Default scheduler timezone">
+          <select
+            value={tzList.includes(backup.default_timezone) ? backup.default_timezone : "__custom__"}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v !== "__custom__") setBackup({ ...backup, default_timezone: v });
+            }}
+            aria-label="Default scheduler timezone"
+            className={cn(
+              "h-9 w-full rounded-md border border-border bg-bg px-3 text-sm",
+              "focus-visible:border-accent focus-visible:outline-none",
+            )}
+          >
+            {!tzList.includes(backup.default_timezone) && (
+              <option value="__custom__" disabled>
+                {backup.default_timezone} (not in browser list)
+              </option>
+            )}
+            {tzList.map((tz) => (
+              <option key={tz} value={tz}>
+                {tz}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-xs text-muted-fg">
+            Used for every instance's schedule unless that instance sets its own override.
+            Changing this tells the worker to reload every cron trigger.
+          </p>
         </Field>
         <div className="flex justify-end">
           <Button onClick={() => updateBackup.mutate(backup)} disabled={updateBackup.isPending}>

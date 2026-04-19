@@ -13,7 +13,7 @@ from apscheduler.triggers.cron import CronTrigger
 from croniter import croniter
 from sqlalchemy.orm import sessionmaker
 
-from pfsense_shared.models import Instance, Job
+from pfsense_shared.models import BackupSettings, Instance, Job
 from pfsense_shared.schemas import ScheduleReloaded
 
 from .instance_locks import InstanceLocks
@@ -82,21 +82,34 @@ class Scheduler:
     # job management
     # -------------------------------------------------------------- #
 
+    def _default_tz(self, session) -> str:  # type: ignore[no-untyped-def]
+        """Read the global default timezone from BackupSettings singleton.
+
+        Falls back to ``UTC`` if the row is missing (first-boot edge case)
+        so the caller never hands APScheduler an empty string.
+        """
+        settings = session.query(BackupSettings).filter(BackupSettings.id == 1).one_or_none()
+        return (settings.default_timezone if settings else None) or "UTC"
+
     def load_all_jobs(self) -> None:
         """(Re)install APScheduler jobs for every enabled instance with a cron_expression."""
         with self._session_factory() as s:
+            default_tz = self._default_tz(s)
             instances = s.query(Instance).filter(Instance.enabled.is_(True)).all()
             for inst in instances:
-                self._add_or_update(inst.id, inst.name, inst.cron_expression, inst.cron_timezone)
+                effective_tz = inst.cron_timezone or default_tz
+                self._add_or_update(inst.id, inst.name, inst.cron_expression, effective_tz)
 
     def reload_instance(self, instance_id: int) -> None:
         with self._session_factory() as s:
             inst = s.get(Instance, instance_id)
+            default_tz = self._default_tz(s)
         if inst is None or not inst.enabled or not inst.cron_expression:
             name = inst.name if inst is not None else None
             self._remove(instance_id, name=name)
         else:
-            self._add_or_update(inst.id, inst.name, inst.cron_expression, inst.cron_timezone)
+            effective_tz = inst.cron_timezone or default_tz
+            self._add_or_update(inst.id, inst.name, inst.cron_expression, effective_tz)
         self._publisher.publish(
             ScheduleReloaded(instance_id=instance_id, ts=datetime.now(UTC))
         )

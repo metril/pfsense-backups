@@ -112,7 +112,7 @@ function Tile({
         <Row label="Schedule">
           {schedule?.cron_expression ? (
             <span title={schedule.description}>
-              {schedule.cron_expression} ({schedule.cron_timezone})
+              {schedule.cron_expression} ({schedule.effective_timezone})
             </span>
           ) : (
             <span className="text-muted-fg">none</span>

@@ -16,7 +16,8 @@ export interface Instance {
   verify_ssl: boolean;
   timeout_seconds: number;
   cron_expression: string | null;
-  cron_timezone: string;
+  /** null = inherit BackupSettings.default_timezone. */
+  cron_timezone: string | null;
   enabled: boolean;
   retention_count: number;
   compress: boolean;
@@ -34,7 +35,8 @@ export interface InstanceCreate {
   verify_ssl?: boolean;
   timeout_seconds?: number;
   cron_expression?: string | null;
-  cron_timezone?: string;
+  /** null = inherit BackupSettings.default_timezone. */
+  cron_timezone?: string | null;
   enabled?: boolean;
   retention_count?: number;
   compress?: boolean;
@@ -61,7 +63,10 @@ export interface ScheduleRow {
   instance_id: number;
   instance_name: string;
   cron_expression: string | null;
-  cron_timezone: string;
+  /** Override (null when instance is inheriting the global default). */
+  cron_timezone: string | null;
+  /** What the scheduler actually uses — cron_timezone ?? default_timezone. */
+  effective_timezone: string;
   enabled: boolean;
   description: string;
   next_runs: string[];
@@ -127,6 +132,7 @@ export interface SettingsBackup {
   filename_format: string;
   timestamp_format: string;
   directory: string;
+  default_timezone: string;
 }
 
 export interface SettingsLogging {

@@ -28,6 +28,16 @@ def validate_tz(tz: str) -> None:
         raise ValueError(f"unknown timezone: {tz!r}") from exc
 
 
+def resolve_tz(instance_tz: str | None, default_tz: str) -> str:
+    """Return the effective timezone for a scheduled job.
+
+    ``instance_tz`` is the per-instance override (``Instance.cron_timezone``);
+    ``default_tz`` is the global default (``BackupSettings.default_timezone``).
+    Null / empty override falls back to the global.
+    """
+    return instance_tz or default_tz or "UTC"
+
+
 def describe(cron: str) -> str:
     try:
         return ExpressionDescriptor(cron, use_24hour_time_format=True).get_description()

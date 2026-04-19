@@ -17,23 +17,13 @@ import {
   useImportBackups,
   useInstances,
   usePreflight,
+  useSettings,
   useTestConnection,
   useUpdateInstance,
 } from "@/api/queries";
 import type { Instance, InstanceCreate } from "@/api/types";
 
 type Draft = InstanceCreate & { id?: number };
-
-// Default new instances to the browser's local IANA timezone so users see
-// schedule times in the zone they actually live in. Saved instances keep
-// whatever tz they were stored with.
-function browserTz(): string {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-  } catch {
-    return "UTC";
-  }
-}
 
 const blank = (): Draft => ({
   name: "",
@@ -45,7 +35,8 @@ const blank = (): Draft => ({
   verify_ssl: false,
   timeout_seconds: 30,
   cron_expression: null,
-  cron_timezone: browserTz(),
+  // null = inherit the global default from BackupSettings.default_timezone.
+  cron_timezone: null,
   enabled: true,
   retention_count: 365,
   compress: false,
@@ -72,6 +63,8 @@ export function InstancesPage() {
   const test = useTestConnection();
   const backup = useBackupNow();
   const importBackups = useImportBackups();
+  const settings = useSettings();
+  const globalTimezone = settings.data?.backup?.default_timezone ?? "UTC";
   const toast = useToast();
   const confirm = useConfirm();
 
@@ -220,6 +213,7 @@ export function InstancesPage() {
         <EditorDialog
           key={editing.id ?? "new"}
           draft={editing}
+          globalTimezone={globalTimezone}
           onClose={() => setEditing(null)}
           onSave={async (d) => {
             if (d.id === undefined) {
@@ -257,7 +251,17 @@ function toDraft(inst: Instance): Draft {
   };
 }
 
-function EditorDialog({ draft, onClose, onSave }: { draft: Draft; onClose: () => void; onSave: (d: Draft) => Promise<void> }) {
+function EditorDialog({
+  draft,
+  globalTimezone,
+  onClose,
+  onSave,
+}: {
+  draft: Draft;
+  globalTimezone: string;
+  onClose: () => void;
+  onSave: (d: Draft) => Promise<void>;
+}) {
   const [d, setD] = useState(draft);
   const [saving, setSaving] = useState(false);
   const preflight = usePreflight();
@@ -344,7 +348,8 @@ function EditorDialog({ draft, onClose, onSave }: { draft: Draft; onClose: () =>
           <CronEditor
             value={d.cron_expression ?? null}
             onChange={(v) => setD({ ...d, cron_expression: v })}
-            timezone={d.cron_timezone ?? "UTC"}
+            timezone={d.cron_timezone ?? null}
+            globalTimezone={globalTimezone}
             onTimezoneChange={(v) => setD({ ...d, cron_timezone: v })}
           />
         </div>
