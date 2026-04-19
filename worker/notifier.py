@@ -25,6 +25,22 @@ from .prometheus_metrics import PrometheusMetrics
 log = logging.getLogger(__name__)
 
 
+# Per-outcome styling threaded into every channel so plain-text
+# channels get an emoji prefix and rich channels (Discord embeds,
+# Ntfy tags) get native decoration.
+#   (emoji, hex_color, ntfy_tag, label)
+_STYLE_SUCCESS = ("\N{WHITE HEAVY CHECK MARK}", 0x22C55E, "white_check_mark", "Backup succeeded")
+_STYLE_FAILURE = ("\N{CROSS MARK}", 0xEF4444, "x", "Backup failed")
+_STYLE_TEST = ("\N{BELL}", 0x3B82F6, "bell", "Test notification")
+_STYLE_START = ("\N{ROCKET}", 0x3B82F6, "rocket", "Backup run started")
+
+
+def _style(is_success: bool, is_test: bool) -> tuple[str, int, str, str]:
+    if is_test:
+        return _STYLE_TEST
+    return _STYLE_SUCCESS if is_success else _STYLE_FAILURE
+
+
 class Notifier:
     """Notification dispatcher. Session is supplied per-call so it stays thread-local."""
 
@@ -84,7 +100,12 @@ class Notifier:
             )
             # H8: one broken webhook must not silence the rest.
             try:
-                self._dispatch(hook, message, is_success=effective_success)
+                self._dispatch(
+                    hook,
+                    message,
+                    is_success=effective_success,
+                    failed_instances=scoped_failed,
+                )
             except Exception as exc:
                 log.error("Webhook %s failed; continuing: %s", hook.name, exc)
 
@@ -123,7 +144,7 @@ class Notifier:
                     select(Instance.id).where(Instance.enabled.is_(True))
                 ).all()
             }
-        lines = ["Backup run started"]
+        lines = [f"{_STYLE_START[0]} Backup run started"]
         if self._hostname:
             lines.append(f"Host: {self._hostname}")
         lines.append(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -159,7 +180,7 @@ class Notifier:
             # Test sends as a "success" for Healthchecks so the check
             # turns green rather than red; a red test would look like
             # a real failure on the user's dashboard.
-            self._dispatch(hook, msg, is_success=True)
+            self._dispatch(hook, msg, is_success=True, is_test=True, failed_instances=[])
             return True, "sent"
         except Exception as exc:
             return False, str(exc)
@@ -238,18 +259,36 @@ class Notifier:
             return {}
         return parsed if isinstance(parsed, dict) else {}
 
-    def _dispatch(self, hook: Notification, message: str, *, is_success: bool) -> None:
+    def _dispatch(
+        self,
+        hook: Notification,
+        message: str,
+        *,
+        is_success: bool,
+        is_test: bool = False,
+        failed_instances: list[str] | None = None,
+    ) -> None:
         kind = hook.kind or "webhook"
+        fi = failed_instances or []
         if kind == "discord":
-            self._send_discord(hook, message)
+            self._send_discord(
+                hook, message, is_success=is_success, is_test=is_test,
+                failed_instances=fi,
+            )
         elif kind == "home_assistant":
-            self._send_home_assistant(hook, message, is_success=is_success)
+            self._send_home_assistant(
+                hook, message, is_success=is_success, is_test=is_test,
+            )
         elif kind == "ntfy":
-            self._send_ntfy(hook, message, is_success=is_success)
+            self._send_ntfy(
+                hook, message, is_success=is_success, is_test=is_test,
+            )
         elif kind == "healthchecks":
             self._send_healthchecks(hook, message, is_success=is_success)
         else:
-            self._send_webhook(hook, message)
+            self._send_webhook(
+                hook, message, is_success=is_success, is_test=is_test,
+            )
 
     def _post(
         self,
@@ -282,61 +321,121 @@ class Notifier:
 
     # ---------- per-kind handlers ---------- #
 
-    def _send_discord(self, hook: Notification, message: str) -> None:
-        content = message
-        if len(content) > self._DISCORD_CONTENT_MAX:
-            log.warning(
-                "Truncating Discord content for %s from %d to %d chars",
-                hook.name,
-                len(content),
-                self._DISCORD_CONTENT_MAX,
+    def _send_discord(
+        self,
+        hook: Notification,
+        message: str,
+        *,
+        is_success: bool,
+        is_test: bool,
+        failed_instances: list[str],
+    ) -> None:
+        emoji, color, _tag, label = _style(is_success, is_test)
+        # Discord embed limits: title 256, description 4096, field value 1024.
+        description = message
+        if len(description) > 4000:
+            description = description[:3997] + "..."
+        embed: dict[str, Any] = {
+            "title": f"{emoji} {label}",
+            "description": description,
+            "color": color,
+            "timestamp": datetime.now().astimezone().isoformat(),
+            "footer": {"text": f"pfsense-backups · {hook.name}"},
+        }
+        fields: list[dict[str, Any]] = []
+        if failed_instances:
+            value = ", ".join(failed_instances)
+            if len(value) > 1000:
+                value = value[:997] + "..."
+            fields.append(
+                {"name": "Failed instances", "value": value, "inline": False}
             )
-            content = content[: self._DISCORD_CONTENT_MAX] + "..."
+        if self._hostname:
+            fields.append({"name": "Host", "value": self._hostname, "inline": True})
+        if fields:
+            embed["fields"] = fields
         self._post(
             hook,
             hook.url,
-            json_body={"content": content},
+            json_body={"embeds": [embed]},
             headers={"Content-Type": "application/json"},
         )
 
     def _send_home_assistant(
-        self, hook: Notification, message: str, *, is_success: bool
+        self,
+        hook: Notification,
+        message: str,
+        *,
+        is_success: bool,
+        is_test: bool,
     ) -> None:
+        emoji, color, _tag, label = _style(is_success, is_test)
         cfg = self._config(hook)
         token = str(cfg.get("access_token") or "")
         mode = str(cfg.get("mode") or "notify")
-        title = str(cfg.get("title") or "pfSense Backup")
+        base_title = str(cfg.get("title") or "pfSense Backup")
+        title = f"{emoji} {base_title}"
+        body_msg = f"{emoji} {message}"
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
         if mode == "webhook":
+            # HA webhook triggers can read any JSON; hand automations
+            # a rich payload so they can branch on status/color without
+            # string-parsing the message.
             body: dict[str, Any] = {
-                "message": message,
+                "message": body_msg,
                 "title": title,
                 "status": "success" if is_success else "failure",
+                "is_test": is_test,
+                "label": label,
+                "emoji": emoji,
+                "color": f"#{color:06x}",
             }
             if self._hostname:
                 body["host"] = self._hostname
         else:
-            body = {"message": message, "title": title}
+            # notify.<service>: some integrations (HA mobile app) read
+            # `data.color` / `data.notification_icon` for push styling.
+            # Other integrations just ignore unknown keys.
+            body = {
+                "message": body_msg,
+                "title": title,
+                "data": {
+                    "color": f"#{color:06x}",
+                    "notification_icon": "mdi:server-network",
+                    "tag": "pfsense-backups",
+                },
+            }
         self._post(hook, hook.url, json_body=body, headers=headers)
 
     def _send_ntfy(
-        self, hook: Notification, message: str, *, is_success: bool
+        self,
+        hook: Notification,
+        message: str,
+        *,
+        is_success: bool,
+        is_test: bool,
     ) -> None:
+        emoji, _color, default_tag, label = _style(is_success, is_test)
         cfg = self._config(hook)
-        headers: dict[str, str] = {"Title": "pfSense Backup"}
+        headers: dict[str, str] = {"Title": f"{emoji} {label}"}
         priority = cfg.get("priority")
         if priority:
             headers["Priority"] = str(priority)
-        elif not is_success:
+        elif not is_success and not is_test:
             # Bump failure pings above the default so the user's phone
             # actually wakes up; success pings stay silent by default.
             headers["Priority"] = "4"
+        # User-configured tags take precedence; fall back to the
+        # outcome-specific default emoji tag so the ntfy UI shows an
+        # icon even without any manual config.
         tags = cfg.get("tags")
         if isinstance(tags, list) and tags:
             headers["Tags"] = ",".join(str(t) for t in tags)
+        else:
+            headers["Tags"] = default_tag
         token = cfg.get("auth_token")
         if token:
             headers["Authorization"] = f"Bearer {token}"
@@ -353,13 +452,22 @@ class Notifier:
         base = hook.url.rstrip("/")
         if is_start:
             url = f"{base}/start"
+            emoji = _STYLE_START[0]
         elif is_success:
             url = base
+            emoji = _STYLE_SUCCESS[0]
         else:
             url = f"{base}/fail"
-        # Healthchecks truncates bodies; keep the POST small to stay
-        # within their 10KB-ish soft limit.
-        body = message.encode("utf-8")[:8192]
+            emoji = _STYLE_FAILURE[0]
+        # Prefix the emoji so the Healthchecks dashboard log line is
+        # visually distinguishable at a glance. Keep POST within the
+        # ~10KB Healthchecks soft limit.
+        body_str = (
+            message
+            if message.startswith(emoji)
+            else f"{emoji} {message}"
+        )
+        body = body_str.encode("utf-8")[:8192]
         self._post(
             hook,
             url,
@@ -367,7 +475,15 @@ class Notifier:
             headers={"User-Agent": "pfSense-Backup-Manager"},
         )
 
-    def _send_webhook(self, hook: Notification, message: str) -> None:
+    def _send_webhook(
+        self,
+        hook: Notification,
+        message: str,
+        *,
+        is_success: bool = True,
+        is_test: bool = False,
+    ) -> None:
+        emoji, color, _tag, label = _style(is_success, is_test)
         url = hook.url
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if hook.headers_json:
@@ -379,17 +495,31 @@ class Notifier:
 
         payload: dict[str, Any] | None
         is_discord_url = "discord.com/api/webhooks" in url.lower()
+        decorated = f"{emoji} {message}"
 
         if hook.payload_template_json:
+            # User-authored templates get the message verbatim so their
+            # downstream schema isn't surprised by leading emoji.
             tmpl = json.loads(hook.payload_template_json)
             payload = {
                 k: (v.format(message=message) if isinstance(v, str) else v)
                 for k, v in tmpl.items()
             }
         elif is_discord_url:
-            payload = {"content": message}
+            payload = {"content": decorated}
         else:
-            payload = {"text": message, "timestamp": datetime.now().isoformat()}
+            # Default generic-webhook payload gains status/emoji/color
+            # keys so receivers can render a rich message without
+            # string-parsing.
+            payload = {
+                "text": decorated,
+                "status": "success" if is_success else "failure",
+                "label": label,
+                "emoji": emoji,
+                "color": f"#{color:06x}",
+                "is_test": is_test,
+                "timestamp": datetime.now().isoformat(),
+            }
 
         # M3: Discord caps payload.content at 2000 chars.
         if payload is not None and is_discord_url:
