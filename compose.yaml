@@ -7,7 +7,9 @@ services:
     restart: unless-stopped
 
     environment:
-      HOSTNAME: ${HOSTNAME:-Ouranos}
+      # Optional: set to a human-readable name if you want notifications to
+      # include a "Host: …" line. Otherwise leave unset and the line is omitted.
+      PFSENSE_BACKUPS_HOSTNAME: ${PFSENSE_BACKUPS_HOSTNAME:-}
       TZ: ${TZ:-UTC}
       APP_DB_URL: sqlite:////app/data/app.db
       PFSENSE_BACKUPS_SECRET_KEY_FILE: /app/data/secret.key

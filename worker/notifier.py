@@ -114,11 +114,11 @@ class Notifier:
                 select(Instance.id).where(Instance.enabled.is_(True))
             ).all()
         }
-        message = (
-            "Backup run started\n"
-            f"Host: {self._hostname}\n"
-            f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        )
+        lines = ["Backup run started"]
+        if self._hostname:
+            lines.append(f"Host: {self._hostname}")
+        lines.append(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        message = "\n".join(lines)
         for hook in rows:
             if hook.instance_ids_json:
                 try:
@@ -212,7 +212,8 @@ class Notifier:
         if hook.include_instance_details and failed_instances:
             msg += f"\nFailed instances: {', '.join(failed_instances)}"
         msg += f"\nTimestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        msg += f"\nHost: {self._hostname}"
+        if self._hostname:
+            msg += f"\nHost: {self._hostname}"
         return msg
 
     @staticmethod
@@ -302,8 +303,9 @@ class Notifier:
                 "message": message,
                 "title": title,
                 "status": "success" if is_success else "failure",
-                "host": self._hostname,
             }
+            if self._hostname:
+                body["host"] = self._hostname
         else:
             body = {"message": message, "title": title}
         self._post(hook, hook.url, json_body=body, headers=headers)

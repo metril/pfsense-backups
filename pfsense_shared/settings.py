@@ -27,7 +27,12 @@ class WorkerSettings(CommonSettings):
     zmq_pull_bind: str = Field(default="tcp://0.0.0.0:5555")
     zmq_pub_bind: str = Field(default="tcp://0.0.0.0:5556")
     heartbeat_seconds: float = Field(default=5.0)
-    hostname: str = Field(default="pfsense-backups")
+    # Optional operator-set identifier included in notification bodies.
+    # Aliased to PFSENSE_BACKUPS_HOSTNAME so we don't pick up the container's
+    # auto-populated $HOSTNAME (which is just the Docker container id) or the
+    # operator's shell $HOSTNAME (which leaks the dev machine's name). Empty
+    # default means the notifier omits the Host: line entirely.
+    hostname: str = Field(default="", alias="PFSENSE_BACKUPS_HOSTNAME")
 
 
 class WebSettings(CommonSettings):
