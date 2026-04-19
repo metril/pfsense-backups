@@ -99,6 +99,10 @@ def main() -> None:
     _install_log_forwarder(publisher)
 
     notifier = Notifier(metrics=metrics, hostname=settings.hostname)
+    # C2: single shared per-instance lock map for the scheduler, the IPC
+    # listener, and backup_all's parallel sweep — one instance can never
+    # back itself up twice concurrently regardless of trigger source.
+    instance_locks = InstanceLocks()
     manager = PfSenseBackupManager(
         session_factory=session_factory,
         publisher=publisher,
@@ -106,10 +110,8 @@ def main() -> None:
         crypto=crypto,
         notifier=notifier,
         hostname=settings.hostname,
+        instance_locks=instance_locks,
     )
-
-    # C2: single shared per-instance lock map for both scheduler and listener.
-    instance_locks = InstanceLocks()
 
     scheduler = Scheduler(
         session_factory=session_factory,

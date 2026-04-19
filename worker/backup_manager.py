@@ -15,6 +15,7 @@ import gzip
 import logging
 import shutil
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -40,6 +41,7 @@ from pfsense_shared.schemas import (
     TestConnectionResult,
 )
 
+from .instance_locks import InstanceLocks
 from .ipc_publisher import IpcPublisher
 from .notifier import Notifier
 from .prometheus_metrics import MetricsTimer, PrometheusMetrics
@@ -85,6 +87,7 @@ class PfSenseBackupManager:
         crypto: Crypto,
         notifier: Notifier,
         hostname: str,
+        instance_locks: InstanceLocks,
     ) -> None:
         self._session_factory = session_factory
         self._publisher = publisher
@@ -92,6 +95,7 @@ class PfSenseBackupManager:
         self._crypto = crypto
         self._notifier = notifier
         self._hostname = hostname
+        self._instance_locks = instance_locks
 
     # ------------------------------------------------------------------ #
     # Public entry points
@@ -272,8 +276,13 @@ class PfSenseBackupManager:
         )
         return ok
 
+    # Bounded parallelism: pfSense login/download is I/O-bound so threads
+    # scale well, but we cap to keep the worker kind to downstream pfSense
+    # boxes (each one serves the XML config from a single PHP process).
+    _BACKUP_ALL_MAX_WORKERS = 4
+
     def backup_all(self, job_id: int) -> None:
-        """Run backups for every enabled instance, then send a summary notification."""
+        """Run backups for every enabled instance in parallel, then send a summary."""
         with self._session_factory() as s:
             instance_ids: list[int] = [
                 row.id for row in s.query(Instance).filter(Instance.enabled.is_(True)).all()
@@ -291,20 +300,39 @@ class PfSenseBackupManager:
         success_count = 0
         failed_names: list[str] = []
         succeeded_names: list[str] = []
-        for iid in instance_ids:
-            # notify=False: the aggregate summary at the bottom of this
-            # method is the single notification for the sweep; per-instance
-            # notifications would double-fire.
-            ok = self.backup_instance(iid, job_id=job_id, notify=False)
-            with self._session_factory() as s:
-                inst = s.get(Instance, iid)
-                if inst is None:
-                    continue
-                if ok:
-                    success_count += 1
-                    succeeded_names.append(inst.name)
-                else:
-                    failed_names.append(inst.name)
+
+        def _run_one(iid: int) -> tuple[int, bool]:
+            # Per-instance lock serializes with user-triggered single-instance
+            # backups + scheduled cron fires, so the same instance never races
+            # itself. Different instances run concurrently.
+            with self._instance_locks.for_instance(iid):
+                ok = self.backup_instance(iid, job_id=job_id, notify=False)
+            return iid, ok
+
+        if instance_ids:
+            workers = min(self._BACKUP_ALL_MAX_WORKERS, len(instance_ids))
+            with ThreadPoolExecutor(
+                max_workers=workers, thread_name_prefix="backup-all"
+            ) as pool:
+                futures = [pool.submit(_run_one, iid) for iid in instance_ids]
+                for fut in as_completed(futures):
+                    try:
+                        iid, ok = fut.result()
+                    except Exception as exc:
+                        # backup_instance catches its own exceptions, so
+                        # arriving here means something upstream (lock,
+                        # session) blew up. Log and carry on.
+                        log.error("Parallel backup task crashed: %s", exc)
+                        continue
+                    with self._session_factory() as s:
+                        inst = s.get(Instance, iid)
+                        if inst is None:
+                            continue
+                        if ok:
+                            success_count += 1
+                            succeeded_names.append(inst.name)
+                        else:
+                            failed_names.append(inst.name)
 
         total = len(instance_ids)
         is_success = not failed_names

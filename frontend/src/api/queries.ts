@@ -117,6 +117,14 @@ export function useBackupNow() {
   });
 }
 
+export function useBackupAll() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<{ job_id: number }>("/api/backups/run-all"),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["jobs"] }),
+  });
+}
+
 export function useImportBackups() {
   const qc = useQueryClient();
   return useMutation({

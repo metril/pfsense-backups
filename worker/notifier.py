@@ -377,9 +377,10 @@ class Notifier:
                 value = ", ".join(succeeded_instances)
                 if len(value) > 1000:
                     value = value[:997] + "..."
+                ok_emoji = _STYLE_SUCCESS[0]
                 fields.append(
                     {
-                        "name": f"\N{WHITE HEAVY CHECK MARK} Succeeded ({len(succeeded_instances)})",
+                        "name": f"{ok_emoji} Succeeded ({len(succeeded_instances)})",
                         "value": value,
                         "inline": False,
                     }

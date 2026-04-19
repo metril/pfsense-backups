@@ -15,10 +15,10 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from pfsense_shared.models import Backup, Instance
-from pfsense_shared.schemas import BackupUpdate
+from pfsense_shared.models import Backup, Instance, Job
+from pfsense_shared.schemas import BackupUpdate, RunBackupAllCommand
 
-from ..dependencies import CurrentUser, DbSession
+from ..dependencies import CurrentUser, DbSession, Ipc
 from ..services import audit
 from ..services.backup_storage import read_content, stream_raw, zip_stream
 
@@ -44,6 +44,27 @@ class BackupListItem(BaseModel):
 
 class ZipRequest(BaseModel):
     ids: list[int]
+
+
+@router.post("/run-all")
+async def run_all_backups(
+    db: DbSession, user: CurrentUser, ipc: Ipc
+) -> dict[str, int]:
+    """Kick off a parallel backup sweep across every enabled instance.
+
+    Returns immediately with the parent Job id; per-instance progress
+    arrives on the existing /api/events WebSocket stream.
+    """
+    job = Job(kind="run_backup_all", requested_by=user["email"])
+    db.add(job)
+    await db.flush()
+    audit.record(
+        db, actor_email=user["email"], action="trigger",
+        resource="backup_all", resource_id=None,
+    )
+    await db.commit()
+    await ipc.send(RunBackupAllCommand(job_id=job.id))
+    return {"job_id": job.id}
 
 
 # Columns the UI can ask to sort by. Restricted to indexed / lightweight

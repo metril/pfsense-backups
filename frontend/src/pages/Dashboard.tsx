@@ -1,8 +1,9 @@
 import { Link } from "react-router-dom";
-import { Play, Plug } from "lucide-react";
+import { Play, PlayCircle, Plug } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import {
+  useBackupAll,
   useBackupNow,
   useBackups,
   useInstances,
@@ -17,6 +18,7 @@ export function Dashboard() {
   const backups = useBackups();
 
   const backupNow = useBackupNow();
+  const backupAll = useBackupAll();
   const test = useTestConnection();
 
   if (instances.isPending) return <div className="text-sm text-muted-fg">Loading…</div>;
@@ -28,9 +30,20 @@ export function Dashboard() {
     <div>
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Dashboard</h1>
-        <Link to="/instances" className="text-sm text-accent hover:underline">
-          Manage instances →
-        </Link>
+        <div className="flex items-center gap-4">
+          <Button
+            size="sm"
+            onClick={() => backupAll.mutate()}
+            disabled={backupAll.isPending || (instances.data?.length ?? 0) === 0}
+            title="Back up every enabled instance in parallel"
+          >
+            <PlayCircle className="h-4 w-4" />
+            {backupAll.isPending ? "Starting…" : "Backup all"}
+          </Button>
+          <Link to="/instances" className="text-sm text-accent hover:underline">
+            Manage instances →
+          </Link>
+        </div>
       </div>
 
       {instances.data!.length === 0 && (
