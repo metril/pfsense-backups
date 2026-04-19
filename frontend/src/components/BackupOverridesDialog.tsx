@@ -9,8 +9,14 @@ import type { BackupOverridesRequest } from "@/api/types";
 
 // Canonical pfSense subsystem IDs for the Area dropdown. Must stay in
 // sync with pfsense_shared/schemas.py::PFSENSE_BACKUP_AREAS.
+//
+// Radix Select reserves value="" for "no selection, show placeholder"
+// and throws synchronously on <Select.Item value="">. We use the
+// AREA_ALL sentinel inside the UI and translate back to "" at the
+// boundary where we build the overrides payload.
+const AREA_ALL = "__all__";
 const PFSENSE_BACKUP_AREAS: SelectOption[] = [
-  { value: "", label: "Everything (default)" },
+  { value: AREA_ALL, label: "Everything (default)" },
   { value: "aliases", label: "aliases" },
   { value: "captiveportal", label: "captiveportal" },
   { value: "certs", label: "certs" },
@@ -72,7 +78,7 @@ export function BackupOverridesDialog({
   onClose: () => void;
   onRun: (overrides?: BackupOverridesRequest) => Promise<void>;
 }) {
-  const [area, setArea] = useState<string>("");
+  const [area, setArea] = useState<string>(AREA_ALL);
   const [rrd, setRrd] = useState<boolean>(false);
   const [packages, setPackages] = useState<boolean>(true);
   const [ssh, setSsh] = useState<boolean>(true);
@@ -98,7 +104,7 @@ export function BackupOverridesDialog({
         await onRun(undefined);
       } else {
         const overrides: BackupOverridesRequest = {
-          backup_area: area,
+          backup_area: area === AREA_ALL ? "" : area,
           backup_include_rrd: rrd,
           backup_include_packages: packages,
           backup_include_ssh: ssh,

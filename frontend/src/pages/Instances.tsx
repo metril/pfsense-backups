@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import cronstrue from "cronstrue";
 import {
   AlertTriangle,
@@ -71,8 +71,15 @@ const blank = (): Draft => ({
 // Must match pfsense_shared/schemas.py::PFSENSE_BACKUP_AREAS; keeping
 // them literal here avoids dragging the list over the wire on every page
 // load. Adding a subsystem is a two-line edit (here + schemas.py).
+//
+// Radix Select throws on <Select.Item value="">, so the UI uses the
+// AREA_ALL sentinel and translates to/from the wire format at the
+// Select boundary.
+const AREA_ALL = "__all__";
+const areaToUi = (v: string) => (v === "" ? AREA_ALL : v);
+const areaFromUi = (v: string) => (v === AREA_ALL ? "" : v);
 const PFSENSE_BACKUP_AREAS: SelectOption[] = [
-  { value: "", label: "Everything (default)" },
+  { value: AREA_ALL, label: "Everything (default)" },
   { value: "aliases", label: "aliases" },
   { value: "captiveportal", label: "captiveportal" },
   { value: "certs", label: "certs" },
@@ -136,6 +143,7 @@ export function InstancesPage() {
   const globalTimezone = settings.data?.backup?.default_timezone ?? "UTC";
   const toast = useToast();
   const confirm = useConfirm();
+  const navigate = useNavigate();
 
   return (
     <div>
@@ -215,7 +223,7 @@ export function InstancesPage() {
                             // navigate to the Instance Detail page where the
                             // SplitButton offers the dialog. Keeps the row
                             // itself dense without adding per-row dialog state.
-                            window.location.href = `/instances/${inst.id}`;
+                            navigate(`/instances/${inst.id}`);
                           },
                         },
                       ]}
@@ -558,8 +566,8 @@ function BackupContentsSection({
         title="Area"
       >
         <Select
-          value={d.backup_area ?? ""}
-          onChange={(v) => setD({ ...d, backup_area: v })}
+          value={areaToUi(d.backup_area ?? "")}
+          onChange={(v) => setD({ ...d, backup_area: areaFromUi(v) })}
           options={PFSENSE_BACKUP_AREAS}
           aria-label="Backup area"
         />

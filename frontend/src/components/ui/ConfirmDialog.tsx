@@ -81,6 +81,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
           }}
           title={state.title}
           description={state.description}
+          tone={state.tone === "danger" ? "danger" : "default"}
           className="max-w-md"
         >
           <div className="flex justify-end gap-2">

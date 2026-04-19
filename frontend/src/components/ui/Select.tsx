@@ -77,7 +77,7 @@ export const Select = forwardRef<HTMLButtonElement, Props>(function Select(
           collisionPadding={8}
           className={cn(
             "z-[60] min-w-[var(--radix-select-trigger-width)]",
-            "max-h-[min(--radix-select-content-available-height,320px)]",
+            "max-h-[min(var(--radix-select-content-available-height),320px)]",
             "overflow-hidden rounded-md border border-border bg-muted shadow-2xl",
             // Fade the menu in/out so portaled rendering doesn't pop
             // abruptly over the modal underneath.
