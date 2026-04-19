@@ -88,7 +88,7 @@ class Notifier:
             )
             if scope is None:
                 continue
-            effective_success, scoped_failed, scoped_details = scope
+            effective_success, scoped_failed, scoped_ok, scoped_details = scope
             if not self._should_send(hook.trigger, effective_success):
                 continue
             status_label = "SUCCESS" if effective_success else "FAILURE"
@@ -97,6 +97,7 @@ class Notifier:
                 status=status_label,
                 details=scoped_details,
                 failed_instances=scoped_failed,
+                succeeded_instances=scoped_ok,
             )
             # H8: one broken webhook must not silence the rest.
             try:
@@ -105,6 +106,7 @@ class Notifier:
                     message,
                     is_success=effective_success,
                     failed_instances=scoped_failed,
+                    succeeded_instances=scoped_ok,
                 )
             except Exception as exc:
                 log.error("Webhook %s failed; continuing: %s", hook.name, exc)
@@ -175,12 +177,16 @@ class Notifier:
             status="TEST",
             details="This is a test notification from pfsense-backups.",
             failed_instances=[],
+            succeeded_instances=[],
         )
         try:
             # Test sends as a "success" for Healthchecks so the check
             # turns green rather than red; a red test would look like
             # a real failure on the user's dashboard.
-            self._dispatch(hook, msg, is_success=True, is_test=True, failed_instances=[])
+            self._dispatch(
+                hook, msg, is_success=True, is_test=True,
+                failed_instances=[], succeeded_instances=[],
+            )
             return True, "sent"
         except Exception as exc:
             return False, str(exc)
@@ -210,16 +216,30 @@ class Notifier:
         *,
         aggregate_is_success: bool,
         aggregate_details: str,
-    ) -> tuple[bool, list[str], str] | None:
-        """Compute (effective_success, scoped_failed, details) for a row, or None to skip."""
+    ) -> tuple[bool, list[str], list[str], str] | None:
+        """Compute (effective_success, scoped_failed, scoped_ok, details).
+
+        Returns None when the row is scoped but none of its scoped
+        instances ran this cycle (the row should be skipped).
+        """
         if not hook.instance_ids_json:
-            return aggregate_is_success, failed_instances, aggregate_details
+            return (
+                aggregate_is_success,
+                failed_instances,
+                succeeded_instances,
+                aggregate_details,
+            )
         try:
             allowed_ids = set(json.loads(hook.instance_ids_json))
         except (TypeError, ValueError):
             return None
         if not allowed_ids:
-            return aggregate_is_success, failed_instances, aggregate_details
+            return (
+                aggregate_is_success,
+                failed_instances,
+                succeeded_instances,
+                aggregate_details,
+            )
         failed_in_scope = [n for n in failed_instances if name_to_id.get(n) in allowed_ids]
         ok_in_scope = [n for n in succeeded_instances if name_to_id.get(n) in allowed_ids]
         if not failed_in_scope and not ok_in_scope:
@@ -231,7 +251,7 @@ class Notifier:
             if scoped_success
             else f"Scoped backup failures ({len(failed_in_scope)}/{total} failed)"
         )
-        return scoped_success, failed_in_scope, details
+        return scoped_success, failed_in_scope, ok_in_scope, details
 
     def _format_message(
         self,
@@ -240,10 +260,14 @@ class Notifier:
         status: str,
         details: str,
         failed_instances: list[str],
+        succeeded_instances: list[str],
     ) -> str:
         msg = hook.message_format.format(status=status, details=details)
-        if hook.include_instance_details and failed_instances:
-            msg += f"\nFailed instances: {', '.join(failed_instances)}"
+        if hook.include_instance_details:
+            if succeeded_instances:
+                msg += f"\nSucceeded: {', '.join(succeeded_instances)}"
+            if failed_instances:
+                msg += f"\nFailed: {', '.join(failed_instances)}"
         msg += f"\nTimestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         if self._hostname:
             msg += f"\nHost: {self._hostname}"
@@ -267,17 +291,20 @@ class Notifier:
         is_success: bool,
         is_test: bool = False,
         failed_instances: list[str] | None = None,
+        succeeded_instances: list[str] | None = None,
     ) -> None:
         kind = hook.kind or "webhook"
         fi = failed_instances or []
+        si = succeeded_instances or []
         if kind == "discord":
             self._send_discord(
                 hook, message, is_success=is_success, is_test=is_test,
-                failed_instances=fi,
+                failed_instances=fi, succeeded_instances=si,
             )
         elif kind == "home_assistant":
             self._send_home_assistant(
                 hook, message, is_success=is_success, is_test=is_test,
+                failed_instances=fi, succeeded_instances=si,
             )
         elif kind == "ntfy":
             self._send_ntfy(
@@ -288,6 +315,7 @@ class Notifier:
         else:
             self._send_webhook(
                 hook, message, is_success=is_success, is_test=is_test,
+                failed_instances=fi, succeeded_instances=si,
             )
 
     def _post(
@@ -329,6 +357,7 @@ class Notifier:
         is_success: bool,
         is_test: bool,
         failed_instances: list[str],
+        succeeded_instances: list[str],
     ) -> None:
         emoji, color, _tag, label = _style(is_success, is_test)
         # Discord embed limits: title 256, description 4096, field value 1024.
@@ -343,13 +372,29 @@ class Notifier:
             "footer": {"text": f"pfsense-backups · {hook.name}"},
         }
         fields: list[dict[str, Any]] = []
-        if failed_instances:
-            value = ", ".join(failed_instances)
-            if len(value) > 1000:
-                value = value[:997] + "..."
-            fields.append(
-                {"name": "Failed instances", "value": value, "inline": False}
-            )
+        if hook.include_instance_details:
+            if succeeded_instances:
+                value = ", ".join(succeeded_instances)
+                if len(value) > 1000:
+                    value = value[:997] + "..."
+                fields.append(
+                    {
+                        "name": f"\N{WHITE HEAVY CHECK MARK} Succeeded ({len(succeeded_instances)})",
+                        "value": value,
+                        "inline": False,
+                    }
+                )
+            if failed_instances:
+                value = ", ".join(failed_instances)
+                if len(value) > 1000:
+                    value = value[:997] + "..."
+                fields.append(
+                    {
+                        "name": f"\N{CROSS MARK} Failed ({len(failed_instances)})",
+                        "value": value,
+                        "inline": False,
+                    }
+                )
         if self._hostname:
             fields.append({"name": "Host", "value": self._hostname, "inline": True})
         if fields:
@@ -368,6 +413,8 @@ class Notifier:
         *,
         is_success: bool,
         is_test: bool,
+        failed_instances: list[str],
+        succeeded_instances: list[str],
     ) -> None:
         emoji, color, _tag, label = _style(is_success, is_test)
         cfg = self._config(hook)
@@ -393,6 +440,9 @@ class Notifier:
                 "emoji": emoji,
                 "color": f"#{color:06x}",
             }
+            if hook.include_instance_details:
+                body["succeeded"] = succeeded_instances
+                body["failed"] = failed_instances
             if self._hostname:
                 body["host"] = self._hostname
         else:
@@ -482,6 +532,8 @@ class Notifier:
         *,
         is_success: bool = True,
         is_test: bool = False,
+        failed_instances: list[str] | None = None,
+        succeeded_instances: list[str] | None = None,
     ) -> None:
         emoji, color, _tag, label = _style(is_success, is_test)
         url = hook.url
@@ -509,6 +561,7 @@ class Notifier:
             payload = {"content": decorated}
         else:
             # Default generic-webhook payload gains status/emoji/color
+            # and (opt-in via include_instance_details) succeeded/failed
             # keys so receivers can render a rich message without
             # string-parsing.
             payload = {
@@ -520,6 +573,9 @@ class Notifier:
                 "is_test": is_test,
                 "timestamp": datetime.now().isoformat(),
             }
+            if hook.include_instance_details:
+                payload["succeeded"] = succeeded_instances or []
+                payload["failed"] = failed_instances or []
 
         # M3: Discord caps payload.content at 2000 chars.
         if payload is not None and is_discord_url:
