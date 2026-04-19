@@ -88,13 +88,21 @@ class Notifier:
             except Exception as exc:
                 log.error("Webhook %s failed; continuing: %s", hook.name, exc)
 
-    def ping_starts(self, session: Session) -> None:
+    def ping_starts(
+        self, session: Session, *, instance_id: int | None = None
+    ) -> None:
         """Fire ``/start`` pings for all enabled Healthchecks rows.
 
         Called at the top of a backup run so Healthchecks can compute
-        run duration between ``/start`` and the terminal ping. Per-instance
-        filters apply: a scoped row only pings if at least one of its
-        instances is enabled in this cycle.
+        run duration between ``/start`` and the terminal ping.
+
+        When ``instance_id`` is None (aggregate sweep), a scoped row
+        only pings if at least one of its scoped instances is
+        currently enabled — mirrors the aggregate notify semantics.
+
+        When ``instance_id`` is given (single-instance run), a scoped
+        row only pings if its scope contains that instance. Unscoped
+        rows always ping in either mode.
         """
         rows = (
             session.execute(
@@ -108,12 +116,13 @@ class Notifier:
         )
         if not rows:
             return
-        enabled_ids = {
-            iid
-            for (iid,) in session.execute(
-                select(Instance.id).where(Instance.enabled.is_(True))
-            ).all()
-        }
+        if instance_id is None:
+            enabled_ids = {
+                iid
+                for (iid,) in session.execute(
+                    select(Instance.id).where(Instance.enabled.is_(True))
+                ).all()
+            }
         lines = ["Backup run started"]
         if self._hostname:
             lines.append(f"Host: {self._hostname}")
@@ -125,7 +134,10 @@ class Notifier:
                     scoped = set(json.loads(hook.instance_ids_json))
                 except (TypeError, ValueError):
                     continue
-                if not (scoped & enabled_ids):
+                if instance_id is None:
+                    if not (scoped & enabled_ids):
+                        continue
+                elif instance_id not in scoped:
                     continue
             try:
                 self._send_healthchecks(hook, message, is_success=True, is_start=True)

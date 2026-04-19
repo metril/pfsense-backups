@@ -97,12 +97,45 @@ class PfSenseBackupManager:
     # Public entry points
     # ------------------------------------------------------------------ #
 
-    def backup_instance(self, instance_id: int, job_id: int) -> bool:
-        """Run a backup for one instance. Returns True on success."""
+    def backup_instance(
+        self, instance_id: int, job_id: int, *, notify: bool = True
+    ) -> bool:
+        """Run a backup for one instance. Returns True on success.
+
+        ``notify=True`` (default) fires Healthchecks ``/start`` at the
+        top and a per-instance terminal notification at the end, so
+        manual "Backup now" and scheduled per-instance cron fires both
+        alert users. ``backup_all`` passes ``notify=False`` in its
+        loop and sends a single aggregate summary instead.
+        """
         snap = self._snapshot(instance_id)
         if snap is None:
             self._fail_job(job_id, f"Instance {instance_id} not found")
             return False
+
+        def _notify_result(ok: bool, detail: str) -> None:
+            if not notify:
+                return
+            try:
+                with self._session_factory() as s:
+                    self._notifier.send(
+                        s,
+                        is_success=ok,
+                        details=detail,
+                        failed_instances=[] if ok else [snap.name],
+                        succeeded_instances=[snap.name] if ok else [],
+                    )
+            except Exception as exc:
+                log.error("Notifier per-instance send failed: %s", exc)
+
+        if notify:
+            try:
+                with self._session_factory() as s:
+                    self._notifier.ping_starts(s, instance_id=snap.id)
+            except Exception as exc:
+                log.warning(
+                    "Healthchecks start ping for %s failed: %s", snap.name, exc
+                )
 
         self._mark_job(job_id, status="running")
         self._publisher.publish(
@@ -163,6 +196,11 @@ class PfSenseBackupManager:
                 )
             )
             log.info("Backup succeeded for %s in %.1fs", snap.name, duration)
+            _notify_result(
+                True,
+                f"Backup succeeded for {snap.name} in {duration:.1f}s "
+                f"({result.size_bytes} bytes)",
+            )
             return True
 
         except Exception as exc:
@@ -190,6 +228,7 @@ class PfSenseBackupManager:
                     ts=finished_at,
                 )
             )
+            _notify_result(False, f"Backup failed for {snap.name}: {err}")
             return False
 
     def test_connection(self, instance_id: int, job_id: int) -> bool:
@@ -253,7 +292,10 @@ class PfSenseBackupManager:
         failed_names: list[str] = []
         succeeded_names: list[str] = []
         for iid in instance_ids:
-            ok = self.backup_instance(iid, job_id=job_id)
+            # notify=False: the aggregate summary at the bottom of this
+            # method is the single notification for the sweep; per-instance
+            # notifications would double-fire.
+            ok = self.backup_instance(iid, job_id=job_id, notify=False)
             with self._session_factory() as s:
                 inst = s.get(Instance, iid)
                 if inst is None:
