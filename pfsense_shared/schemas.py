@@ -339,6 +339,12 @@ class InstanceCreate(BaseModel):
         if v is None or v == "":
             return v
         # Single-segment only; no path traversal.
+        # _no_fs_special blocks "/" and "\", but the standalone dotted
+        # names "." and ".." also traverse when joined with a root
+        # path — "Path(root) / '..'" resolves to the parent — so they
+        # must be rejected explicitly.
+        if v in {".", ".."}:
+            raise ValueError("must not be '.' or '..'")
         return _no_fs_special(v)
 
     @field_validator("backup_area")
@@ -384,6 +390,8 @@ class InstanceUpdate(BaseModel):
     def _subfolder_safe(cls, v: str | None) -> str | None:
         if v is None or v == "":
             return v
+        if v in {".", ".."}:
+            raise ValueError("must not be '.' or '..'")
         return _no_fs_special(v)
 
     @field_validator("backup_area")

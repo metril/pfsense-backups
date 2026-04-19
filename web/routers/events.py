@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 from limits import parse as parse_limit
@@ -43,8 +44,45 @@ def _ws_rate_ok(websocket: WebSocket) -> bool:
     return _ws_strategy.hit(item, _ws_client_ip(websocket))
 
 
+def _origin_ok(websocket: WebSocket) -> bool:
+    """Reject cross-origin WS upgrades so a malicious site can't open a
+    session-cookie-authenticated event stream from the victim's browser.
+
+    Same-origin = scheme+host+port match. Browsers without a CORS
+    requirement still send the ``Origin`` header on WS upgrades, so a
+    missing header is suspicious and gets rejected too. The one exception
+    is non-browser clients (curl, Python scripts running tests) which
+    typically omit ``Origin``; those are allowed through only when the
+    app is in dev mode.
+    """
+    origin = websocket.headers.get("origin")
+    settings = websocket.app.state.settings
+    if origin is None:
+        return bool(getattr(settings, "dev_mode", False))
+    try:
+        parsed = urlparse(origin)
+    except ValueError:
+        return False
+    if parsed.hostname != websocket.url.hostname:
+        return False
+    # Port: if the URL has an explicit port, match it; otherwise accept
+    # the default port for the scheme.
+    if parsed.port and websocket.url.port and parsed.port != websocket.url.port:
+        return False
+    return True
+
+
 @router.websocket("/api/events")
 async def events_ws(websocket: WebSocket) -> None:
+    if not _origin_ok(websocket):
+        log.warning(
+            "WS origin rejected: origin=%r host=%r",
+            websocket.headers.get("origin"),
+            websocket.url.hostname,
+        )
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
     # Auth check using the same session cookie the HTTP side reads.
     user = websocket.session.get("user") if "session" in websocket.scope else None
     if not user:

@@ -6,13 +6,32 @@ from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from cron_descriptor import ExpressionDescriptor
-from croniter import croniter
+from croniter import CroniterBadDateError, croniter
 
 
 def validate(cron: str) -> None:
-    """Raise ValueError if ``cron`` isn't a valid 5-field cron expression."""
+    """Raise ValueError if ``cron`` isn't a valid 5-field cron expression.
+
+    Also rejects expressions that pass syntactic validation but can
+    never fire, e.g. ``"0 0 31 2 *"`` (Feb 31 doesn't exist). croniter's
+    ``is_valid`` only checks field grammar; impossible date combinations
+    sail through and then raise ``CroniterBadDateError`` the first time
+    the scheduler asks for a next run, which previously bubbled up as a
+    500 on the save path. Probe once with a 4-year window so a user's
+    typo fails loudly at save time instead of silently scheduling a
+    job that never runs.
+    """
     if not croniter.is_valid(cron):
         raise ValueError(f"invalid cron expression: {cron!r}")
+    try:
+        it = croniter(cron, datetime.now(ZoneInfo("UTC")))
+        it.get_next(datetime)
+    except CroniterBadDateError as exc:
+        raise ValueError(
+            f"cron expression {cron!r} is syntactically valid but can "
+            f"never fire (e.g. Feb 31). Pick a day-of-month that "
+            f"actually exists in the selected month(s)."
+        ) from exc
 
 
 def validate_tz(tz: str) -> None:
