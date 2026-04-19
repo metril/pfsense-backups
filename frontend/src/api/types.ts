@@ -145,6 +145,7 @@ export interface SettingsBackup {
   timestamp_format: string;
   directory: string;
   default_timezone: string;
+  backup_all_max_workers: number;
 }
 
 export interface SettingsLogging {

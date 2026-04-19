@@ -328,6 +328,7 @@ class BackupSettingsRead(BaseModel):
     timestamp_format: str
     directory: str
     default_timezone: str
+    backup_all_max_workers: int
 
 
 class BackupSettingsUpdate(BaseModel):
@@ -335,6 +336,7 @@ class BackupSettingsUpdate(BaseModel):
     timestamp_format: str | None = None
     directory: str | None = None
     default_timezone: str | None = None
+    backup_all_max_workers: int | None = None
 
 
 class LoggingSettingsRead(BaseModel):

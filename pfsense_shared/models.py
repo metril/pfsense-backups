@@ -65,6 +65,9 @@ class BackupSettings(Base):
     # Global default scheduler timezone. Applied whenever Instance.cron_timezone
     # is NULL. Consumed by worker/scheduler + web/routers/schedule.
     default_timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    # Concurrency cap for the "Backup all" sweep. Per-instance locks still
+    # serialize within a single instance; this controls cross-instance fan-out.
+    backup_all_max_workers: Mapped[int] = mapped_column(Integer, default=4)
 
 
 class LoggingSettings(Base):

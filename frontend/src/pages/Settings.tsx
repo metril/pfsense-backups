@@ -16,7 +16,14 @@ export function SettingsPage() {
     timestamp_format: string;
     directory: string;
     default_timezone: string;
-  }>({ filename_format: "", timestamp_format: "", directory: "", default_timezone: "UTC" });
+    backup_all_max_workers: number;
+  }>({
+    filename_format: "",
+    timestamp_format: "",
+    directory: "",
+    default_timezone: "UTC",
+    backup_all_max_workers: 4,
+  });
   const [logging, setLogging] = useState<{ level: string; format: string }>({ level: "INFO", format: "" });
   const tzList = useMemo(supportedTimezones, []);
 
@@ -69,6 +76,28 @@ export function SettingsPage() {
           <p className="mt-1 text-xs text-muted-fg">
             Used for every instance's schedule unless that instance sets its own override.
             Changing this tells the worker to reload every cron trigger.
+          </p>
+        </Field>
+        <Field label='Parallel backups ("Backup all")'>
+          <Input
+            type="number"
+            min={1}
+            max={32}
+            value={backup.backup_all_max_workers}
+            onChange={(e) =>
+              setBackup({
+                ...backup,
+                backup_all_max_workers: Math.max(
+                  1,
+                  Math.min(32, Number(e.target.value) || 1),
+                ),
+              })
+            }
+          />
+          <p className="mt-1 text-xs text-muted-fg">
+            Cap on instances processed concurrently during a full sweep.
+            1 = serial; higher values speed up large fleets at the cost of
+            more simultaneous pfSense logins. Default 4.
           </p>
         </Field>
         <div className="flex justify-end">

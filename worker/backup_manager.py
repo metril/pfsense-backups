@@ -276,10 +276,12 @@ class PfSenseBackupManager:
         )
         return ok
 
-    # Bounded parallelism: pfSense login/download is I/O-bound so threads
-    # scale well, but we cap to keep the worker kind to downstream pfSense
-    # boxes (each one serves the XML config from a single PHP process).
-    _BACKUP_ALL_MAX_WORKERS = 4
+    # Fallback if BackupSettings is missing a row or the value is invalid.
+    # Actual parallelism is read from BackupSettings.backup_all_max_workers
+    # at run time so operators can retune from the Settings page without
+    # restarting the worker.
+    _BACKUP_ALL_DEFAULT_WORKERS = 4
+    _BACKUP_ALL_MAX_BOUND = 32
 
     def backup_all(self, job_id: int) -> None:
         """Run backups for every enabled instance in parallel, then send a summary."""
@@ -287,6 +289,16 @@ class PfSenseBackupManager:
             instance_ids: list[int] = [
                 row.id for row in s.query(Instance).filter(Instance.enabled.is_(True)).all()
             ]
+            settings = s.get(BackupSettings, 1)
+            configured_workers = (
+                settings.backup_all_max_workers
+                if settings is not None
+                else self._BACKUP_ALL_DEFAULT_WORKERS
+            )
+        # Clamp to a sane range: 1 degrades to serial (still valid), and
+        # the upper bound prevents an accidentally-huge value from
+        # melting the worker host or the upstream pfSense boxes.
+        max_workers = max(1, min(self._BACKUP_ALL_MAX_BOUND, int(configured_workers or 1)))
 
         # Fire Healthchecks /start pings before any per-instance work so
         # the check transitions to "running" in the dashboard. A failure
@@ -310,7 +322,11 @@ class PfSenseBackupManager:
             return iid, ok
 
         if instance_ids:
-            workers = min(self._BACKUP_ALL_MAX_WORKERS, len(instance_ids))
+            workers = min(max_workers, len(instance_ids))
+            log.info(
+                "backup_all: %d instance(s), %d parallel worker(s)",
+                len(instance_ids), workers,
+            )
             with ThreadPoolExecutor(
                 max_workers=workers, thread_name_prefix="backup-all"
             ) as pool:
