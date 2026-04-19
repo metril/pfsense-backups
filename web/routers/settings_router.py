@@ -49,7 +49,13 @@ async def put_backup(
             raise HTTPException(400, str(exc)) from None
 
     changed: dict[str, Any] = {}
-    for field in ("filename_format", "timestamp_format", "directory", "default_timezone"):
+    for field in (
+        "filename_format",
+        "timestamp_format",
+        "directory",
+        "default_timezone",
+        "backup_all_max_workers",
+    ):
         val = getattr(payload, field)
         if val is not None and getattr(row, field, None) != val:
             setattr(row, field, val)

@@ -118,6 +118,33 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Dropping ``encrypt_password_ct`` (per-row) and
+    # ``backup_encrypt_password_ct`` (per-instance) would permanently
+    # lose the only copies of the keys needed to decrypt existing
+    # encrypted backup files on disk. Refuse the downgrade when any
+    # such row still exists so an operator doesn't silently destroy
+    # their ability to recover history; the error message points them
+    # at the explicit "decrypt-or-delete first" recovery path.
+    bind = op.get_bind()
+    row = bind.execute(
+        sa.text(
+            "SELECT "
+            "  (SELECT COUNT(*) FROM backups WHERE encrypt_password_ct IS NOT NULL) "
+            "  + (SELECT COUNT(*) FROM instances WHERE backup_encrypt_password_ct IS NOT NULL) "
+            "  AS total"
+        )
+    ).scalar()
+    if row and int(row) > 0:
+        raise RuntimeError(
+            "Refusing to downgrade migration 6b1e4a7d2c9f: "
+            f"{row} row(s) still hold encryption passwords. "
+            "Downgrading would drop the encrypt_password_ct columns and "
+            "permanently orphan encrypted backup files on disk. Before "
+            "running this downgrade again, either delete those rows or "
+            "re-encrypt them via a tool of your choice and NULL out the "
+            "ciphertext columns manually."
+        )
+
     with op.batch_alter_table("backups", schema=None) as batch_op:
         batch_op.drop_column("encrypt_password_ct")
         batch_op.drop_column("encrypted")
