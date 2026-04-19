@@ -9,6 +9,8 @@ import {
 import { api } from "./client";
 import type {
   AllSettings,
+  AuditEntry,
+  AuditFacets,
   AuthUser,
   BackupListItem,
   Instance,
@@ -16,6 +18,8 @@ import type {
   InstanceUpdate,
   Job,
   Notification,
+  PreflightRequest,
+  PreflightResponse,
   ScheduleRow,
   SettingsBackup,
   SettingsLogging,
@@ -98,6 +102,13 @@ export function useTestConnection() {
   });
 }
 
+export function usePreflight() {
+  return useMutation({
+    mutationFn: (payload: PreflightRequest) =>
+      api.post<PreflightResponse>("/api/instances/preflight", payload),
+  });
+}
+
 export function useBackupNow() {
   const qc = useQueryClient();
   return useMutation({
@@ -157,10 +168,15 @@ export async function previewCron(cron: string, tz: string = "UTC") {
 
 // ----------------- backups -----------------
 
+export type BackupSort = "started_at" | "size_bytes" | "duration_seconds" | "filename";
+export type BackupOrder = "asc" | "desc";
+
 export interface BackupFilter {
   instanceId?: number;
   startedFrom?: string; // ISO-8601, inclusive
   startedTo?: string;   // ISO-8601, inclusive
+  sort?: BackupSort;
+  order?: BackupOrder;
 }
 
 export function useBackups(filter: BackupFilter | number | undefined = undefined) {
@@ -173,10 +189,19 @@ export function useBackups(filter: BackupFilter | number | undefined = undefined
   if (f.instanceId !== undefined) params.set("instance_id", String(f.instanceId));
   if (f.startedFrom) params.set("started_from", f.startedFrom);
   if (f.startedTo) params.set("started_to", f.startedTo);
+  if (f.sort) params.set("sort", f.sort);
+  if (f.order) params.set("order", f.order);
   const qs = params.toString();
 
   return useQuery({
-    queryKey: ["backups", f.instanceId ?? "all", f.startedFrom ?? "", f.startedTo ?? ""],
+    queryKey: [
+      "backups",
+      f.instanceId ?? "all",
+      f.startedFrom ?? "",
+      f.startedTo ?? "",
+      f.sort ?? "started_at",
+      f.order ?? "desc",
+    ],
     queryFn: () =>
       api.get<BackupListItem[]>(qs ? `/api/backups?${qs}` : "/api/backups"),
   });
@@ -268,6 +293,42 @@ export function useJobs(instanceId?: number) {
     queryKey: ["jobs", instanceId ?? "all"],
     queryFn: () =>
       api.get<Job[]>(instanceId === undefined ? "/api/jobs" : `/api/jobs?instance_id=${instanceId}`),
+  });
+}
+
+// ----------------- audit -----------------
+
+export interface AuditFilter {
+  actor?: string;
+  action?: string;
+  resource?: string;
+  tsFrom?: string;
+  tsTo?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export function useAuditLog(filter: AuditFilter = {}) {
+  const params = new URLSearchParams();
+  if (filter.actor) params.set("actor", filter.actor);
+  if (filter.action) params.set("action", filter.action);
+  if (filter.resource) params.set("resource", filter.resource);
+  if (filter.tsFrom) params.set("ts_from", filter.tsFrom);
+  if (filter.tsTo) params.set("ts_to", filter.tsTo);
+  if (filter.limit !== undefined) params.set("limit", String(filter.limit));
+  if (filter.offset !== undefined) params.set("offset", String(filter.offset));
+  const qs = params.toString();
+  return useQuery({
+    queryKey: ["audit", qs],
+    queryFn: () => api.get<AuditEntry[]>(qs ? `/api/audit?${qs}` : "/api/audit"),
+  });
+}
+
+export function useAuditFacets() {
+  return useQuery({
+    queryKey: ["audit-facets"],
+    queryFn: () => api.get<AuditFacets>("/api/audit/facets"),
+    staleTime: 60_000,
   });
 }
 

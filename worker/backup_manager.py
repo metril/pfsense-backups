@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import gzip
 import logging
-import re
 import shutil
 import time
 from dataclasses import dataclass
@@ -27,6 +26,12 @@ from sqlalchemy.orm import sessionmaker
 
 from pfsense_shared.crypto import Crypto
 from pfsense_shared.models import Backup, BackupSettings, Instance, Job
+from pfsense_shared.pfsense_probe import (
+    BROWSER_HEADERS,
+    DASHBOARD_MARKERS,
+    LOGIN_FORM_MARKERS,
+    extract_csrf,
+)
 from pfsense_shared.schemas import (
     BackupFailed,
     BackupFinished,
@@ -295,46 +300,13 @@ class PfSenseBackupManager:
     # HTTP flow (ported from the original YAML-driven code)
     # ------------------------------------------------------------------ #
 
-    # H5: attribute-order-agnostic. pfSense renders the CSRF input as either
-    # <input ... name="__csrf_magic" ... value="..."> or with name/value
-    # reversed depending on version and page; match both.
-    _CSRF_RE_NAME_FIRST = re.compile(
-        r"name=['\"]__csrf_magic['\"][^>]*value=['\"]([^'\"]*)['\"]"
-    )
-    _CSRF_RE_VALUE_FIRST = re.compile(
-        r"value=['\"]([^'\"]*)['\"][^>]*name=['\"]__csrf_magic['\"]"
-    )
-
-    # M5: browser-like headers. Some hardened pfSense builds reject requests
-    # without a sensible User-Agent / Accept.
-    _BROWSER_HEADERS = {
-        "User-Agent": "Mozilla/5.0 (compatible; pfsense-backups/0.2)",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-    }
-
-    # H6: positive dashboard markers (present only when logged in).
-    # pfSense CE 2.7+ and Plus 24.x render "Status: Dashboard" as the title.
-    # Older skins / themed builds drop the prefix, so also accept the bare
-    # "Dashboard" when combined with the authenticated chrome marker below.
-    _DASHBOARD_MARKERS = (
-        "<title>Status: Dashboard",
-        "widget-dashboard",
-        'id="logout"',
-        "index.php?logout",
-    )
-
-    # H8: negative markers — if any of these appear in the POST response, the
-    # login form is still being rendered, which means auth failed regardless
-    # of the 200 status. More reliable than the positive markers on themed
-    # or heavily customized pfSense installs where the dashboard title gets
-    # overridden.
-    _LOGIN_FORM_MARKERS = (
-        'name="passwordfld"',
-        "name='passwordfld'",
-        'name="usernamefld"',
-        "name='usernamefld'",
-    )
+    # Detection constants live in pfsense_shared.pfsense_probe so both this
+    # module and the web service's async preflight agree on what "logged in"
+    # looks like. Kept as class attrs below for back-compat with any out-of-
+    # tree callers or tests that reach into them directly.
+    _BROWSER_HEADERS = BROWSER_HEADERS
+    _DASHBOARD_MARKERS = DASHBOARD_MARKERS
+    _LOGIN_FORM_MARKERS = LOGIN_FORM_MARKERS
 
     # H7: pfSense emits text/xml, application/xml, or application/octet-stream
     # depending on version. Accept the family and fall back to body sniff.
@@ -342,8 +314,7 @@ class PfSenseBackupManager:
 
     @classmethod
     def _extract_csrf(cls, html: str) -> str | None:
-        m = cls._CSRF_RE_NAME_FIRST.search(html) or cls._CSRF_RE_VALUE_FIRST.search(html)
-        return m.group(1) if m else None
+        return extract_csrf(html)
 
     def _authenticate(self, http: requests.Session, snap: _InstanceSnapshot) -> bool:
         with MetricsTimer(self._metrics, snap.name, "auth") as timer:

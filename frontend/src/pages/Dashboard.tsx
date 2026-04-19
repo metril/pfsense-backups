@@ -83,7 +83,12 @@ function Tile({
     <div className="rounded-lg border border-border bg-muted/30 p-5">
       <div className="flex items-start justify-between gap-2">
         <div>
-          <div className="text-base font-semibold">{instance.name}</div>
+          <Link
+            to={`/instances/${instance.id}`}
+            className="text-base font-semibold hover:text-accent"
+          >
+            {instance.name}
+          </Link>
           <div className="mt-0.5 truncate text-xs text-muted-fg">{instance.url}</div>
         </div>
         {instance.enabled ? (

@@ -46,6 +46,16 @@ class ZipRequest(BaseModel):
     ids: list[int]
 
 
+# Columns the UI can ask to sort by. Restricted to indexed / lightweight
+# columns so we don't hand the user arbitrary ORDER BY targets.
+_SORTABLE = {
+    "started_at": Backup.started_at,
+    "size_bytes": Backup.size_bytes,
+    "duration_seconds": Backup.duration_seconds,
+    "filename": Backup.filename,
+}
+
+
 @router.get("", response_model=list[BackupListItem])
 async def list_backups(
     db: DbSession,
@@ -53,13 +63,17 @@ async def list_backups(
     # started_from / started_to: ISO-8601 inclusive bounds on started_at.
     started_from: datetime | None = None,
     started_to: datetime | None = None,
+    sort: str = "started_at",
+    order: str = "desc",
     limit: int = Query(default=100, le=500),
     offset: int = Query(default=0, ge=0),
 ) -> list[BackupListItem]:
+    col = _SORTABLE.get(sort, Backup.started_at)
+    direction = col.desc() if order.lower() == "desc" else col.asc()
     stmt = (
         select(Backup, Instance.name)
         .join(Instance, Backup.instance_id == Instance.id)
-        .order_by(Backup.started_at.desc())
+        .order_by(direction)
         .limit(limit)
         .offset(offset)
     )

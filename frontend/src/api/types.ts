@@ -80,6 +80,37 @@ export interface Notification {
   payload_template: Record<string, unknown> | null;
 }
 
+export interface AuditEntry {
+  id: number;
+  ts: string;
+  actor_email: string;
+  action: string;
+  resource: string;
+  resource_id: string | null;
+  details: Record<string, unknown> | null;
+}
+
+export interface AuditFacets {
+  actors: string[];
+  actions: string[];
+  resources: string[];
+}
+
+export interface PreflightRequest {
+  instance_id?: number;
+  url?: string;
+  username?: string;
+  password?: string;
+  verify_ssl?: boolean;
+  timeout_seconds?: number;
+}
+
+export interface PreflightResponse {
+  ok: boolean;
+  detail: string;
+  duration_ms: number;
+}
+
 export interface Job {
   id: number;
   instance_id: number | null;

@@ -25,6 +25,7 @@ from ..dependencies import CryptoDep, CurrentUser, DbSession, Ipc
 from ..services import audit
 from ..services.cron_utils import validate as validate_cron
 from ..services.cron_utils import validate_tz
+from ..services.pfsense_preflight import probe as preflight_probe
 
 log = logging.getLogger(__name__)
 
@@ -184,6 +185,71 @@ async def delete_instance(
     )
     await db.commit()
     await ipc.send(ReloadScheduleCommand(instance_id=instance_id))
+
+
+class PreflightRequest(BaseModel):
+    """Either pass credentials directly (create flow) OR an instance_id
+    (edit flow) to re-use the stored creds server-side."""
+
+    instance_id: int | None = None
+    url: str | None = None
+    username: str | None = None
+    password: str | None = None
+    verify_ssl: bool = False
+    timeout_seconds: int = 15
+
+
+class PreflightResponse(BaseModel):
+    ok: bool
+    detail: str
+    duration_ms: int
+
+
+@router.post("/preflight", response_model=PreflightResponse)
+async def preflight(
+    payload: PreflightRequest,
+    db: DbSession,
+    crypto: CryptoDep,
+    user: CurrentUser,
+) -> PreflightResponse:
+    """Run a real login flow against the pfSense and classify the result.
+
+    Synchronous to the HTTP request — no worker round-trip — so the
+    instance editor can show a green/red status inline before the user
+    saves. Credentials are read off the request, or pulled from the DB
+    (decrypted with the app's Fernet key) when ``instance_id`` is
+    provided.
+    """
+    url: str | None = payload.url
+    username: str | None = payload.username
+    password: str | None = payload.password
+    verify_ssl = payload.verify_ssl
+
+    if payload.instance_id is not None:
+        inst = await db.get(Instance, payload.instance_id)
+        if inst is None:
+            raise HTTPException(404, "instance not found")
+        url = url or inst.url
+        username = username or crypto.decrypt(inst.username_ct)
+        # Only fall back to the stored password when the caller didn't send one.
+        if not password:
+            password = crypto.decrypt(inst.password_ct)
+        verify_ssl = payload.verify_ssl or inst.verify_ssl
+
+    if not (url and username and password):
+        raise HTTPException(400, "url, username and password are required")
+
+    log.info("preflight requested by %s for url=%s", user["email"], url)
+    result = await preflight_probe(
+        url=url,
+        username=username,
+        password=password,
+        verify_ssl=verify_ssl,
+        timeout_seconds=payload.timeout_seconds,
+    )
+    return PreflightResponse(
+        ok=result.ok, detail=result.detail, duration_ms=result.duration_ms
+    )
 
 
 @router.post("/{instance_id}/test-connection")

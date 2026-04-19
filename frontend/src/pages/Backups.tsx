@@ -1,6 +1,17 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Archive, Download, Eye, Split, Tag as TagIcon, Trash2, X } from "lucide-react";
+import {
+  Archive,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  Download,
+  Eye,
+  Split,
+  Tag as TagIcon,
+  Trash2,
+  X,
+} from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
@@ -9,8 +20,11 @@ import {
   useDeleteBackup,
   useInstances,
   type BackupFilter,
+  type BackupOrder,
+  type BackupSort,
 } from "@/api/queries";
 import { api, triggerDownload } from "@/api/client";
+import { cn } from "@/lib/cn";
 
 // Convert a <input type="date"> value (YYYY-MM-DD, local) into an ISO-8601
 // boundary suitable for the started_from / started_to query params. "from"
@@ -28,11 +42,15 @@ export function BackupsPage() {
   const [instanceId, setInstanceId] = useState<number | undefined>(undefined);
   const [fromDate, setFromDate] = useState<string>("");
   const [toDate, setToDate] = useState<string>("");
+  const [sort, setSort] = useState<BackupSort>("started_at");
+  const [order, setOrder] = useState<BackupOrder>("desc");
 
   const filter: BackupFilter = {
     instanceId,
     startedFrom: boundary(fromDate, false),
     startedTo: boundary(toDate, true),
+    sort,
+    order,
   };
   const backups = useBackups(filter);
   const instances = useInstances();
@@ -72,6 +90,22 @@ export function BackupsPage() {
     if (!canDiff) return;
     const [a, b] = selectedList;
     nav(`/backups/diff/${a}/${b}`);
+  }
+
+  function clickSort(col: BackupSort) {
+    if (col === sort) {
+      setOrder(order === "asc" ? "desc" : "asc");
+    } else {
+      setSort(col);
+      // Size / duration tend to be read desc (largest first); dates default
+      // desc; filename is alphabetical so asc is more intuitive.
+      setOrder(col === "filename" ? "asc" : "desc");
+    }
+  }
+
+  function sortIcon(col: BackupSort) {
+    if (col !== sort) return <ArrowUpDown className="h-3 w-3 opacity-40" />;
+    return order === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />;
   }
 
   async function deleteBackup(id: number, filename: string) {
@@ -164,10 +198,10 @@ export function BackupsPage() {
           <tr>
             <th className="w-6"></th>
             <th className="text-left font-normal">Instance</th>
-            <th className="text-left font-normal">Started</th>
-            <th className="text-left font-normal">Duration</th>
-            <th className="text-left font-normal">File</th>
-            <th className="text-left font-normal">Size</th>
+            <SortHeader label="Started" col="started_at" current={sort} onClick={clickSort} icon={sortIcon} />
+            <SortHeader label="Duration" col="duration_seconds" current={sort} onClick={clickSort} icon={sortIcon} />
+            <SortHeader label="File" col="filename" current={sort} onClick={clickSort} icon={sortIcon} />
+            <SortHeader label="Size" col="size_bytes" current={sort} onClick={clickSort} icon={sortIcon} />
             <th className="text-left font-normal">Tag</th>
             <th className="text-left font-normal">Status</th>
             <th className="w-20"></th>
@@ -260,5 +294,38 @@ export function BackupsPage() {
         </tbody>
       </table>
     </div>
+  );
+}
+
+function SortHeader({
+  label,
+  col,
+  current,
+  onClick,
+  icon,
+}: {
+  label: string;
+  col: BackupSort;
+  current: BackupSort;
+  onClick: (c: BackupSort) => void;
+  icon: (c: BackupSort) => React.ReactNode;
+}) {
+  return (
+    <th className="text-left font-normal">
+      <button
+        type="button"
+        onClick={() => onClick(col)}
+        className={cn(
+          "inline-flex items-center gap-1 uppercase tracking-wider hover:text-fg",
+          col === current && "text-fg",
+        )}
+        aria-sort={
+          col !== current ? "none" : current ? "descending" : "ascending"
+        }
+      >
+        {label}
+        {icon(col)}
+      </button>
+    </th>
   );
 }

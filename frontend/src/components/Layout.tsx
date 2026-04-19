@@ -4,6 +4,7 @@ import {
   AlarmClock,
   BellRing,
   Boxes,
+  FileClock,
   History,
   LogOut,
   ScrollText,
@@ -23,6 +24,7 @@ const NAV = [
   { to: "/schedule", label: "Schedule", icon: AlarmClock },
   { to: "/notifications", label: "Notifications", icon: BellRing },
   { to: "/logs", label: "Logs", icon: ScrollText },
+  { to: "/audit", label: "Audit", icon: FileClock },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 

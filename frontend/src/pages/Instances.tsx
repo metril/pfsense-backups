@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { HardDriveDownload, Pencil, Plug, Play, Plus, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -14,6 +15,7 @@ import {
   useDeleteInstance,
   useImportBackups,
   useInstances,
+  usePreflight,
   useTestConnection,
   useUpdateInstance,
 } from "@/api/queries";
@@ -76,7 +78,11 @@ export function InstancesPage() {
           <tbody>
             {data!.map((inst) => (
               <tr key={inst.id} className="border-t border-border">
-                <td className="py-3">{inst.name}</td>
+                <td className="py-3">
+                  <Link to={`/instances/${inst.id}`} className="hover:text-accent">
+                    {inst.name}
+                  </Link>
+                </td>
                 <td className="py-3 font-mono text-xs">{inst.url}</td>
                 <td className="py-3 font-mono text-xs">
                   {inst.cron_expression ?? <span className="text-muted-fg">—</span>}
@@ -223,6 +229,10 @@ function toDraft(inst: Instance): Draft {
 function EditorDialog({ draft, onClose, onSave }: { draft: Draft; onClose: () => void; onSave: (d: Draft) => Promise<void> }) {
   const [d, setD] = useState(draft);
   const [saving, setSaving] = useState(false);
+  const preflight = usePreflight();
+  const [preflightMsg, setPreflightMsg] = useState<
+    { ok: boolean; detail: string; duration_ms: number } | null
+  >(null);
 
   async function save() {
     setSaving(true);
@@ -230,6 +240,26 @@ function EditorDialog({ draft, onClose, onSave }: { draft: Draft; onClose: () =>
       await onSave(d);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function runPreflight() {
+    setPreflightMsg(null);
+    try {
+      const r = await preflight.mutateAsync({
+        // Edit flow: if the user didn't touch the password, we pass the
+        // instance_id so the server pulls the stored ciphertext. Create flow
+        // has no id and sends the raw creds.
+        instance_id: d.id,
+        url: d.url || undefined,
+        username: d.username || undefined,
+        password: d.password || undefined,
+        verify_ssl: d.verify_ssl ?? false,
+        timeout_seconds: d.timeout_seconds ?? 15,
+      });
+      setPreflightMsg(r);
+    } catch (e) {
+      setPreflightMsg({ ok: false, detail: String(e), duration_ms: 0 });
     }
   }
 
@@ -289,9 +319,43 @@ function EditorDialog({ draft, onClose, onSave }: { draft: Draft; onClose: () =>
         </div>
       </div>
 
-      <div className="mt-6 flex justify-end gap-2">
-        <Button variant="secondary" onClick={onClose}>Cancel</Button>
-        <Button onClick={save} disabled={saving}>{saving ? "Saving…" : "Save"}</Button>
+      {preflightMsg && (
+        <div
+          className={
+            "mt-4 rounded-md border px-3 py-2 text-sm " +
+            (preflightMsg.ok
+              ? "border-ok/50 bg-ok/10 text-ok"
+              : "border-danger/50 bg-danger/10 text-danger")
+          }
+          role="status"
+        >
+          <div className="font-medium">
+            {preflightMsg.ok ? "Connection OK" : "Connection failed"}{" "}
+            <span className="font-normal text-muted-fg">
+              ({preflightMsg.duration_ms} ms)
+            </span>
+          </div>
+          <div className="mt-0.5 text-xs">{preflightMsg.detail}</div>
+        </div>
+      )}
+
+      <div className="mt-6 flex items-center justify-between gap-2">
+        <Button
+          variant="secondary"
+          onClick={runPreflight}
+          disabled={preflight.isPending || saving || !d.url || !d.username}
+          title={
+            !d.url || !d.username
+              ? "Fill in URL and username first"
+              : "Run a live login against this pfSense"
+          }
+        >
+          {preflight.isPending ? "Testing…" : "Test connection"}
+        </Button>
+        <div className="flex gap-2">
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button onClick={save} disabled={saving}>{saving ? "Saving…" : "Save"}</Button>
+        </div>
       </div>
     </Dialog>
   );
