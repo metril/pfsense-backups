@@ -1,6 +1,16 @@
 import { DiffEditor } from "@monaco-editor/react";
 import "@/lib/monacoInit";
 
+// Module-level options so a parent re-render doesn't hand Monaco a
+// fresh object on every pass — see MonacoViewer for the same note.
+const OPTIONS = {
+  readOnly: true,
+  originalEditable: false,
+  renderSideBySide: true,
+  wordWrap: "on",
+  minimap: { enabled: false },
+} as const;
+
 export default function MonacoDiff({
   original,
   modified,
@@ -15,13 +25,7 @@ export default function MonacoDiff({
       language="xml"
       theme="vs-dark"
       height="100%"
-      options={{
-        readOnly: true,
-        originalEditable: false,
-        renderSideBySide: true,
-        wordWrap: "on",
-        minimap: { enabled: false },
-      }}
+      options={OPTIONS}
     />
   );
 }

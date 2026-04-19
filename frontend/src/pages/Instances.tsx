@@ -432,8 +432,28 @@ function EditorDialog({
         </Field>
         <Field label="Subfolder"><Input value={d.subfolder ?? ""} onChange={(e) => setD({ ...d, subfolder: e.target.value || null })} /></Field>
         <Field label="Backup prefix"><Input value={d.backup_prefix} onChange={(e) => setD({ ...d, backup_prefix: e.target.value })} /></Field>
-        <Field label="Timeout (s)"><Input type="number" value={d.timeout_seconds} onChange={(e) => setD({ ...d, timeout_seconds: Number(e.target.value) })} /></Field>
-        <Field label="Retention count"><Input type="number" value={d.retention_count} onChange={(e) => setD({ ...d, retention_count: Number(e.target.value) })} /></Field>
+        <Field label="Timeout (s)">
+          <Input
+            type="number"
+            min={1}
+            value={d.timeout_seconds}
+            onChange={(e) => {
+              const v = e.target.valueAsNumber;
+              if (Number.isFinite(v) && v > 0) setD({ ...d, timeout_seconds: v });
+            }}
+          />
+        </Field>
+        <Field label="Retention count">
+          <Input
+            type="number"
+            min={1}
+            value={d.retention_count}
+            onChange={(e) => {
+              const v = e.target.valueAsNumber;
+              if (Number.isFinite(v) && v > 0) setD({ ...d, retention_count: v });
+            }}
+          />
+        </Field>
 
         <Field label="Verify SSL">
           <Switch

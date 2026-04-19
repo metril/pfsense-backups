@@ -424,10 +424,14 @@ function EditorDialog({
               <Field label="Timeout (seconds)">
                 <Input
                   type="number"
+                  min={1}
                   value={d.timeout_seconds}
-                  onChange={(e) =>
-                    setD({ ...d, timeout_seconds: Number(e.target.value) })
-                  }
+                  onChange={(e) => {
+                    const v = e.target.valueAsNumber;
+                    if (Number.isFinite(v) && v > 0) {
+                      setD({ ...d, timeout_seconds: v });
+                    }
+                  }}
                 />
               </Field>
               {d.kind !== "healthchecks" && (
@@ -745,18 +749,24 @@ function HcFields({ d, setD }: { d: Draft; setD: (d: Draft) => void }) {
             <Field label="Expected interval (seconds)">
               <Input
                 type="number"
+                min={1}
                 value={c.expected_timeout ?? 86400}
-                onChange={(e) =>
-                  setCfg({ expected_timeout: Number(e.target.value) })
-                }
+                onChange={(e) => {
+                  const v = e.target.valueAsNumber;
+                  if (Number.isFinite(v) && v > 0) setCfg({ expected_timeout: v });
+                }}
               />
               <p className="mt-1 text-xs text-muted-fg">Default: 86400 (24h).</p>
             </Field>
             <Field label="Grace period (seconds)">
               <Input
                 type="number"
+                min={1}
                 value={c.grace ?? 3600}
-                onChange={(e) => setCfg({ grace: Number(e.target.value) })}
+                onChange={(e) => {
+                  const v = e.target.valueAsNumber;
+                  if (Number.isFinite(v) && v > 0) setCfg({ grace: v });
+                }}
               />
               <p className="mt-1 text-xs text-muted-fg">Default: 3600 (1h).</p>
             </Field>

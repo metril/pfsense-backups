@@ -69,18 +69,29 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       {children}
       <div className="pointer-events-none fixed bottom-4 right-4 z-50 flex w-80 flex-col gap-2">
         {toasts.map((t) => (
-          <ToastItem key={t.id} toast={t} onDismiss={() => dismiss(t.id)} />
+          <ToastItem key={t.id} toast={t} onDismiss={dismiss} />
         ))}
       </div>
     </Ctx.Provider>
   );
 }
 
-function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }) {
+function ToastItem({
+  toast,
+  onDismiss,
+}: {
+  toast: Toast;
+  onDismiss: (id: number) => void;
+}) {
+  // Deps intentionally exclude ``onDismiss`` — ``dismiss`` is stable via
+  // useCallback but we still key the effect on the toast's own identity
+  // so a new toast above us in the stack doesn't retrigger and extend
+  // our timer.
   useEffect(() => {
-    const h = setTimeout(onDismiss, toast.timeoutMs);
+    const h = setTimeout(() => onDismiss(toast.id), toast.timeoutMs);
     return () => clearTimeout(h);
-  }, [onDismiss, toast.timeoutMs]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [toast.id, toast.timeoutMs]);
 
   const icon = {
     error: <XCircle className="h-4 w-4 text-danger" aria-hidden />,
@@ -117,7 +128,7 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
         </div>
         <button
           type="button"
-          onClick={onDismiss}
+          onClick={() => onDismiss(toast.id)}
           aria-label="Dismiss notification"
           className="rounded p-0.5 text-muted-fg hover:text-fg"
         >
