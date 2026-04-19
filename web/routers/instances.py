@@ -217,6 +217,15 @@ async def update_instance(
     if "backup_encrypt" in sent and inst.backup_encrypt != sent["backup_encrypt"]:
         inst.backup_encrypt = sent["backup_encrypt"]
         changed["backup_encrypt"] = sent["backup_encrypt"]
+        # When encryption is turned off, clear any stored ciphertext on
+        # the same save so we don't leave an orphan password sitting on a
+        # disabled row. The UI may send ``"__set__"`` if the user didn't
+        # touch the password field — we still drop it here because the
+        # operator's intent is "stop encrypting."
+        if not inst.backup_encrypt and inst.backup_encrypt_password_ct is not None:
+            inst.backup_encrypt_password_ct = None
+            changed["backup_encrypt_password"] = "<cleared>"
+            password_actually_changed = True
 
     # Invariant check after everything's applied: if encryption is on,
     # a ciphertext must exist. Refuse saves that would leave the row in

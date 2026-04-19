@@ -551,9 +551,10 @@ function BackupContentsSection({
               setD({
                 ...d,
                 backup_encrypt: v,
-                // Turning encrypt off clears any pending password change
-                // so we don't submit ambiguous state.
-                backup_encrypt_password: v ? d.backup_encrypt_password : null,
+                // Keep whatever the user has typed / the stored sentinel
+                // across toggle cycles so a fat-finger off/on doesn't
+                // silently drop their new password. The server clears
+                // the ciphertext when backup_encrypt=false lands anyway.
                 reencrypt_existing_backups: v
                   ? d.reencrypt_existing_backups
                   : false,

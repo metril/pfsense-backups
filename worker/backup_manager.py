@@ -171,6 +171,13 @@ class _SaveResult:
     path: Path
     size_bytes: int
     compressed: bool
+    # True when the pfSense response body is the ``---- BEGIN config.xml ----``
+    # encrypted wrapper rather than raw XML. When the instance asked for
+    # encryption but pfSense returned plain XML (version bug, password
+    # silently ignored), this is False — and ``_write_backup_history``
+    # uses that to mark the row as not-actually-encrypted so subsequent
+    # re-encrypt jobs don't try to decrypt plaintext.
+    content_encrypted: bool
 
 
 class PfSenseBackupManager:
@@ -222,24 +229,6 @@ class PfSenseBackupManager:
             self._fail_job(job_id, f"Instance {instance_id} not found")
             return False
 
-        # Surface a config-time refusal rather than hitting pfSense and
-        # letting it fail with an opaque "no password" error.
-        if snap.backup_encrypt and not snap.backup_encrypt_password:
-            msg = (
-                f"Backup refused: encryption is on for '{snap.name}' but "
-                f"no encryption password is configured."
-            )
-            self._publisher.publish(
-                BackupFailed(
-                    job_id=job_id,
-                    instance_id=snap.id,
-                    error=msg,
-                    ts=datetime.now(UTC),
-                )
-            )
-            self._fail_job(job_id, msg)
-            return False
-
         def _notify_result(ok: bool, detail: str) -> None:
             if not notify:
                 return
@@ -254,6 +243,27 @@ class PfSenseBackupManager:
                     )
             except Exception as exc:
                 log.error("Notifier per-instance send failed: %s", exc)
+
+        # Surface a config-time refusal rather than hitting pfSense and
+        # letting it fail with an opaque "no password" error. Defined
+        # *after* ``_notify_result`` so scheduled refusals still fire
+        # the configured notifications — operators must hear about this.
+        if snap.backup_encrypt and not snap.backup_encrypt_password:
+            msg = (
+                f"Backup refused: encryption is on for '{snap.name}' but "
+                f"no encryption password is configured."
+            )
+            self._publisher.publish(
+                BackupFailed(
+                    job_id=job_id,
+                    instance_id=snap.id,
+                    error=msg,
+                    ts=datetime.now(UTC),
+                )
+            )
+            self._fail_job(job_id, msg)
+            _notify_result(False, msg)
+            return False
 
         if notify:
             try:
@@ -592,6 +602,7 @@ class PfSenseBackupManager:
         job_id: int,
         new_password: str,
         also_update_instance_passwords: bool,
+        locked_instance_ids: set[int] | None = None,
     ) -> None:
         """Re-encrypt every encrypted Backup row across every instance.
 
@@ -599,6 +610,13 @@ class PfSenseBackupManager:
         ``new_password`` so future backups keep using it — done in a
         single transaction after the file work completes so a crash
         can't leave the fleet half-updated.
+
+        ``locked_instance_ids`` is the set of instance ids the caller is
+        holding per-instance locks for. When provided, the password
+        rotation only touches instances in this set — a new instance
+        created mid-run would be visible to the live query but its
+        newly-entered password is the operator's intent for that box,
+        so leaving it alone is the safe choice.
         """
         self._mark_job(job_id, status="running")
         with self._session_factory() as s:
@@ -640,11 +658,14 @@ class PfSenseBackupManager:
                 try:
                     new_ct = self._crypto.encrypt(new_password)
                     with self._session_factory() as s:
-                        to_update = (
-                            s.query(Instance)
-                            .filter(Instance.backup_encrypt.is_(True))
-                            .all()
-                        )
+                        q = s.query(Instance).filter(Instance.backup_encrypt.is_(True))
+                        if locked_instance_ids is not None:
+                            # Don't touch instances created after we took
+                            # our lock snapshot — their password is whatever
+                            # the operator just set, and we don't hold
+                            # their lock to safely update it.
+                            q = q.filter(Instance.id.in_(locked_instance_ids))
+                        to_update = q.all()
                         for inst in to_update:
                             inst.backup_encrypt_password_ct = new_ct
                         s.commit()
@@ -1037,6 +1058,19 @@ class PfSenseBackupManager:
         xml_path.write_text(content, encoding="utf-8")
         original_size = xml_path.stat().st_size
 
+        # Probe the *actual* response shape so the DB row reflects
+        # what pfSense sent, not what the operator asked for. Prevents
+        # a permanently-broken re-encrypt row if pfSense ignored the
+        # encrypt=yes flag (version bug, empty password silently
+        # dropped) and returned plain XML instead.
+        content_encrypted = looks_encrypted(content)
+        if snap.backup_encrypt and not content_encrypted:
+            log.warning(
+                "Instance %s asked pfSense for an encrypted backup but the "
+                "response body is plain XML; storing row as unencrypted.",
+                snap.name,
+            )
+
         if snap.compress:
             gz_path = xml_path.with_suffix(xml_path.suffix + ".gz")
             with open(xml_path, "rb") as f_in, gzip.open(gz_path, "wb") as f_out:
@@ -1046,10 +1080,16 @@ class PfSenseBackupManager:
             self._metrics.set_compression_ratio(snap.name, ratio)
             xml_path.unlink()
             self._metrics.backup_file_size_bytes.labels(instance=snap.name).set(gz_size)
-            return _SaveResult(path=gz_path, size_bytes=gz_size, compressed=True)
+            return _SaveResult(
+                path=gz_path, size_bytes=gz_size, compressed=True,
+                content_encrypted=content_encrypted,
+            )
 
         self._metrics.backup_file_size_bytes.labels(instance=snap.name).set(original_size)
-        return _SaveResult(path=xml_path, size_bytes=original_size, compressed=False)
+        return _SaveResult(
+            path=xml_path, size_bytes=original_size, compressed=False,
+            content_encrypted=content_encrypted,
+        )
 
     def _cleanup_old_backups(self, snap: _InstanceSnapshot) -> int:
         """Retention enforcement, Backup-table-driven.
@@ -1127,7 +1167,15 @@ class PfSenseBackupManager:
             included_rrd = snap.backup_include_rrd if snap else False
             included_packages = snap.backup_include_packages if snap else True
             included_ssh = snap.backup_include_ssh if snap else True
-            encrypted = bool(snap and snap.backup_encrypt and success)
+            # ``encrypted`` reflects what's actually on disk — not what we
+            # asked for. If pfSense ignored encrypt=yes (version bug,
+            # silently-dropped password) and returned plain XML, mark the
+            # row unencrypted so later re-encrypt jobs don't try to decrypt
+            # plaintext and leave the row permanently stuck as a failure.
+            response_was_encrypted = bool(result and result.content_encrypted)
+            encrypted = bool(
+                snap and snap.backup_encrypt and success and response_was_encrypted
+            )
             # Only persist the per-row password when the file on disk is
             # actually encrypted — a failed encrypt run leaves nothing
             # to decrypt, so there's no password worth storing.

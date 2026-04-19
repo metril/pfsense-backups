@@ -198,6 +198,7 @@ class IpcListener:
                 }
             )
 
+        locked_ids = set(iids)
         with ExitStack() as stack:
             for iid in iids:
                 stack.enter_context(self._instance_locks.for_instance(iid))
@@ -205,6 +206,7 @@ class IpcListener:
                 c.job_id,
                 new_password=plaintext,
                 also_update_instance_passwords=c.also_update_instance_passwords,
+                locked_instance_ids=locked_ids,
             )
 
     def _handle_test_connection(self, payload: dict) -> None:
