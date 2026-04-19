@@ -1,10 +1,12 @@
+// Thin wrapper around <ScheduleForm> that adds the timezone picker and
+// the live description + next-runs preview. The heavy lifting (preset
+// UI, round-trip parsing) lives in ScheduleForm.
+
 import { useEffect, useMemo, useState } from "react";
 import cronstrue from "cronstrue";
 import cronParser from "cron-parser";
 import { cn } from "@/lib/cn";
-import { Button } from "@/components/ui/Button";
-import { Input } from "@/components/ui/Input";
-import { CronBuilderModal } from "./CronBuilderModal";
+import { ScheduleForm } from "./ScheduleForm";
 
 // M12: Intl.supportedValuesOf is widely available in evergreen browsers;
 // fall back to a short curated list if missing so the app still works.
@@ -30,7 +32,6 @@ export function CronEditor({
   timezone?: string;
   onTimezoneChange?: (v: string) => void;
 }) {
-  const [modalOpen, setModalOpen] = useState(false);
   const [description, setDescription] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [nextRuns, setNextRuns] = useState<string[]>([]);
@@ -56,49 +57,45 @@ export function CronEditor({
   }, [value, timezone]);
 
   return (
-    <div className="space-y-2">
-      <div className="flex gap-2">
-        <Input
-          value={value ?? ""}
-          onChange={(e) => onChange(e.target.value || null)}
-          placeholder="0 2 * * *"
-          className={cn(error && "border-danger")}
-        />
-        <Button type="button" variant="secondary" onClick={() => setModalOpen(true)}>
-          Build…
-        </Button>
-      </div>
+    <div className="space-y-3">
+      <ScheduleForm value={value} onChange={onChange} />
 
       {onTimezoneChange && (
         // Real <select> (not an <input list>) — datalists render unreliably
         // inside portal-rendered modals on some browsers, which made the TZ
         // "dropdown" look stuck.
-        <select
-          value={tzList.includes(timezone) ? timezone : "__custom__"}
-          onChange={(e) => {
-            const v = e.target.value;
-            if (v !== "__custom__") onTimezoneChange(v);
-          }}
-          aria-label="Timezone"
-          className={cn(
-            "h-9 w-full rounded-md border border-border bg-bg px-3 text-sm",
-            "focus-visible:border-accent focus-visible:outline-none",
-          )}
-        >
-          {/* If the saved tz isn't in the browser's IANA list (e.g. an older
-              snapshot), keep it visible as a disabled option so the user
-              doesn't silently have it overwritten. */}
-          {!tzList.includes(timezone) && (
-            <option value="__custom__" disabled>
-              {timezone} (not in browser list)
-            </option>
-          )}
-          {tzList.map((tz) => (
-            <option key={tz} value={tz}>
-              {tz}
-            </option>
-          ))}
-        </select>
+        <div>
+          <label className="block text-xs text-muted-fg" htmlFor="tz-picker">
+            Timezone
+          </label>
+          <select
+            id="tz-picker"
+            value={tzList.includes(timezone) ? timezone : "__custom__"}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v !== "__custom__") onTimezoneChange(v);
+            }}
+            aria-label="Timezone"
+            className={cn(
+              "mt-1 h-9 w-full rounded-md border border-border bg-bg px-3 text-sm",
+              "focus-visible:border-accent focus-visible:outline-none",
+            )}
+          >
+            {/* If the saved tz isn't in the browser's IANA list (e.g. an older
+                snapshot), keep it visible as a disabled option so the user
+                doesn't silently have it overwritten. */}
+            {!tzList.includes(timezone) && (
+              <option value="__custom__" disabled>
+                {timezone} (not in browser list)
+              </option>
+            )}
+            {tzList.map((tz) => (
+              <option key={tz} value={tz}>
+                {tz}
+              </option>
+            ))}
+          </select>
+        </div>
       )}
 
       {error ? (
@@ -114,15 +111,6 @@ export function CronEditor({
           ))}
         </ul>
       )}
-
-      <CronBuilderModal
-        open={modalOpen}
-        onOpenChange={setModalOpen}
-        onApply={(expr) => {
-          onChange(expr);
-          setModalOpen(false);
-        }}
-      />
     </div>
   );
 }

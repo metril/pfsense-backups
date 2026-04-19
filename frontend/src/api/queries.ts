@@ -129,41 +129,13 @@ export function useImportBackups() {
 }
 
 // ----------------- schedule -----------------
+// Read-only hook; schedule edits flow through the Instance editor now.
+// The PUT /api/schedule/{id} + GET /api/schedule/_tools/preview endpoints
+// remain on the server for API/rollback stability but no frontend caller
+// exercises them.
 
 export function useSchedules() {
   return useQuery({ queryKey: ["schedule"], queryFn: () => api.get<ScheduleRow[]>("/api/schedule") });
-}
-
-export function useUpdateSchedule() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({
-      id,
-      cron_expression,
-      cron_timezone,
-      enabled,
-    }: {
-      id: number;
-      cron_expression: string | null;
-      cron_timezone: string;
-      enabled: boolean;
-    }) =>
-      api.put<ScheduleRow>(`/api/schedule/${id}`, {
-        cron_expression,
-        cron_timezone,
-        enabled,
-      }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["schedule"] });
-      qc.invalidateQueries({ queryKey: ["instances"] });
-    },
-  });
-}
-
-export async function previewCron(cron: string, tz: string = "UTC") {
-  return api.get<{ cron: string; description: string; next_runs: string[] }>(
-    `/api/schedule/_tools/preview?cron=${encodeURIComponent(cron)}&tz=${encodeURIComponent(tz)}`,
-  );
 }
 
 // ----------------- backups -----------------

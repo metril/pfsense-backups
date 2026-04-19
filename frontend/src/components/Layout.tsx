@@ -1,7 +1,6 @@
 import { Link, NavLink, Outlet } from "react-router-dom";
 import {
   Activity,
-  AlarmClock,
   BellRing,
   Boxes,
   FileClock,
@@ -21,7 +20,6 @@ const NAV = [
   { to: "/", label: "Dashboard", icon: Activity, end: true },
   { to: "/instances", label: "Instances", icon: Boxes },
   { to: "/backups", label: "Backups", icon: History },
-  { to: "/schedule", label: "Schedule", icon: AlarmClock },
   { to: "/notifications", label: "Notifications", icon: BellRing },
   { to: "/logs", label: "Logs", icon: ScrollText },
   { to: "/audit", label: "Audit", icon: FileClock },

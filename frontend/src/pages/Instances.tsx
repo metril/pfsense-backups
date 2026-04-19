@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
+import cronstrue from "cronstrue";
 import { HardDriveDownload, Pencil, Plug, Play, Plus, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -23,6 +24,17 @@ import type { Instance, InstanceCreate } from "@/api/types";
 
 type Draft = InstanceCreate & { id?: number };
 
+// Default new instances to the browser's local IANA timezone so users see
+// schedule times in the zone they actually live in. Saved instances keep
+// whatever tz they were stored with.
+function browserTz(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
+
 const blank = (): Draft => ({
   name: "",
   url: "",
@@ -33,11 +45,22 @@ const blank = (): Draft => ({
   verify_ssl: false,
   timeout_seconds: 30,
   cron_expression: null,
-  cron_timezone: "UTC",
+  cron_timezone: browserTz(),
   enabled: true,
   retention_count: 365,
   compress: false,
 });
+
+function scheduleSummary(cron: string | null): string {
+  if (!cron) return "Disabled";
+  try {
+    return cronstrue.toString(cron, { use24HourTimeFormat: true });
+  } catch {
+    // Fall back to the raw expression rather than swallow — the user
+    // should still see something recognizable if cronstrue chokes.
+    return cron;
+  }
+}
 
 export function InstancesPage() {
   const { data, isPending } = useInstances();
@@ -84,8 +107,16 @@ export function InstancesPage() {
                   </Link>
                 </td>
                 <td className="py-3 font-mono text-xs">{inst.url}</td>
-                <td className="py-3 font-mono text-xs">
-                  {inst.cron_expression ?? <span className="text-muted-fg">—</span>}
+                <td className="py-3 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setEditing(toDraft(inst))}
+                    className="text-left hover:text-accent"
+                    title={inst.cron_expression ?? "Click to set up a schedule"}
+                    aria-label={`Edit schedule for ${inst.name}`}
+                  >
+                    {scheduleSummary(inst.cron_expression)}
+                  </button>
                 </td>
                 <td className="py-3">{inst.retention_count}</td>
                 <td className="py-3">

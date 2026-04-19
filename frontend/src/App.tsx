@@ -12,7 +12,6 @@ import { BackupDiffPage } from "./pages/BackupDiff";
 import { BackupViewPage } from "./pages/BackupView";
 import { LogsPage } from "./pages/Logs";
 import { AuditPage } from "./pages/Audit";
-import { SchedulePage } from "./pages/Schedule";
 import { NotificationsPage } from "./pages/Notifications";
 import { SettingsPage } from "./pages/Settings";
 
@@ -45,7 +44,6 @@ export default function App() {
         <Route path="backups" element={<BackupsPage />} />
         <Route path="backups/:id/view" element={<BackupViewPage />} />
         <Route path="backups/diff/:a/:b" element={<BackupDiffPage />} />
-        <Route path="schedule" element={<SchedulePage />} />
         <Route path="notifications" element={<NotificationsPage />} />
         <Route path="logs" element={<LogsPage />} />
         <Route path="audit" element={<AuditPage />} />
