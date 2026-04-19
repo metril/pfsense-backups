@@ -1,26 +1,33 @@
 """Encrypt/decrypt helpers for pfSense diag_backup.php encrypted config files.
 
-pfSense wraps the ciphertext with:
+pfSense's ``tagfile_reformat()`` (src/etc/inc/crypt.inc) wraps the
+ciphertext as a plain tag block with no metadata headers::
 
     ---- BEGIN config.xml ----
-    Version: <pfsense-version>
-    Cipher: AES-256-CBC
-    Hash: SHA256
-
-    <base64 of "Salted__<8-byte salt><ciphertext>">
+    <64-char base64 line>
+    <64-char base64 line>
+    ...
     ---- END config.xml ----
 
-Two KDFs exist in the wild:
+The base64 body decodes to ``Salted__<8-byte salt><AES-256-CBC
+ciphertext>`` — OpenSSL ``enc`` format. pfSense runs ``openssl enc -e
+-aes-256-cbc -salt -md sha256 -pbkdf2 -iter 500000`` for encrypt and
+mirrors those flags for decrypt.
 
-* **pfSense 2.7+** — PBKDF2-SHA256, 100 000 iterations, 48-byte derived
-  output split as 32-byte key + 16-byte IV.
-* **pfSense ≤ 2.6** — OpenSSL's legacy ``EVP_BytesToKey`` with MD5 over
-  ``password || salt``.
+Three KDF choices live in the wild; decrypt tries them in order so we
+can open every historical pfSense snapshot:
 
-Decrypt picks the KDF based on the ``Hash:`` header when present, with a
-fallback attempt on the opposite KDF so we can still read pre-2.7
-backups that shipped without the header. Encrypt always emits the 2.7+
-PBKDF2-SHA256 format.
+1. **pfSense 2.7.1+** — PBKDF2-SHA256, **500 000** iterations
+   (``PFS_OPENSSL_DEFAULT_ITERATIONS``).
+2. **pfSense 2.7.0 / early 2.7.1** — PBKDF2-SHA256, **10 000**
+   iterations (the "previous default" fallback pfSense's own
+   ``crypt_data`` retries on decrypt failure).
+3. **pfSense ≤ 2.6** — OpenSSL's legacy ``EVP_BytesToKey`` with MD5
+   over ``password || salt``.
+
+Encrypt always emits the 2.7.1+ format (500 000 iters, no headers,
+64-char base64 wrap) so the output round-trips through pfSense's
+"Restore configuration" UI without modification.
 
 Used from both the worker (re-encrypt jobs) and the web service
 (in-memory decrypt for View XML / Diff / Download).
@@ -39,9 +46,12 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.hashes import SHA256
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
-# PBKDF2 parameters pfSense 2.7+ uses. Iteration count is hard-coded in
-# their config.lib.inc; changing this would silently break decryption.
-_PBKDF2_ITERATIONS = 100_000
+# PBKDF2 parameters matching pfSense's PFS_OPENSSL_DEFAULT_ITERATIONS.
+# Encrypt always uses the current default. Decrypt tries this first,
+# then the legacy 10_000 iteration count, then the MD5 EVP_BytesToKey
+# KDF — same chain pfSense's crypt_data() follows internally.
+_PBKDF2_ITERATIONS_CURRENT = 500_000
+_PBKDF2_ITERATIONS_LEGACY = 10_000
 _KEY_BYTES = 32  # AES-256
 _IV_BYTES = 16   # AES block size
 _SALT_BYTES = 8
@@ -50,9 +60,11 @@ _SALT_PREFIX = b"Salted__"
 # Canonical wrapper markers produced by pfSense's tagfile_reformat().
 _BEGIN = "---- BEGIN config.xml ----"
 _END = "---- END config.xml ----"
-# The version we stamp into re-encrypted files. Not parsed by pfSense on
-# import; it just wants the Cipher/Hash lines to match.
-_ENCRYPT_VERSION = "2.7.2"
+# pfSense wraps the base64 body at 64 chars per line (src/etc/inc/crypt.inc
+# tagfile_reformat). base64_decode on the PHP side strips newlines so
+# the wrap width doesn't affect correctness, but matching pfSense's own
+# shape keeps diffs clean when someone eyeballs two backups side-by-side.
+_BASE64_LINE_WIDTH = 64
 
 
 class PfSenseCryptoError(Exception):
@@ -129,12 +141,14 @@ def _split_salted(raw: bytes) -> tuple[bytes, bytes]:
     return salt, ciphertext
 
 
-def _derive_pbkdf2_sha256(password: bytes, salt: bytes) -> tuple[bytes, bytes]:
+def _derive_pbkdf2_sha256(
+    password: bytes, salt: bytes, iterations: int = _PBKDF2_ITERATIONS_CURRENT
+) -> tuple[bytes, bytes]:
     kdf = PBKDF2HMAC(
         algorithm=SHA256(),
         length=_KEY_BYTES + _IV_BYTES,
         salt=salt,
-        iterations=_PBKDF2_ITERATIONS,
+        iterations=iterations,
     )
     out = kdf.derive(password)
     return out[:_KEY_BYTES], out[_KEY_BYTES : _KEY_BYTES + _IV_BYTES]
@@ -172,23 +186,25 @@ def _looks_like_xml(data: bytes) -> bool:
     return head.startswith(b"<?xml") or head.startswith(b"<pfsense")
 
 
-_KDF_PBKDF2 = "pbkdf2"
+# KDF identifiers for the decrypt attempt chain. Matches pfSense's
+# crypt_data fallback order: current default → previous default → legacy MD5.
+_KDF_PBKDF2_CURRENT = "pbkdf2-500k"
+_KDF_PBKDF2_LEGACY = "pbkdf2-10k"
 _KDF_MD5 = "md5"
 
 
-def _pick_kdf_order(headers: dict[str, str]) -> tuple[str, str]:
-    """Return (primary, fallback) KDF names based on the wrapper headers.
+def _kdf_attempt_order(headers: dict[str, str]) -> tuple[str, ...]:
+    """Return the KDF names to try in order for decrypt.
 
-    pfSense 2.7+ emits ``Hash: SHA256``; older releases omit the header
-    or don't include Hash at all. When we don't know, try PBKDF2 first
-    (matches modern pfSense) and fall back to MD5.
+    Header hints are only advisory — pfSense's own wrapper doesn't write
+    them, so the hint is mostly from files we produced in an older version
+    of this tool. The MD5 hint forces legacy-first; everything else walks
+    the full chain so we can open every historical pfSense backup.
     """
     hash_hint = headers.get("hash", "").lower()
-    if "sha" in hash_hint:
-        return _KDF_PBKDF2, _KDF_MD5
     if "md5" in hash_hint:
-        return _KDF_MD5, _KDF_PBKDF2
-    return _KDF_PBKDF2, _KDF_MD5
+        return (_KDF_MD5, _KDF_PBKDF2_CURRENT, _KDF_PBKDF2_LEGACY)
+    return (_KDF_PBKDF2_CURRENT, _KDF_PBKDF2_LEGACY, _KDF_MD5)
 
 
 def decrypt_pfsense_backup(blob: bytes | str, password: str) -> bytes:
@@ -210,15 +226,17 @@ def decrypt_pfsense_backup(blob: bytes | str, password: str) -> bytes:
     salt, ciphertext = _split_salted(raw)
     pw_bytes = password.encode("utf-8")
 
-    primary, fallback = _pick_kdf_order(parsed.headers)
+    def _derive(kdf_name: str) -> tuple[bytes, bytes]:
+        if kdf_name == _KDF_PBKDF2_CURRENT:
+            return _derive_pbkdf2_sha256(pw_bytes, salt, _PBKDF2_ITERATIONS_CURRENT)
+        if kdf_name == _KDF_PBKDF2_LEGACY:
+            return _derive_pbkdf2_sha256(pw_bytes, salt, _PBKDF2_ITERATIONS_LEGACY)
+        return _derive_evp_bytestokey_md5(pw_bytes, salt)
 
     last_exc: Exception | None = None
-    for kdf_name in (primary, fallback):
-        derive = (
-            _derive_pbkdf2_sha256 if kdf_name == _KDF_PBKDF2 else _derive_evp_bytestokey_md5
-        )
+    for kdf_name in _kdf_attempt_order(parsed.headers):
         try:
-            key, iv = derive(pw_bytes, salt)
+            key, iv = _derive(kdf_name)
             plaintext = _aes_cbc_decrypt(key, iv, ciphertext)
         except Exception as exc:
             last_exc = exc
@@ -238,31 +256,32 @@ def decrypt_pfsense_backup(blob: bytes | str, password: str) -> bytes:
 
 
 def encrypt_pfsense_backup(xml: bytes | str, password: str) -> bytes:
-    """Encrypt XML with the pfSense 2.7+ wrapper format.
+    """Encrypt XML with the pfSense 2.7.1+ wrapper format.
 
-    Emits the same ``---- BEGIN config.xml ----`` envelope pfSense
-    produces, using PBKDF2-SHA256 (100 000 iters) + AES-256-CBC. Output
-    is UTF-8 text wrapped in bytes so callers can write it straight to
-    disk alongside non-encrypted backups.
+    Produces the exact byte shape pfSense's own ``tagfile_reformat()``
+    emits — just the BEGIN/END markers plus a base64 body wrapped at 64
+    characters per line, with no inline ``Version``/``Cipher``/``Hash``
+    headers. PHP's ``base64_decode`` silently skips whitespace but would
+    fold any header text into the ciphertext and corrupt the restore,
+    so we match pfSense's shape verbatim.
+
+    Uses PBKDF2-SHA256 at 500 000 iterations (pfSense's current default)
+    + AES-256-CBC with a random 8-byte salt. Output is UTF-8 text
+    wrapped in bytes so callers can write it straight to disk alongside
+    non-encrypted backups.
     """
     plaintext = xml.encode("utf-8") if isinstance(xml, str) else xml
     salt = os.urandom(_SALT_BYTES)
-    key, iv = _derive_pbkdf2_sha256(password.encode("utf-8"), salt)
+    key, iv = _derive_pbkdf2_sha256(
+        password.encode("utf-8"), salt, _PBKDF2_ITERATIONS_CURRENT
+    )
     ciphertext = _aes_cbc_encrypt(key, iv, plaintext)
     body = _SALT_PREFIX + salt + ciphertext
     b64 = base64.b64encode(body).decode("ascii")
-    # Match pfSense's line-wrapping at 76 chars so the file round-trips
-    # through text-mode tools cleanly.
-    wrapped = "\n".join(re.findall(r".{1,76}", b64))
-    return (
-        f"{_BEGIN}\n"
-        f"Version: {_ENCRYPT_VERSION}\n"
-        f"Cipher: AES-256-CBC\n"
-        f"Hash: SHA256\n"
-        f"\n"
-        f"{wrapped}\n"
-        f"{_END}\n"
-    ).encode()
+    wrapped = "\n".join(
+        re.findall(r".{1," + str(_BASE64_LINE_WIDTH) + r"}", b64)
+    )
+    return f"{_BEGIN}\n{wrapped}\n{_END}\n".encode()
 
 
 def looks_encrypted(blob: bytes | str) -> bool:

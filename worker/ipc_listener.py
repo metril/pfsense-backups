@@ -161,11 +161,51 @@ class IpcListener:
         # Fernet-decrypt here rather than in the manager so plaintext
         # lives only in this handler's scope until the run completes.
         plaintext = self._crypto.decrypt(c.new_password_ct)
-        self._manager.reencrypt_all_backups(
-            c.job_id,
-            new_password=plaintext,
-            also_update_instance_passwords=c.also_update_instance_passwords,
-        )
+
+        # Serialize against every per-instance backup / reencrypt /
+        # test-connection in flight. Acquire locks in sorted-id order
+        # to avoid deadlock with the single-instance reencrypt path
+        # (which holds exactly one lock). Each Backup.path rewrite +
+        # retention-driven row delete consults the same lock, so this
+        # prevents ``_cleanup_old_backups`` from deleting a row mid-
+        # reencrypt or a scheduled backup from rotating the instance
+        # password while we're walking it.
+        from contextlib import ExitStack
+
+        from pfsense_shared.models import Backup, Instance
+
+        with self._session_factory() as s:
+            iids = sorted(
+                {
+                    iid
+                    for (iid,) in (
+                        s.query(Instance.id)
+                        .filter(Instance.backup_encrypt.is_(True))
+                        .all()
+                    )
+                }
+                | {
+                    iid
+                    for (iid,) in (
+                        s.query(Backup.instance_id)
+                        .filter(
+                            Backup.encrypted.is_(True),
+                            Backup.encrypt_password_ct.is_not(None),
+                        )
+                        .distinct()
+                        .all()
+                    )
+                }
+            )
+
+        with ExitStack() as stack:
+            for iid in iids:
+                stack.enter_context(self._instance_locks.for_instance(iid))
+            self._manager.reencrypt_all_backups(
+                c.job_id,
+                new_password=plaintext,
+                also_update_instance_passwords=c.also_update_instance_passwords,
+            )
 
     def _handle_test_connection(self, payload: dict) -> None:
         c = TestConnectionCommand.model_validate(payload)

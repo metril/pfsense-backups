@@ -101,6 +101,8 @@ class IpcClient:
 def _validate_command(payload: dict) -> IpcCommand:
     """Dispatch a raw dict into the correct IpcCommand member by `cmd` key."""
     from pfsense_shared.schemas import (
+        ReencryptAllBackupsCommand,
+        ReencryptBackupsCommand,
         ReloadScheduleCommand,
         RunBackupAllCommand,
         RunBackupCommand,
@@ -115,6 +117,8 @@ def _validate_command(payload: dict) -> IpcCommand:
         "test_connection": TestConnectionCommand,
         "reload_schedule": ReloadScheduleCommand,
         "send_test_notification": SendTestNotificationCommand,
+        "reencrypt_backups": ReencryptBackupsCommand,
+        "reencrypt_all_backups": ReencryptAllBackupsCommand,
     }
     cls = cls_map.get(kind)
     if cls is None:
