@@ -46,6 +46,9 @@ from .pfsense_sections import (
     nat as _nat,
 )
 from .pfsense_sections import (
+    pki as _pki,
+)
+from .pfsense_sections import (
     revision as _revision,
 )
 from .pfsense_sections import (
@@ -63,6 +66,9 @@ from .pfsense_sections import (
 from .pfsense_sections import (
     system as _system,
 )
+from .pfsense_sections import (
+    vpn as _vpn,
+)
 from .pfsense_sections.aliases import Alias
 from .pfsense_sections.auth import AuthServer, Group, User
 from .pfsense_sections.cron import CronJob
@@ -71,6 +77,7 @@ from .pfsense_sections.ha import HaSync, VirtualIP
 from .pfsense_sections.interfaces import Interface
 from .pfsense_sections.layer2 import Bridge, Ppp, QinQ, Tunnel, Vlan, WolHost
 from .pfsense_sections.nat import NatRule
+from .pfsense_sections.pki import Certificate, CertificateAuthority
 from .pfsense_sections.revision import Revision
 from .pfsense_sections.routing import Gateway, GatewayGroup, StaticRoute
 from .pfsense_sections.services import DhcpServer, DnsConfig
@@ -88,6 +95,14 @@ from .pfsense_sections.services_extra import (
 )
 from .pfsense_sections.sysctl import SysctlTunable
 from .pfsense_sections.system import SystemInfo
+from .pfsense_sections.vpn import (
+    IpsecPhase1,
+    IpsecPhase2,
+    IpsecPskEntry,
+    OpenVpnClient,
+    OpenVpnCsc,
+    OpenVpnServer,
+)
 
 # Top-level tags we consume (so the fallback only reports truly unknown
 # sections, not ones we intentionally parse). Package configs (``installed
@@ -200,6 +215,15 @@ class ParsedConfig(BaseModel):
     groups: list[Group] = []
     authservers: list[AuthServer] = []
 
+    openvpn_servers: list[OpenVpnServer] = []
+    openvpn_clients: list[OpenVpnClient] = []
+    openvpn_cscs: list[OpenVpnCsc] = []
+    ipsec_phase1: list[IpsecPhase1] = []
+    ipsec_phase2: list[IpsecPhase2] = []
+    ipsec_psks: list[IpsecPskEntry] = []
+    certificate_authorities: list[CertificateAuthority] = []
+    certificates: list[Certificate] = []
+
     # Everything we didn't parse (outside the ignore list). Carries the
     # tag name and a serialized XML subtree so the UI can surface it.
     unrecognized_sections: list[RawSection] = []
@@ -223,6 +247,8 @@ def parse(xml_bytes: bytes | str) -> ParsedConfig:
     # element as the root.
     gws, ggroups = _routing.parse_gateways(root)
     lb_pools, lb_vservers = _services_extra.parse_load_balancer(root)
+    ovpn_servers, ovpn_clients, ovpn_cscs = _vpn.parse_openvpn(root)
+    ipsec_p1, ipsec_p2, ipsec_psks = _vpn.parse_ipsec(root)
     ver_el = root.find("version")
     result = ParsedConfig(
         config_version=(ver_el.text or None) if ver_el is not None else None,
@@ -258,6 +284,14 @@ def parse(xml_bytes: bytes | str) -> ParsedConfig:
         lb_pools=lb_pools,
         lb_virtual_servers=lb_vservers,
         captive_portal_zones=_services_extra.parse_captive_portal(root),
+        openvpn_servers=ovpn_servers,
+        openvpn_clients=ovpn_clients,
+        openvpn_cscs=ovpn_cscs,
+        ipsec_phase1=ipsec_p1,
+        ipsec_phase2=ipsec_p2,
+        ipsec_psks=ipsec_psks,
+        certificate_authorities=_pki.parse_cas(root),
+        certificates=_pki.parse_certs(root),
         users=_auth.parse_users(root),
         groups=_auth.parse_groups(root),
         authservers=_auth.parse_authservers(root),

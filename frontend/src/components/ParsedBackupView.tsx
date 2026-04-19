@@ -7,6 +7,8 @@ import type {
   AuthServer,
   Bridge,
   CaptivePortalZone,
+  Certificate,
+  CertificateAuthority,
   CronJob,
   DhcpRelayConfig,
   DhcpServer,
@@ -17,10 +19,16 @@ import type {
   Group,
   HaSync,
   Interface,
+  IpsecPhase1,
+  IpsecPhase2,
+  IpsecPskEntry,
   LoadBalancerPool,
   LoadBalancerVirtualServer,
   NatRule,
   NtpdConfig,
+  OpenVpnClient,
+  OpenVpnCsc,
+  OpenVpnServer,
   ParsedConfig,
   Ppp,
   QinQ,
@@ -219,6 +227,55 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
             <CaptivePortalTable rows={data.captive_portal_zones} />
           </Section>
         )}
+        {data.openvpn_servers.length > 0 && (
+          <Section title="OpenVPN servers" count={data.openvpn_servers.length}>
+            <OpenVpnServersTable rows={data.openvpn_servers} />
+          </Section>
+        )}
+        {data.openvpn_clients.length > 0 && (
+          <Section title="OpenVPN clients" count={data.openvpn_clients.length}>
+            <OpenVpnClientsTable rows={data.openvpn_clients} />
+          </Section>
+        )}
+        {data.openvpn_cscs.length > 0 && (
+          <Section
+            title="OpenVPN client-specific overrides"
+            count={data.openvpn_cscs.length}
+          >
+            <OpenVpnCscTable rows={data.openvpn_cscs} />
+          </Section>
+        )}
+        {data.ipsec_phase1.length > 0 && (
+          <Section title="IPsec — phase 1" count={data.ipsec_phase1.length}>
+            <IpsecPhase1Table rows={data.ipsec_phase1} />
+          </Section>
+        )}
+        {data.ipsec_phase2.length > 0 && (
+          <Section title="IPsec — phase 2" count={data.ipsec_phase2.length}>
+            <IpsecPhase2Table rows={data.ipsec_phase2} />
+          </Section>
+        )}
+        {data.ipsec_psks.length > 0 && (
+          <Section
+            title="IPsec — pre-shared keys"
+            count={data.ipsec_psks.length}
+          >
+            <IpsecPskTable rows={data.ipsec_psks} />
+          </Section>
+        )}
+        {data.certificate_authorities.length > 0 && (
+          <Section
+            title="Certificate authorities"
+            count={data.certificate_authorities.length}
+          >
+            <CATable rows={data.certificate_authorities} />
+          </Section>
+        )}
+        {data.certificates.length > 0 && (
+          <Section title="Certificates" count={data.certificates.length}>
+            <CertsTable rows={data.certificates} />
+          </Section>
+        )}
         {data.users.length > 0 && (
           <Section title="Users" count={data.users.length}>
             <UsersTable rows={data.users} />
@@ -341,6 +398,28 @@ function TableOfContents({ cfg }: { cfg: ParsedConfig }) {
     ]);
   if (cfg.captive_portal_zones.length)
     entries.push(["Captive portal", cfg.captive_portal_zones.length]);
+  if (cfg.openvpn_servers.length)
+    entries.push(["OpenVPN servers", cfg.openvpn_servers.length]);
+  if (cfg.openvpn_clients.length)
+    entries.push(["OpenVPN clients", cfg.openvpn_clients.length]);
+  if (cfg.openvpn_cscs.length)
+    entries.push([
+      "OpenVPN client-specific overrides",
+      cfg.openvpn_cscs.length,
+    ]);
+  if (cfg.ipsec_phase1.length)
+    entries.push(["IPsec — phase 1", cfg.ipsec_phase1.length]);
+  if (cfg.ipsec_phase2.length)
+    entries.push(["IPsec — phase 2", cfg.ipsec_phase2.length]);
+  if (cfg.ipsec_psks.length)
+    entries.push(["IPsec — pre-shared keys", cfg.ipsec_psks.length]);
+  if (cfg.certificate_authorities.length)
+    entries.push([
+      "Certificate authorities",
+      cfg.certificate_authorities.length,
+    ]);
+  if (cfg.certificates.length)
+    entries.push(["Certificates", cfg.certificates.length]);
   if (cfg.users.length) entries.push(["Users", cfg.users.length]);
   if (cfg.groups.length) entries.push(["Groups", cfg.groups.length]);
   if (cfg.authservers.length)
@@ -1121,6 +1200,175 @@ function CaptivePortalTable({ rows }: { rows: CaptivePortalZone[] }) {
         z.auth_method ?? "—",
         z.radius_secret === "***redacted***" ? <Redacted /> : "—",
         z.redirurl ?? "—",
+      ])}
+    />
+  );
+}
+
+function OpenVpnServersTable({ rows }: { rows: OpenVpnServer[] }) {
+  return (
+    <Table
+      headers={[
+        "#",
+        "Description",
+        "Mode",
+        "Proto / port",
+        "Tunnel",
+        "Cipher",
+        "TLS",
+      ]}
+      rows={rows.map((s) => [
+        s.vpnid,
+        s.description ?? "—",
+        s.mode ?? "—",
+        `${s.protocol ?? "?"} :${s.local_port ?? "?"}`,
+        s.tunnel_network ?? s.tunnel_networkv6 ?? "—",
+        s.crypto ?? "—",
+        s.tls === "***redacted***" ? <Redacted /> : "—",
+      ])}
+    />
+  );
+}
+
+function OpenVpnClientsTable({ rows }: { rows: OpenVpnClient[] }) {
+  return (
+    <Table
+      headers={["#", "Description", "Mode", "Server", "Tunnel", "Cipher", "TLS"]}
+      rows={rows.map((c) => [
+        c.vpnid,
+        c.description ?? "—",
+        c.mode ?? "—",
+        c.server_addr
+          ? `${c.server_addr}:${c.server_port ?? "?"}`
+          : "—",
+        c.tunnel_network ?? "—",
+        c.crypto ?? "—",
+        c.tls === "***redacted***" ? <Redacted /> : "—",
+      ])}
+    />
+  );
+}
+
+function OpenVpnCscTable({ rows }: { rows: OpenVpnCsc[] }) {
+  return (
+    <Table
+      headers={[
+        "Common name",
+        "Disabled",
+        "Servers",
+        "Tunnel net",
+        "Description",
+      ]}
+      rows={rows.map((c) => [
+        c.common_name,
+        c.disable ? "yes" : "",
+        c.server_list.join(", ") || "—",
+        c.tunnel_network ?? "—",
+        c.description ?? "—",
+      ])}
+    />
+  );
+}
+
+function IpsecPhase1Table({ rows }: { rows: IpsecPhase1[] }) {
+  return (
+    <Table
+      headers={[
+        "IKE id",
+        "Type",
+        "Remote gw",
+        "Auth",
+        "PSK",
+        "Encryption set",
+        "Description",
+      ]}
+      rows={rows.map((p) => [
+        p.ikeid,
+        p.iketype ?? "—",
+        p.remote_gateway ?? "—",
+        p.authentication_method ?? "—",
+        p.pre_shared_key === "***redacted***" ? <Redacted /> : "—",
+        <span key="e" className="font-mono text-xs">
+          {p.encryption_set.join(", ") || "—"}
+        </span>,
+        p.descr ?? "—",
+      ])}
+    />
+  );
+}
+
+function IpsecPhase2Table({ rows }: { rows: IpsecPhase2[] }) {
+  return (
+    <Table
+      headers={[
+        "Phase2 id",
+        "IKE id",
+        "Mode",
+        "Local",
+        "Remote",
+        "Encryption set",
+        "Description",
+      ]}
+      rows={rows.map((p) => [
+        p.uniqid,
+        p.ikeid ?? "—",
+        p.mode ?? "—",
+        p.local_address
+          ? `${p.local_address}${p.local_netbits ? "/" + p.local_netbits : ""}`
+          : "—",
+        p.remote_address
+          ? `${p.remote_address}${p.remote_netbits ? "/" + p.remote_netbits : ""}`
+          : "—",
+        <span key="e" className="font-mono text-xs">
+          {p.encryption_set.join(", ") || "—"}
+        </span>,
+        p.descr ?? "—",
+      ])}
+    />
+  );
+}
+
+function IpsecPskTable({ rows }: { rows: IpsecPskEntry[] }) {
+  return (
+    <Table
+      headers={["Identifier", "Type", "PSK"]}
+      rows={rows.map((k) => [
+        k.ident ?? "—",
+        k.ident_type ?? "—",
+        k.pre_shared_key === "***redacted***" ? <Redacted /> : "—",
+      ])}
+    />
+  );
+}
+
+function CATable({ rows }: { rows: CertificateAuthority[] }) {
+  return (
+    <Table
+      headers={["Ref id", "Description", "Serial", "Private key"]}
+      rows={rows.map((c) => [
+        <span key="r" className="font-mono text-xs">
+          {c.refid}
+        </span>,
+        c.descr ?? "—",
+        c.serial ?? "—",
+        c.prv === "***redacted***" ? <Redacted /> : "—",
+      ])}
+    />
+  );
+}
+
+function CertsTable({ rows }: { rows: Certificate[] }) {
+  return (
+    <Table
+      headers={["Ref id", "Description", "Type", "CA ref", "Private key"]}
+      rows={rows.map((c) => [
+        <span key="r" className="font-mono text-xs">
+          {c.refid}
+        </span>,
+        c.descr ?? "—",
+        c.type ?? "—",
+        c.caref ?? "—",
+        c.prv === "***redacted***" ? <Redacted /> : "—",
       ])}
     />
   );

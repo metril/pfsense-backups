@@ -27,6 +27,8 @@ _EXACT: Final[frozenset[str]] = frozenset(
         "bcrypt_hash",
         "md5_hash",
         "presharedkey",
+        "pre-shared-key",
+        "pre_shared_key",
         "shared_key",
         "tls",
         "tls_auth",

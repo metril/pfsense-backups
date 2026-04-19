@@ -110,6 +110,14 @@ class ConfigDiff(BaseModel):
     lb_pools: SectionDiff = SectionDiff()
     lb_virtual_servers: SectionDiff = SectionDiff()
     captive_portal_zones: SectionDiff = SectionDiff()
+    openvpn_servers: SectionDiff = SectionDiff()
+    openvpn_clients: SectionDiff = SectionDiff()
+    openvpn_cscs: SectionDiff = SectionDiff()
+    ipsec_phase1: SectionDiff = SectionDiff()
+    ipsec_phase2: SectionDiff = SectionDiff()
+    ipsec_psks: SectionDiff = SectionDiff()
+    certificate_authorities: SectionDiff = SectionDiff()
+    certificates: SectionDiff = SectionDiff()
     users: SectionDiff = SectionDiff()
     groups: SectionDiff = SectionDiff()
     authservers: SectionDiff = SectionDiff()
@@ -196,6 +204,54 @@ def diff_configs(a: ParsedConfig, b: ParsedConfig) -> ConfigDiff:
             b.captive_portal_zones,
             key="zone",
             label_fn=_label_portal,
+        ),
+        openvpn_servers=_diff_list(
+            a.openvpn_servers,
+            b.openvpn_servers,
+            key="vpnid",
+            label_fn=_label_ovpn,
+        ),
+        openvpn_clients=_diff_list(
+            a.openvpn_clients,
+            b.openvpn_clients,
+            key="vpnid",
+            label_fn=_label_ovpn,
+        ),
+        openvpn_cscs=_diff_list(
+            a.openvpn_cscs,
+            b.openvpn_cscs,
+            key="common_name",
+            label_fn=_label_csc,
+        ),
+        ipsec_phase1=_diff_list(
+            a.ipsec_phase1,
+            b.ipsec_phase1,
+            key="ikeid",
+            label_fn=_label_ipsec_p1,
+        ),
+        ipsec_phase2=_diff_list(
+            a.ipsec_phase2,
+            b.ipsec_phase2,
+            key="uniqid",
+            label_fn=_label_ipsec_p2,
+        ),
+        ipsec_psks=_diff_list(
+            a.ipsec_psks,
+            b.ipsec_psks,
+            key="key",
+            label_fn=_label_ipsec_psk,
+        ),
+        certificate_authorities=_diff_list(
+            a.certificate_authorities,
+            b.certificate_authorities,
+            key="refid",
+            label_fn=_label_pki,
+        ),
+        certificates=_diff_list(
+            a.certificates,
+            b.certificates,
+            key="refid",
+            label_fn=_label_pki,
         ),
         users=_diff_list(a.users, b.users, key="name", label_fn=_label_named),
         groups=_diff_list(a.groups, b.groups, key="name", label_fn=_label_named),
@@ -302,6 +358,43 @@ def _label_portal(m: dict[str, Any]) -> str:
     zone = m.get("zone") or "?"
     ifaces = m.get("interfaces") or []
     return f"{zone} on {','.join(ifaces) or '?'}"
+
+
+def _label_ovpn(m: dict[str, Any]) -> str:
+    desc = m.get("description") or ""
+    mode = m.get("mode") or "?"
+    vpnid = m.get("vpnid") or "?"
+    return f"[{mode}] {desc or '#' + str(vpnid)}"
+
+
+def _label_csc(m: dict[str, Any]) -> str:
+    cn = m.get("common_name") or "?"
+    desc = m.get("description") or ""
+    return f"{cn}{' — ' + desc if desc else ''}"
+
+
+def _label_ipsec_p1(m: dict[str, Any]) -> str:
+    iketype = m.get("iketype") or "?"
+    remote = m.get("remote_gateway") or "?"
+    descr = m.get("descr") or ""
+    return f"[{iketype}] {remote}{' — ' + descr if descr else ''}"
+
+
+def _label_ipsec_p2(m: dict[str, Any]) -> str:
+    ikeid = m.get("ikeid") or "?"
+    mode = m.get("mode") or "?"
+    descr = m.get("descr") or ""
+    return f"phase2 ikeid={ikeid} [{mode}]{' — ' + descr if descr else ''}"
+
+
+def _label_ipsec_psk(m: dict[str, Any]) -> str:
+    return f"{m.get('ident_type') or '?'}:{m.get('ident') or '?'}"
+
+
+def _label_pki(m: dict[str, Any]) -> str:
+    descr = m.get("descr") or m.get("refid") or "?"
+    t = m.get("type")
+    return f"[{t}] {descr}" if t else str(descr)
 
 
 def _label_vip(m: dict[str, Any]) -> str:

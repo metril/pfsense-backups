@@ -389,6 +389,119 @@ export interface CaptivePortalZone {
   radius_secret: string | null;
 }
 
+export interface OpenVpnServer {
+  vpnid: string;
+  description: string | null;
+  mode: string | null;
+  protocol: string | null;
+  interface: string | null;
+  local_port: string | null;
+  tunnel_network: string | null;
+  tunnel_networkv6: string | null;
+  remote_network: string | null;
+  remote_networkv6: string | null;
+  local_network: string | null;
+  local_networkv6: string | null;
+  dev_mode: string | null;
+  topology: string | null;
+  crypto: string | null;
+  digest: string | null;
+  caref: string | null;
+  certref: string | null;
+  authmode: string[];
+  shared_key: string | null;
+  tls: string | null;
+}
+
+export interface OpenVpnClient {
+  vpnid: string;
+  description: string | null;
+  mode: string | null;
+  protocol: string | null;
+  interface: string | null;
+  server_addr: string | null;
+  server_port: string | null;
+  tunnel_network: string | null;
+  dev_mode: string | null;
+  crypto: string | null;
+  digest: string | null;
+  caref: string | null;
+  certref: string | null;
+  shared_key: string | null;
+  tls: string | null;
+}
+
+export interface OpenVpnCsc {
+  common_name: string;
+  description: string | null;
+  disable: boolean;
+  block: boolean;
+  server_list: string[];
+  tunnel_network: string | null;
+  local_network: string | null;
+  remote_network: string | null;
+  push_reset: boolean;
+  dns_server1: string | null;
+  ntp_server1: string | null;
+}
+
+export interface IpsecPhase1 {
+  ikeid: string;
+  iketype: string | null;
+  interface: string | null;
+  remote_gateway: string | null;
+  protocol: string | null;
+  descr: string | null;
+  disabled: boolean;
+  authentication_method: string | null;
+  myid_type: string | null;
+  myid_data: string | null;
+  peerid_type: string | null;
+  peerid_data: string | null;
+  pre_shared_key: string | null;
+  encryption_set: string[];
+}
+
+export interface IpsecPhase2 {
+  uniqid: string;
+  ikeid: string | null;
+  descr: string | null;
+  disabled: boolean;
+  mode: string | null;
+  protocol: string | null;
+  local_type: string | null;
+  local_address: string | null;
+  local_netbits: string | null;
+  remote_type: string | null;
+  remote_address: string | null;
+  remote_netbits: string | null;
+  encryption_set: string[];
+}
+
+export interface IpsecPskEntry {
+  key: string;
+  ident_type: string | null;
+  ident: string | null;
+  pre_shared_key: string | null;
+}
+
+export interface CertificateAuthority {
+  refid: string;
+  descr: string | null;
+  crt: string | null;
+  prv: string | null;
+  serial: string | null;
+}
+
+export interface Certificate {
+  refid: string;
+  descr: string | null;
+  caref: string | null;
+  type: string | null;
+  crt: string | null;
+  prv: string | null;
+}
+
 export interface User {
   name: string;
   uid: string | null;
@@ -462,6 +575,14 @@ export interface ParsedConfig {
   lb_pools: LoadBalancerPool[];
   lb_virtual_servers: LoadBalancerVirtualServer[];
   captive_portal_zones: CaptivePortalZone[];
+  openvpn_servers: OpenVpnServer[];
+  openvpn_clients: OpenVpnClient[];
+  openvpn_cscs: OpenVpnCsc[];
+  ipsec_phase1: IpsecPhase1[];
+  ipsec_phase2: IpsecPhase2[];
+  ipsec_psks: IpsecPskEntry[];
+  certificate_authorities: CertificateAuthority[];
+  certificates: Certificate[];
   users: User[];
   groups: Group[];
   authservers: AuthServer[];
@@ -530,6 +651,14 @@ export interface ConfigDiff {
   lb_pools: SectionDiff;
   lb_virtual_servers: SectionDiff;
   captive_portal_zones: SectionDiff;
+  openvpn_servers: SectionDiff;
+  openvpn_clients: SectionDiff;
+  openvpn_cscs: SectionDiff;
+  ipsec_phase1: SectionDiff;
+  ipsec_phase2: SectionDiff;
+  ipsec_psks: SectionDiff;
+  certificate_authorities: SectionDiff;
+  certificates: SectionDiff;
   users: SectionDiff;
   groups: SectionDiff;
   authservers: SectionDiff;
