@@ -21,6 +21,9 @@ from pfsense_shared.pfsense_crypto import (
     decrypt_pfsense_backup,
     looks_encrypted,
 )
+from pfsense_shared.pfsense_diff import ConfigDiff, diff_configs
+from pfsense_shared.pfsense_parser import ParsedConfig
+from pfsense_shared.pfsense_parser import parse as parse_pfsense_xml
 from pfsense_shared.schemas import (
     BackupUpdate,
     ReencryptAllBackupsCommand,
@@ -532,6 +535,68 @@ async def _async_iter(it) -> AsyncIterator[bytes]:
         if chunk is None:
             return
         yield chunk
+
+
+@router.get("/{backup_id}/parsed", response_model=ParsedConfig)
+async def get_parsed(
+    backup_id: int, db: DbSession, user: CurrentUser, crypto: CryptoDep
+) -> ParsedConfig:
+    """Structured, redaction-aware projection of the backup's config.xml.
+
+    Encrypted rows get decrypted in memory (same path as ``/content``);
+    plaintext never hits disk. Secrets (password hashes, VPN PSKs,
+    cert keys, RADIUS shared secrets) are replaced with a fixed
+    placeholder in the response so a view here doesn't expose what
+    the raw-XML tab would.
+
+    Audited as ``view_decrypted`` for encrypted rows — operators
+    reviewing a parsed config are still reading the plaintext config
+    via this endpoint.
+    """
+    row, path = await _load(db, backup_id)
+    if row.encrypted:
+        content = await asyncio.to_thread(_decrypt_row_content, row, path, crypto)
+        audit.record(
+            db, actor_email=user["email"], action="view_decrypted",
+            resource="backup", resource_id=backup_id,
+            details={"filename": row.filename, "via": "parsed"},
+        )
+        await db.commit()
+    else:
+        content = await asyncio.to_thread(read_content, path)
+    return await asyncio.to_thread(parse_pfsense_xml, content)
+
+
+@router.get("/diff/pair/parsed", response_model=ConfigDiff)
+async def diff_pair_parsed(
+    a: int, b: int, db: DbSession, user: CurrentUser, crypto: CryptoDep
+) -> ConfigDiff:
+    """Semantic diff between two parsed configs.
+
+    Decrypts both sides in memory, parses each, then runs the
+    structured diff engine. Single audit entry per pair when either
+    side is encrypted.
+    """
+    a_row, a_path = await _load(db, a)
+    b_row, b_path = await _load(db, b)
+
+    def _get(row: Backup, path: Path) -> bytes | str:
+        if row.encrypted:
+            return _decrypt_row_content(row, path, crypto)
+        return read_content(path)
+
+    a_bytes = await asyncio.to_thread(_get, a_row, a_path)
+    b_bytes = await asyncio.to_thread(_get, b_row, b_path)
+    if a_row.encrypted or b_row.encrypted:
+        audit.record(
+            db, actor_email=user["email"], action="view_decrypted",
+            resource="backup_diff", resource_id=None,
+            details={"a": a_row.id, "b": b_row.id, "via": "parsed"},
+        )
+        await db.commit()
+    a_parsed = await asyncio.to_thread(parse_pfsense_xml, a_bytes)
+    b_parsed = await asyncio.to_thread(parse_pfsense_xml, b_bytes)
+    return await asyncio.to_thread(diff_configs, a_parsed, b_parsed)
 
 
 @router.get("/diff/pair")

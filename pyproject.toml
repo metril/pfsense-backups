@@ -1,6 +1,6 @@
 [project]
 name = "pfsense-backups"
-version = "0.10.3"
+version = "0.11.0"
 description = "pfSense configuration backup + web dashboard."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -14,6 +14,7 @@ dependencies = [
     "cryptography>=41",
     "pyzmq>=25",
     "alembic>=1.13",
+    "defusedxml>=0.7",
 ]
 
 [project.optional-dependencies]

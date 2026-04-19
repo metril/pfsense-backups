@@ -26,6 +26,7 @@ import type {
   SettingsBackup,
   SettingsLogging,
 } from "./types";
+import type { ConfigDiff, ParsedConfig } from "./parsedTypes";
 
 // ----------------- auth -----------------
 
@@ -234,6 +235,29 @@ export function useDeleteBackup() {
   return useMutation({
     mutationFn: (id: number) => api.delete(`/api/backups/${id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["backups"] }),
+  });
+}
+
+/** Structured projection of a backup's config.xml (server-side parsed,
+ *  redacted). Never includes secrets — the server replaces password
+ *  hashes, PSKs, cert private keys, and RADIUS/LDAP secrets with a
+ *  ***redacted*** placeholder. */
+export function useParsedBackup(id: number) {
+  return useQuery({
+    queryKey: ["backups", id, "parsed"],
+    queryFn: () => api.get<ParsedConfig>(`/api/backups/${id}/parsed`),
+    // Parser output is static for a given backup — never refetch on focus.
+    staleTime: Infinity,
+  });
+}
+
+export function useParsedDiffPair(a: number | null, b: number | null) {
+  return useQuery({
+    queryKey: ["backups", "diff", a, b, "parsed"],
+    queryFn: () =>
+      api.get<ConfigDiff>(`/api/backups/diff/pair/parsed?a=${a}&b=${b}`),
+    enabled: a !== null && b !== null,
+    staleTime: Infinity,
   });
 }
 

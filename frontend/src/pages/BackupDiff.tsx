@@ -4,17 +4,30 @@ import { ArrowLeft } from "lucide-react";
 import { api } from "@/api/client";
 
 const MonacoDiff = lazy(() => import("@/components/MonacoDiff"));
+const ParsedBackupDiff = lazy(() =>
+  import("@/components/ParsedBackupDiff").then((m) => ({
+    default: m.ParsedBackupDiff,
+  })),
+);
 
 interface Pair {
   a: { id: number; filename: string; started_at: string; content: string };
   b: { id: number; filename: string; started_at: string; content: string };
 }
 
+type DiffTab = "structured" | "raw";
+
 export function BackupDiffPage() {
   const { a, b } = useParams();
+  const aId = Number(a);
+  const bId = Number(b);
   const [pair, setPair] = useState<Pair | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [tab, setTab] = useState<DiffTab>("structured");
 
+  // Raw content is only needed when the user flips to the "Raw XML" tab,
+  // but we fetch eagerly so the toggle is instantaneous. The structured
+  // tab has its own fetch (via useParsedDiffPair) and renders first.
   useEffect(() => {
     let cancelled = false;
     api
@@ -27,28 +40,79 @@ export function BackupDiffPage() {
   }, [a, b]);
 
   if (error) return <div className="p-6 text-sm text-danger">{error}</div>;
-  if (!pair) return <div className="p-6 text-sm text-muted-fg">Loading…</div>;
 
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-border pb-3">
         <div>
-          <Link to="/backups" className="inline-flex items-center gap-1 text-sm text-muted-fg hover:text-accent">
+          <Link
+            to="/backups"
+            className="inline-flex items-center gap-1 text-sm text-muted-fg hover:text-accent"
+          >
             <ArrowLeft className="h-4 w-4" /> back to backups
           </Link>
           <h1 className="text-xl font-semibold">Compare backups</h1>
         </div>
         <div className="text-right text-xs text-muted-fg">
-          <div>A: {pair.a.filename}</div>
-          <div>B: {pair.b.filename}</div>
+          <div>A: {pair?.a.filename ?? `#${a}`}</div>
+          <div>B: {pair?.b.filename ?? `#${b}`}</div>
         </div>
       </div>
 
-      <div className="mt-3 flex-1 overflow-hidden rounded border border-border">
-        <Suspense fallback={<div className="p-6 text-sm text-muted-fg">Loading diff editor…</div>}>
-          <MonacoDiff original={pair.a.content} modified={pair.b.content} />
+      <div className="mt-3 flex items-center gap-1 border-b border-border">
+        <TabButton
+          active={tab === "structured"}
+          onClick={() => setTab("structured")}
+        >
+          Structured
+        </TabButton>
+        <TabButton active={tab === "raw"} onClick={() => setTab("raw")}>
+          Raw XML
+        </TabButton>
+      </div>
+
+      <div className="flex-1 overflow-hidden rounded-b border border-t-0 border-border">
+        <Suspense
+          fallback={<div className="p-6 text-sm text-muted-fg">Loading…</div>}
+        >
+          {tab === "structured" ? (
+            <ParsedBackupDiff a={aId} b={bId} />
+          ) : !pair ? (
+            <div className="p-6 text-sm text-muted-fg">Loading raw XML…</div>
+          ) : (
+            <MonacoDiff
+              original={pair.a.content}
+              modified={pair.b.content}
+            />
+          )}
         </Suspense>
       </div>
     </div>
+  );
+}
+
+function TabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={
+        "border-b-2 px-3 py-1.5 text-sm " +
+        (active
+          ? "border-accent text-accent"
+          : "border-transparent text-muted-fg hover:text-fg")
+      }
+    >
+      {children}
+    </button>
   );
 }
