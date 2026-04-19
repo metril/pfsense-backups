@@ -11,6 +11,8 @@ const button = cva(
         primary: "bg-accent text-accent-fg hover:bg-accent/90",
         secondary: "bg-muted text-fg hover:bg-muted/70 border border-border",
         danger: "bg-danger text-accent-fg hover:bg-danger/90",
+        "danger-outline":
+          "bg-transparent text-danger border border-danger/40 hover:bg-danger/10",
         ghost: "text-fg hover:bg-muted",
       },
       size: {
@@ -18,6 +20,7 @@ const button = cva(
         md: "h-9 px-4",
         lg: "h-10 px-5",
         icon: "h-9 w-9",
+        "icon-sm": "h-7 w-7",
       },
     },
     defaultVariants: { variant: "primary", size: "md" },

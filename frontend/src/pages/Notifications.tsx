@@ -19,8 +19,15 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/DropdownMenu";
 import { Input } from "@/components/ui/Input";
 import { Label } from "@/components/ui/Label";
+import { Select } from "@/components/ui/Select";
 import {
   useCreateNotification,
   useDeleteNotification,
@@ -369,17 +376,16 @@ function EditorDialog({
         {/* Trigger (hidden for Healthchecks — locked to "always") */}
         {d.kind !== "healthchecks" && (
           <Field label="Trigger">
-            <select
+            <Select
               value={d.trigger}
-              onChange={(e) =>
-                setD({ ...d, trigger: e.target.value as Draft["trigger"] })
-              }
-              className="h-9 w-full rounded-md border border-border bg-bg px-2 text-sm"
-            >
-              <option value="always">always</option>
-              <option value="success">success</option>
-              <option value="failure">failure</option>
-            </select>
+              onChange={(v) => setD({ ...d, trigger: v as Draft["trigger"] })}
+              options={[
+                { value: "always", label: "always" },
+                { value: "success", label: "success only" },
+                { value: "failure", label: "failure only" },
+              ]}
+              aria-label="Notification trigger"
+            />
           </Field>
         )}
 
@@ -626,17 +632,18 @@ function NtfyFields({ d, setD }: { d: Draft; setD: (d: Draft) => void }) {
         />
       </Field>
       <Field label="Priority">
-        <select
-          value={c.priority ?? 3}
-          onChange={(e) => setCfg({ priority: Number(e.target.value) })}
-          className="h-9 w-full rounded-md border border-border bg-bg px-2 text-sm"
-        >
-          <option value={1}>1 — min</option>
-          <option value={2}>2 — low</option>
-          <option value={3}>3 — default</option>
-          <option value={4}>4 — high</option>
-          <option value={5}>5 — max</option>
-        </select>
+        <Select
+          value={String(c.priority ?? 3)}
+          onChange={(v) => setCfg({ priority: Number(v) })}
+          options={[
+            { value: "1", label: "1 — min" },
+            { value: "2", label: "2 — low" },
+            { value: "3", label: "3 — default" },
+            { value: "4", label: "4 — high" },
+            { value: "5", label: "5 — max" },
+          ]}
+          aria-label="ntfy priority"
+        />
       </Field>
       <Field label="Tags (comma-separated, optional)">
         <Input
@@ -896,22 +903,26 @@ function InstanceScopeField({
           })
         )}
         {available.length > 0 && (
-          <select
-            value=""
-            onChange={(e) => {
-              const id = Number(e.target.value);
-              if (!Number.isFinite(id)) return;
-              onChange([...selected, id]);
-            }}
-            className="h-7 rounded-md border border-border bg-bg px-2 text-xs text-muted-fg"
-          >
-            <option value="">+ add instance</option>
-            {available.map((i) => (
-              <option key={i.id} value={i.id}>
-                {i.name}
-              </option>
-            ))}
-          </select>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-bg px-2 text-xs text-muted-fg hover:text-fg"
+              >
+                + add instance
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              {available.map((i) => (
+                <DropdownMenuItem
+                  key={i.id}
+                  onSelect={() => onChange([...selected, i.id])}
+                >
+                  {i.name}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
       </div>
       <p className="mt-1 text-xs text-muted-fg">

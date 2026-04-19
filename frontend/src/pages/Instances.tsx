@@ -1,12 +1,26 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import cronstrue from "cronstrue";
-import { HardDriveDownload, Pencil, Plug, Play, Plus, Trash2 } from "lucide-react";
+import {
+  AlertTriangle,
+  HardDriveDownload,
+  KeyRound,
+  Package,
+  Pencil,
+  Plug,
+  Play,
+  Plus,
+  Trash2,
+} from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
 import { Input } from "@/components/ui/Input";
 import { Label } from "@/components/ui/Label";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { Select, type SelectOption } from "@/components/ui/Select";
+import { SkeletonRows } from "@/components/ui/Skeleton";
+import { SplitButton } from "@/components/ui/SplitButton";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { useToast } from "@/components/ui/Toast";
 import { CronEditor } from "@/components/cron/CronEditor";
@@ -57,7 +71,7 @@ const blank = (): Draft => ({
 // Must match pfsense_shared/schemas.py::PFSENSE_BACKUP_AREAS; keeping
 // them literal here avoids dragging the list over the wire on every page
 // load. Adding a subsystem is a two-line edit (here + schemas.py).
-const PFSENSE_BACKUP_AREAS: { value: string; label: string }[] = [
+const PFSENSE_BACKUP_AREAS: SelectOption[] = [
   { value: "", label: "Everything (default)" },
   { value: "aliases", label: "aliases" },
   { value: "captiveportal", label: "captiveportal" },
@@ -133,7 +147,22 @@ export function InstancesPage() {
       </div>
 
       {isPending ? (
-        <div className="mt-6 text-sm text-muted-fg">Loading…</div>
+        <div className="mt-6">
+          <SkeletonRows count={4} />
+        </div>
+      ) : data!.length === 0 ? (
+        <div className="mt-8">
+          <EmptyState
+            icon={<Plus className="h-8 w-8" />}
+            headline="No instances yet"
+            body="Add your first pfSense instance to start scheduling backups. You'll need the URL, an admin username, and that admin's password."
+            cta={
+              <Button variant="primary" size="sm" onClick={() => setEditing(blank())}>
+                <Plus className="h-4 w-4" /> Add instance
+              </Button>
+            }
+          />
+        </div>
       ) : (
         <table className="mt-6 w-full text-sm">
           <thead className="text-xs uppercase text-muted-fg">
@@ -171,28 +200,39 @@ export function InstancesPage() {
                   {inst.enabled ? <Badge tone="success">on</Badge> : <Badge tone="muted">off</Badge>}
                 </td>
                 <td className="py-3 text-right">
-                  <div className="inline-flex gap-1">
+                  <div className="inline-flex items-center gap-1">
+                    <SplitButton
+                      primaryIcon={<Play className="h-3.5 w-3.5" />}
+                      primaryAriaLabel={`Backup ${inst.name} now`}
+                      onPrimary={() => backup.mutate({ id: inst.id })}
+                      variant="secondary"
+                      compact
+                      menu={[
+                        {
+                          label: "Backup now with options…",
+                          onSelect: () => {
+                            // The row-level overrides dialog isn't wired here;
+                            // navigate to the Instance Detail page where the
+                            // SplitButton offers the dialog. Keeps the row
+                            // itself dense without adding per-row dialog state.
+                            window.location.href = `/instances/${inst.id}`;
+                          },
+                        },
+                      ]}
+                      menuAriaLabel={`More backup options for ${inst.name}`}
+                    />
                     <Button
                       variant="ghost"
-                      size="icon"
-                      onClick={() => backup.mutate({ id: inst.id })}
-                      aria-label={`Backup ${inst.name} now`}
-                      title="Backup now"
-                    >
-                      <Play className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
+                      size="icon-sm"
                       onClick={() => test.mutate(inst.id)}
                       aria-label={`Test connection to ${inst.name}`}
                       title="Test connection"
                     >
-                      <Plug className="h-4 w-4" />
+                      <Plug className="h-3.5 w-3.5" />
                     </Button>
                     <Button
                       variant="ghost"
-                      size="icon"
+                      size="icon-sm"
                       onClick={async () => {
                         const sub = inst.subfolder ? `/${inst.subfolder}` : "";
                         const ok = await confirm({
@@ -217,19 +257,20 @@ export function InstancesPage() {
                       aria-label={`Import backups from disk for ${inst.name}`}
                       title="Import from disk"
                     >
-                      <HardDriveDownload className="h-4 w-4" />
+                      <HardDriveDownload className="h-3.5 w-3.5" />
                     </Button>
                     <Button
                       variant="ghost"
-                      size="icon"
+                      size="icon-sm"
                       onClick={() => setEditing(toDraft(inst))}
                       aria-label={`Edit ${inst.name}`}
+                      title="Edit"
                     >
-                      <Pencil className="h-4 w-4" />
+                      <Pencil className="h-3.5 w-3.5" />
                     </Button>
                     <Button
                       variant="ghost"
-                      size="icon"
+                      size="icon-sm"
                       onClick={async () => {
                         const ok = await confirm({
                           title: `Delete ${inst.name}?`,
@@ -242,20 +283,14 @@ export function InstancesPage() {
                         if (ok) del.mutate(inst.id);
                       }}
                       aria-label={`Delete ${inst.name}`}
+                      title="Delete"
                     >
-                      <Trash2 className="h-4 w-4 text-danger" />
+                      <Trash2 className="h-3.5 w-3.5 text-danger" />
                     </Button>
                   </div>
                 </td>
               </tr>
             ))}
-            {data!.length === 0 && (
-              <tr>
-                <td colSpan={6} className="py-8 text-center text-sm text-muted-fg">
-                  No instances yet.
-                </td>
-              </tr>
-            )}
           </tbody>
         </table>
       )}
@@ -500,76 +535,87 @@ function BackupContentsSection({
     d.backup_encrypt_password !== "__set__" &&
     d.backup_encrypt_password.trim().length > 0;
 
+  const passwordInvalid =
+    d.backup_encrypt &&
+    (!d.backup_encrypt_password ||
+      (typeof d.backup_encrypt_password === "string" &&
+        d.backup_encrypt_password.trim() === "" &&
+        !hasStoredPassword));
+
   return (
-    <div>
-      <h3 className="text-sm font-semibold">Backup contents</h3>
-      <p className="mt-1 text-xs text-muted-fg">
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <Package className="h-4 w-4 text-fg" aria-hidden />
+        <h3 className="text-sm font-semibold">Backup contents</h3>
+      </div>
+      <p className="text-xs text-muted-fg">
         Maps onto pfSense's <code>Diagnostics → Backup &amp; Restore</code> form.
         Defaults mirror today's behavior so upgrades don't change what gets captured.
       </p>
-      <div className="mt-3 grid grid-cols-2 gap-4">
-        <Field label="Area">
-          <select
-            value={d.backup_area ?? ""}
-            onChange={(e) => setD({ ...d, backup_area: e.target.value })}
-            aria-label="Backup area"
-            className="h-9 w-full rounded-md border border-border bg-bg px-2 text-sm"
-          >
-            {PFSENSE_BACKUP_AREAS.map((a) => (
-              <option key={a.value} value={a.value}>
-                {a.label}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Include RRD graph data">
-          <Switch
+
+      <ContentsSubsection
+        icon={<Package className="h-4 w-4" aria-hidden />}
+        title="Area"
+      >
+        <Select
+          value={d.backup_area ?? ""}
+          onChange={(v) => setD({ ...d, backup_area: v })}
+          options={PFSENSE_BACKUP_AREAS}
+          aria-label="Backup area"
+        />
+      </ContentsSubsection>
+
+      <ContentsSubsection
+        icon={<Package className="h-4 w-4" aria-hidden />}
+        title="Contents"
+      >
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <Checkbox
             label="Include RRD graph data"
             checked={d.backup_include_rrd ?? false}
             onChange={(v) => setD({ ...d, backup_include_rrd: v })}
           />
-        </Field>
-        <Field label="Include package information">
-          <Switch
+          <Checkbox
             label="Include package information"
             checked={d.backup_include_packages ?? true}
             onChange={(v) => setD({ ...d, backup_include_packages: v })}
           />
-        </Field>
-        <Field label="Include SSH host keys">
-          <Switch
+          <Checkbox
             label="Include SSH host keys"
             checked={d.backup_include_ssh ?? true}
             onChange={(v) => setD({ ...d, backup_include_ssh: v })}
           />
-        </Field>
-        <Field label="Encrypt backup">
-          <Switch
-            label="Encrypt backup"
-            checked={d.backup_encrypt ?? false}
-            onChange={(v) =>
-              setD({
-                ...d,
-                backup_encrypt: v,
-                // Keep whatever the user has typed / the stored sentinel
-                // across toggle cycles so a fat-finger off/on doesn't
-                // silently drop their new password. The server clears
-                // the ciphertext when backup_encrypt=false lands anyway.
-                reencrypt_existing_backups: v
-                  ? d.reencrypt_existing_backups
-                  : false,
-              })
-            }
-          />
-        </Field>
+        </div>
+      </ContentsSubsection>
+
+      <ContentsSubsection
+        icon={<KeyRound className="h-4 w-4" aria-hidden />}
+        title="Encryption"
+      >
+        <Checkbox
+          label="Encrypt backup"
+          checked={d.backup_encrypt ?? false}
+          onChange={(v) =>
+            setD({
+              ...d,
+              backup_encrypt: v,
+              // Keep whatever the user has typed / the stored sentinel
+              // across toggle cycles so a fat-finger off/on doesn't
+              // silently drop their new password. The server clears
+              // the ciphertext when backup_encrypt=false lands anyway.
+              reencrypt_existing_backups: v
+                ? d.reencrypt_existing_backups
+                : false,
+            })
+          }
+        />
         {d.backup_encrypt && (
-          <Field
-            label={
-              hasStoredPassword
+          <div className="mt-3">
+            <Label>
+              {hasStoredPassword
                 ? "Encryption password (leave blank to keep)"
-                : "Encryption password"
-            }
-          >
+                : "Encryption password"}
+            </Label>
             <Input
               type="password"
               value={
@@ -581,45 +627,88 @@ function BackupContentsSection({
               onChange={(e) => {
                 const v = e.target.value;
                 if (v === "" && hasStoredPassword) {
-                  // Empty + stored = keep existing. Reset to the sentinel
-                  // so the PUT doesn't clear the ciphertext.
                   setD({ ...d, backup_encrypt_password: "__set__" });
                 } else {
                   setD({ ...d, backup_encrypt_password: v });
                 }
               }}
+              className="mt-1"
+              aria-invalid={passwordInvalid}
+              aria-describedby={passwordInvalid ? "backup-encrypt-password-err" : undefined}
             />
-          </Field>
+            {passwordInvalid && (
+              <p id="backup-encrypt-password-err" className="mt-1 text-xs text-danger">
+                Password required when encryption is on.
+              </p>
+            )}
+          </div>
         )}
-      </div>
-      {canReencrypt && (
-        <label className="mt-3 flex items-start gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={d.reencrypt_existing_backups ?? false}
-            onChange={(e) =>
-              setD({ ...d, reencrypt_existing_backups: e.target.checked })
-            }
-            className="mt-0.5"
-          />
-          <span>
-            Also re-encrypt existing backups with the new password.
-            <span className="block text-xs text-muted-fg">
-              Runs in the background. You can watch progress in the Jobs page.
-            </span>
-          </span>
-        </label>
-      )}
-      {d.backup_encrypt &&
-        (!d.backup_encrypt_password ||
-          (typeof d.backup_encrypt_password === "string" &&
-            d.backup_encrypt_password.trim() === "" &&
-            !hasStoredPassword)) && (
-          <p className="mt-2 text-xs text-danger">
-            Password required when encryption is on.
-          </p>
+        {canReencrypt && (
+          <div className="mt-3 flex items-start gap-2 rounded-md border border-warn/30 bg-warn/10 px-3 py-2">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warn" aria-hidden />
+            <label className="flex cursor-pointer items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={d.reencrypt_existing_backups ?? false}
+                onChange={(e) =>
+                  setD({ ...d, reencrypt_existing_backups: e.target.checked })
+                }
+                className="mt-1 h-4 w-4 cursor-pointer accent-accent"
+              />
+              <span>
+                Also re-encrypt existing backups with the new password.
+                <span className="mt-0.5 block text-xs text-muted-fg">
+                  Old-password files become unreadable once this finishes. Progress
+                  shows up on the Jobs page.
+                </span>
+              </span>
+            </label>
+          </div>
         )}
+      </ContentsSubsection>
     </div>
+  );
+}
+
+function ContentsSubsection({
+  icon,
+  title,
+  children,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-lg border border-border bg-muted/30 p-4">
+      <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-fg">
+        <span className="text-fg">{icon}</span>
+        {title}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function Checkbox({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <label className="flex cursor-pointer items-center gap-2 text-sm">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className="h-4 w-4 cursor-pointer accent-accent"
+      />
+      <span>{label}</span>
+    </label>
   );
 }
 

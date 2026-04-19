@@ -20,8 +20,9 @@ export function Badge({
         tone === "success" && "bg-ok/20 text-ok",
         tone === "danger" && "bg-danger/20 text-danger",
         tone === "muted" && "bg-muted text-muted-fg",
-        // "warn" uses amber-ish tokens — warmer than muted, less alarm than danger.
-        tone === "warn" && "bg-amber-500/15 text-amber-400",
+        // "warn" uses the palette's warn token (defined in index.css:15)
+        // so the amber doesn't diverge from the rest of the theme.
+        tone === "warn" && "bg-warn/15 text-warn",
         !tone && "bg-accent/20 text-accent",
         className,
       )}

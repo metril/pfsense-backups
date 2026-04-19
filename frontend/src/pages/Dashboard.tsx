@@ -1,8 +1,11 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { Play, PlayCircle, Plug, Settings2 } from "lucide-react";
+import { Play, PlayCircle, Plug, Server } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { SkeletonRows } from "@/components/ui/Skeleton";
+import { SplitButton } from "@/components/ui/SplitButton";
 import { BackupOverridesDialog } from "@/components/BackupOverridesDialog";
 import {
   useBackupAll,
@@ -26,50 +29,38 @@ export function Dashboard() {
   // Which dialog is open: "all" (top-bar), a number = instance id, or null.
   const [overridesOpen, setOverridesOpen] = useState<"all" | number | null>(null);
 
-  if (instances.isPending) return <div className="text-sm text-muted-fg">Loading…</div>;
-  if (instances.error) return <div className="text-sm text-danger">Failed to load instances.</div>;
+  if (instances.error) {
+    return <div className="text-sm text-danger">Failed to load instances.</div>;
+  }
 
+  const loading = instances.isPending;
+  const rows = instances.data ?? [];
+  const disabled = backupAll.isPending || rows.length === 0 || loading;
   const byId = new Map(schedules.data?.map((s) => [s.instance_id, s]) ?? []);
 
   return (
     <div>
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-4">
         <h1 className="text-2xl font-semibold">Dashboard</h1>
         <div className="flex items-center gap-4">
-          <div className="flex items-center gap-1">
-            <Button
-              size="sm"
-              onClick={() => backupAll.mutate(undefined)}
-              disabled={backupAll.isPending || (instances.data?.length ?? 0) === 0}
-              title="Back up every enabled instance in parallel"
-            >
-              <PlayCircle className="h-4 w-4" />
-              {backupAll.isPending ? "Starting…" : "Backup all"}
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setOverridesOpen("all")}
-              disabled={backupAll.isPending || (instances.data?.length ?? 0) === 0}
-              aria-label="Backup all with options"
-              title="Backup all with options…"
-            >
-              <Settings2 className="h-4 w-4" />
-            </Button>
-          </div>
+          <SplitButton
+            primaryLabel={backupAll.isPending ? "Starting…" : "Backup all"}
+            primaryIcon={<PlayCircle className="h-4 w-4" />}
+            onPrimary={() => backupAll.mutate(undefined)}
+            disabled={disabled}
+            size="sm"
+            menu={[
+              {
+                label: "Backup all with options…",
+                onSelect: () => setOverridesOpen("all"),
+              },
+            ]}
+          />
           <Link to="/instances" className="text-sm text-accent hover:underline">
             Manage instances →
           </Link>
         </div>
       </div>
-
-      {instances.data!.length === 0 && (
-        <div className="mt-8 rounded-lg border border-border bg-muted/30 p-8 text-center">
-          <p className="text-sm text-muted-fg">
-            No pfSense instances configured yet. Add one from the Instances page.
-          </p>
-        </div>
-      )}
 
       {overridesOpen !== null && (
         <BackupOverridesDialog
@@ -77,7 +68,7 @@ export function Dashboard() {
           title={
             overridesOpen === "all"
               ? "Backup all with options"
-              : `Backup ${instances.data!.find((i) => i.id === overridesOpen)?.name ?? ""} with options`
+              : `Backup ${rows.find((i) => i.id === overridesOpen)?.name ?? ""} with options`
           }
           mode={overridesOpen === "all" ? "all" : "single"}
           onClose={() => setOverridesOpen(null)}
@@ -91,26 +82,54 @@ export function Dashboard() {
         />
       )}
 
-      <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {instances.data!.map((inst) => (
-          <Tile
-            key={inst.id}
-            instance={inst}
-            schedule={byId.get(inst.id)}
-            lastBackup={backups.data?.find((b) => b.instance_id === inst.id)}
-            onBackupNow={() => backupNow.mutate({ id: inst.id })}
-            onBackupNowWithOptions={() => setOverridesOpen(inst.id)}
-            onTest={() => test.mutate(inst.id)}
-            // H3: per-instance busy flag. TanStack Query exposes the last
-            // mutation's `variables`; compare to this tile's id so clicking
-            // one tile doesn't freeze every tile's buttons.
-            busy={
-              (backupNow.isPending && backupNow.variables?.id === inst.id) ||
-              (test.isPending && test.variables === inst.id)
+      {loading && (
+        <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <SkeletonRows key={i} count={4} />
+          ))}
+        </div>
+      )}
+
+      {!loading && rows.length === 0 && (
+        <div className="mt-8">
+          <EmptyState
+            icon={<Server className="h-8 w-8" />}
+            headline="No pfSense instances configured yet"
+            body="Add your first instance from the Instances page — once it's set up you can back it up manually or on a schedule."
+            cta={
+              <Link
+                to="/instances"
+                className="inline-flex h-8 items-center rounded-md bg-accent px-3 text-sm font-medium text-accent-fg hover:bg-accent/90"
+              >
+                Go to Instances
+              </Link>
             }
           />
-        ))}
-      </div>
+        </div>
+      )}
+
+      {!loading && rows.length > 0 && (
+        <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {rows.map((inst) => (
+            <Tile
+              key={inst.id}
+              instance={inst}
+              schedule={byId.get(inst.id)}
+              lastBackup={backups.data?.find((b) => b.instance_id === inst.id)}
+              onBackupNow={() => backupNow.mutate({ id: inst.id })}
+              onBackupNowWithOptions={() => setOverridesOpen(inst.id)}
+              onTest={() => test.mutate(inst.id)}
+              // Per-instance busy flag. TanStack Query exposes the last
+              // mutation's `variables`; compare to this tile's id so clicking
+              // one tile doesn't freeze every tile's buttons.
+              busy={
+                (backupNow.isPending && backupNow.variables?.id === inst.id) ||
+                (test.isPending && test.variables === inst.id)
+              }
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -135,10 +154,10 @@ function Tile({
   return (
     <div className="rounded-lg border border-border bg-muted/30 p-5">
       <div className="flex items-start justify-between gap-2">
-        <div>
+        <div className="min-w-0">
           <Link
             to={`/instances/${instance.id}`}
-            className="text-base font-semibold hover:text-accent"
+            className="truncate text-base font-semibold hover:text-accent"
           >
             {instance.name}
           </Link>
@@ -180,21 +199,20 @@ function Tile({
         </Row>
       </dl>
 
-      <div className="mt-4 flex gap-2">
-        <Button size="sm" onClick={onBackupNow} disabled={busy}>
-          <Play className="h-3.5 w-3.5" />
-          Backup Now
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={onBackupNowWithOptions}
+      <div className="mt-4 flex flex-wrap gap-2">
+        <SplitButton
+          primaryLabel="Backup Now"
+          primaryIcon={<Play className="h-3.5 w-3.5" />}
+          onPrimary={onBackupNow}
           disabled={busy}
-          aria-label={`Backup ${instance.name} with options`}
-          title="Backup now with options…"
-        >
-          <Settings2 className="h-3.5 w-3.5" />
-        </Button>
+          size="sm"
+          menu={[
+            {
+              label: "Backup now with options…",
+              onSelect: onBackupNowWithOptions,
+            },
+          ]}
+        />
         <Button variant="secondary" size="sm" onClick={onTest} disabled={busy}>
           <Plug className="h-3.5 w-3.5" />
           Test

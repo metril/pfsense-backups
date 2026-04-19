@@ -18,8 +18,10 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { Dialog } from "@/components/ui/Dialog";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { Input } from "@/components/ui/Input";
 import { Label } from "@/components/ui/Label";
+import { Skeleton } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
 import {
   useBackups,
@@ -303,17 +305,43 @@ export function BackupsPage() {
               </td>
             </tr>
           ))}
-          {rows.length === 0 && (
-            <tr>
-              <td colSpan={9} className="py-8 text-center text-sm text-muted-fg">
-                {hasDateFilter
-                  ? "No backups in that date range."
-                  : "No backups yet."}
-              </td>
-            </tr>
-          )}
+          {backups.isPending &&
+            Array.from({ length: 5 }).map((_, i) => (
+              <tr key={`sk-${i}`} className="border-t border-border">
+                <td colSpan={9} className="py-2">
+                  <Skeleton className="h-6 w-full" />
+                </td>
+              </tr>
+            ))}
         </tbody>
       </table>
+      {!backups.isPending && rows.length === 0 && (
+        <div className="mt-8">
+          <EmptyState
+            icon={<Archive className="h-8 w-8" />}
+            headline={hasDateFilter ? "No backups in that date range" : "No backups yet"}
+            body={
+              hasDateFilter
+                ? "Widen the date filter or clear it to see more."
+                : "Once an instance runs its first backup (manually or on its schedule), it will show up here."
+            }
+            cta={
+              hasDateFilter ? (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    setFromDate("");
+                    setToDate("");
+                  }}
+                >
+                  Clear date filter
+                </Button>
+              ) : undefined
+            }
+          />
+        </div>
+      )}
 
       {reencryptOpen && (
         <ReencryptAllDialog
@@ -337,6 +365,9 @@ export function BackupsPage() {
 }
 
 function ContentsBadges({ b }: { b: BackupListItem }) {
+  // Include-flags are informational, not success states — keep them
+  // muted so encrypted (warn tone) is the only thing that draws the
+  // eye on rows where it matters.
   return (
     <span className="ml-1 inline-flex flex-wrap items-center gap-1 align-middle">
       {b.area ? (
@@ -344,12 +375,12 @@ function ContentsBadges({ b }: { b: BackupListItem }) {
           {b.area}
         </Badge>
       ) : null}
-      {b.included_rrd && <Badge tone="success" title="Includes RRD graph data">RRD</Badge>}
+      {b.included_rrd && <Badge tone="muted" title="Includes RRD graph data">RRD</Badge>}
       {b.included_packages && (
-        <Badge tone="success" title="Includes package information">pkgs</Badge>
+        <Badge tone="muted" title="Includes package information">pkgs</Badge>
       )}
       {b.included_ssh && (
-        <Badge tone="success" title="Includes SSH host keys">ssh</Badge>
+        <Badge tone="muted" title="Includes SSH host keys">ssh</Badge>
       )}
       {b.encrypted && (
         <Badge tone="warn" title="Encrypted at rest — view decrypts in memory">
@@ -406,7 +437,12 @@ function ReencryptAllDialog({
   }
 
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()} title="Re-encrypt all backups">
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title="Re-encrypt all backups"
+      tone="warn"
+    >
       <div className="space-y-3">
         <p className="text-sm text-muted-fg">
           {encryptedCount === 0

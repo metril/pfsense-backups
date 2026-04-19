@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Label } from "@/components/ui/Label";
-import { cn } from "@/lib/cn";
+import { Select, type SelectOption } from "@/components/ui/Select";
 import { supportedTimezones } from "@/lib/timezones";
 import { useSettings, useUpdateBackupSettings, useUpdateLoggingSettings } from "@/api/queries";
 
@@ -24,13 +24,33 @@ export function SettingsPage() {
     default_timezone: "UTC",
     backup_all_max_workers: 4,
   });
-  const [logging, setLogging] = useState<{ level: string; format: string }>({ level: "INFO", format: "" });
-  const tzList = useMemo(supportedTimezones, []);
+  const [logging, setLogging] = useState<{ level: string; format: string }>({
+    level: "INFO",
+    format: "",
+  });
+
+  const tzOptions: SelectOption[] = useMemo(
+    () => supportedTimezones().map((tz) => ({ value: tz, label: tz })),
+    [],
+  );
+  const tzValues = useMemo(() => new Set(tzOptions.map((o) => o.value)), [tzOptions]);
+
+  // When the stored timezone isn't in the browser's IANA list (older
+  // Chromium builds, exotic zones), render an inline text input instead
+  // of the dropdown. The "__custom__" entry lets users opt into that
+  // mode intentionally.
+  const [customTz, setCustomTz] = useState(false);
 
   useEffect(() => {
     if (settings.data?.backup) setBackup(settings.data.backup);
     if (settings.data?.logging) setLogging(settings.data.logging);
   }, [settings.data]);
+
+  useEffect(() => {
+    if (backup.default_timezone && !tzValues.has(backup.default_timezone)) {
+      setCustomTz(true);
+    }
+  }, [backup.default_timezone, tzValues]);
 
   if (settings.isPending) return <div className="text-sm text-muted-fg">Loading…</div>;
 
@@ -41,38 +61,59 @@ export function SettingsPage() {
       <section className="space-y-3">
         <h2 className="text-lg font-medium">Backup file layout</h2>
         <Field label="Filename format">
-          <Input value={backup.filename_format} onChange={(e) => setBackup({ ...backup, filename_format: e.target.value })} />
+          <Input
+            value={backup.filename_format}
+            onChange={(e) => setBackup({ ...backup, filename_format: e.target.value })}
+          />
         </Field>
         <Field label="Timestamp format (strftime)">
-          <Input value={backup.timestamp_format} onChange={(e) => setBackup({ ...backup, timestamp_format: e.target.value })} />
+          <Input
+            value={backup.timestamp_format}
+            onChange={(e) => setBackup({ ...backup, timestamp_format: e.target.value })}
+          />
         </Field>
         <Field label="Directory">
-          <Input value={backup.directory} onChange={(e) => setBackup({ ...backup, directory: e.target.value })} />
+          <Input
+            value={backup.directory}
+            onChange={(e) => setBackup({ ...backup, directory: e.target.value })}
+          />
         </Field>
         <Field label="Default scheduler timezone">
-          <select
-            value={tzList.includes(backup.default_timezone) ? backup.default_timezone : "__custom__"}
-            onChange={(e) => {
-              const v = e.target.value;
-              if (v !== "__custom__") setBackup({ ...backup, default_timezone: v });
-            }}
-            aria-label="Default scheduler timezone"
-            className={cn(
-              "h-9 w-full rounded-md border border-border bg-bg px-3 text-sm",
-              "focus-visible:border-accent focus-visible:outline-none",
-            )}
-          >
-            {!tzList.includes(backup.default_timezone) && (
-              <option value="__custom__" disabled>
-                {backup.default_timezone} (not in browser list)
-              </option>
-            )}
-            {tzList.map((tz) => (
-              <option key={tz} value={tz}>
-                {tz}
-              </option>
-            ))}
-          </select>
+          {customTz ? (
+            <div className="space-y-1">
+              <Input
+                value={backup.default_timezone}
+                onChange={(e) =>
+                  setBackup({ ...backup, default_timezone: e.target.value })
+                }
+                placeholder="e.g. America/Los_Angeles"
+              />
+              <button
+                type="button"
+                className="text-xs text-accent hover:underline"
+                onClick={() => {
+                  setCustomTz(false);
+                  setBackup({ ...backup, default_timezone: "UTC" });
+                }}
+              >
+                ← pick from the list instead
+              </button>
+            </div>
+          ) : (
+            <Select
+              value={backup.default_timezone}
+              onChange={(v) => {
+                if (v === "__custom__") {
+                  setCustomTz(true);
+                  return;
+                }
+                setBackup({ ...backup, default_timezone: v });
+              }}
+              options={tzOptions}
+              aria-label="Default scheduler timezone"
+              customOption={{ label: "Custom…" }}
+            />
+          )}
           <p className="mt-1 text-xs text-muted-fg">
             Used for every instance's schedule unless that instance sets its own override.
             Changing this tells the worker to reload every cron trigger.
@@ -95,14 +136,14 @@ export function SettingsPage() {
             }
           />
           <p className="mt-1 text-xs text-muted-fg">
-            Cap on instances processed concurrently during a full sweep.
-            1 = serial; higher values speed up large fleets at the cost of
-            more simultaneous pfSense logins. Default 4.
+            Cap on instances processed concurrently during a full sweep. 1 = serial;
+            higher values speed up large fleets at the cost of more simultaneous
+            pfSense logins. Default 4.
           </p>
         </Field>
         <div className="flex justify-end">
           <Button onClick={() => updateBackup.mutate(backup)} disabled={updateBackup.isPending}>
-            Save backup settings
+            {updateBackup.isPending ? "Saving…" : "Save backup settings"}
           </Button>
         </div>
       </section>
@@ -110,22 +151,28 @@ export function SettingsPage() {
       <section className="space-y-3">
         <h2 className="text-lg font-medium">Logging</h2>
         <Field label="Level">
-          <select
+          <Select
             value={logging.level}
-            onChange={(e) => setLogging({ ...logging, level: e.target.value })}
-            className="h-9 w-full rounded-md border border-border bg-bg px-2 text-sm"
-          >
-            {["DEBUG", "INFO", "WARNING", "ERROR"].map((l) => (
-              <option key={l} value={l}>{l}</option>
-            ))}
-          </select>
+            onChange={(v) => setLogging({ ...logging, level: v })}
+            options={["DEBUG", "INFO", "WARNING", "ERROR"].map((l) => ({
+              value: l,
+              label: l,
+            }))}
+            aria-label="Log level"
+          />
         </Field>
         <Field label="Format">
-          <Input value={logging.format} onChange={(e) => setLogging({ ...logging, format: e.target.value })} />
+          <Input
+            value={logging.format}
+            onChange={(e) => setLogging({ ...logging, format: e.target.value })}
+          />
         </Field>
         <div className="flex justify-end">
-          <Button onClick={() => updateLogging.mutate(logging)} disabled={updateLogging.isPending}>
-            Save logging settings
+          <Button
+            onClick={() => updateLogging.mutate(logging)}
+            disabled={updateLogging.isPending}
+          >
+            {updateLogging.isPending ? "Saving…" : "Save logging settings"}
           </Button>
         </div>
       </section>

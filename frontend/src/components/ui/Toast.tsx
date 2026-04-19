@@ -11,7 +11,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { X } from "lucide-react";
+import { CheckCircle2, Info, X, XCircle } from "lucide-react";
 import { cn } from "@/lib/cn";
 
 type Tone = "info" | "success" | "error";
@@ -82,19 +82,38 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
     return () => clearTimeout(h);
   }, [onDismiss, toast.timeoutMs]);
 
+  const icon = {
+    error: <XCircle className="h-4 w-4 text-danger" aria-hidden />,
+    success: <CheckCircle2 className="h-4 w-4 text-ok" aria-hidden />,
+    info: <Info className="h-4 w-4 text-info" aria-hidden />,
+  }[toast.tone];
+
   return (
     <div
       role="status"
       className={cn(
-        "pointer-events-auto rounded-lg border border-border bg-muted px-4 py-3 shadow-lg",
-        toast.tone === "error" && "border-danger/50 bg-danger/10",
-        toast.tone === "success" && "border-ok/50 bg-ok/10",
+        // 2px accent-colored left border makes the tone readable at a
+        // glance even in a stack of mixed toasts. Background is tinted
+        // /15 (bumped from /10) so the tone is visible without shouting.
+        "pointer-events-auto relative rounded-lg border-l-2 border-border bg-muted",
+        "py-3 pl-4 pr-3 shadow-lg",
+        toast.tone === "error" && "border-l-danger bg-danger/15",
+        toast.tone === "success" && "border-l-ok bg-ok/15",
+        toast.tone === "info" && "border-l-info bg-info/10",
       )}
     >
       <div className="flex items-start gap-3">
-        <div className="flex-1 min-w-0">
-          {toast.title && <div className="text-sm font-semibold">{toast.title}</div>}
-          <div className="mt-0.5 text-sm text-muted-fg break-words">{toast.message}</div>
+        <div className="mt-0.5 shrink-0">{icon}</div>
+        <div className="min-w-0 flex-1">
+          {toast.title && <div className="text-sm font-semibold text-fg">{toast.title}</div>}
+          <div
+            className={cn(
+              "mt-0.5 text-sm break-words",
+              toast.title ? "text-muted-fg" : "text-fg",
+            )}
+          >
+            {toast.message}
+          </div>
         </div>
         <button
           type="button"

@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, Eye, Play, Plug, Settings2, Split } from "lucide-react";
+import { ArrowLeft, Eye, Play, Plug, Split } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { SplitButton } from "@/components/ui/SplitButton";
 import { BackupOverridesDialog } from "@/components/BackupOverridesDialog";
 import {
   useBackupNow,
@@ -126,20 +127,20 @@ export function InstanceDetailPage() {
           </h1>
           <div className="mt-1 truncate font-mono text-xs text-muted-fg">{inst.url}</div>
         </div>
-        <div className="flex shrink-0 gap-2">
-          <Button size="sm" onClick={() => backupNow.mutate({ id })} disabled={busy}>
-            <Play className="h-4 w-4" /> Backup now
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setOverridesOpen(true)}
+        <div className="flex shrink-0 flex-wrap gap-2">
+          <SplitButton
+            primaryLabel="Backup now"
+            primaryIcon={<Play className="h-4 w-4" />}
+            onPrimary={() => backupNow.mutate({ id })}
             disabled={busy}
-            aria-label={`Backup ${inst.name} with options`}
-            title="Backup now with options…"
-          >
-            <Settings2 className="h-4 w-4" />
-          </Button>
+            size="sm"
+            menu={[
+              {
+                label: "Backup now with options…",
+                onSelect: () => setOverridesOpen(true),
+              },
+            ]}
+          />
           <Button variant="secondary" size="sm" onClick={() => test.mutate(id)} disabled={busy}>
             <Plug className="h-4 w-4" /> Test
           </Button>

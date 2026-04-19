@@ -1,13 +1,15 @@
 import { useRef, useState } from "react";
+import { AlertTriangle, KeyRound, Package } from "lucide-react";
 import { Dialog } from "@/components/ui/Dialog";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Label } from "@/components/ui/Label";
+import { Select, type SelectOption } from "@/components/ui/Select";
 import type { BackupOverridesRequest } from "@/api/types";
 
 // Canonical pfSense subsystem IDs for the Area dropdown. Must stay in
 // sync with pfsense_shared/schemas.py::PFSENSE_BACKUP_AREAS.
-const PFSENSE_BACKUP_AREAS: { value: string; label: string }[] = [
+const PFSENSE_BACKUP_AREAS: SelectOption[] = [
   { value: "", label: "Everything (default)" },
   { value: "aliases", label: "aliases" },
   { value: "captiveportal", label: "captiveportal" },
@@ -49,14 +51,15 @@ const PFSENSE_BACKUP_AREAS: { value: string; label: string }[] = [
 
 /**
  * One-shot "Backup now with options" dialog used by:
- *   - per-instance "Backup now" gear button (Dashboard tile, Instance Detail)
- *   - top-bar "Backup all" gear button (Dashboard)
+ *   - per-instance "Backup now" menu item (Dashboard tile, Instance Detail)
+ *   - top-bar "Backup all" menu item (Dashboard)
  *
  * Two actions: "Run with stored defaults" (sends no overrides) and
  * "Run with these options" (sends the diff as an overrides payload).
  *
- * When `mode === "all"`, the dialog shows the caveat about per-instance
- * area mismatches + shared password effects across every box.
+ * Laid out vertically in three tinted sections — Area, Contents,
+ * Encryption — so each decision is easy to scan without the
+ * 2-column asymmetry that v0.9.x shipped with.
  */
 export function BackupOverridesDialog({
   title,
@@ -77,10 +80,6 @@ export function BackupOverridesDialog({
   const [pw, setPw] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  // Synchronous lock — useState can't block a second click fired before
-  // React re-renders the disabled={submitting} button. The ref is set
-  // before we hand off to any async work, so two rapid clicks can't
-  // both start backups.
   const inFlight = useRef(false);
 
   const passwordMissing = encrypt && pw.trim().length === 0;
@@ -119,58 +118,85 @@ export function BackupOverridesDialog({
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()} title={title}>
-      <div className="space-y-3">
-        <p className="text-xs text-muted-fg">
+      <div className="space-y-4">
+        <p className="text-sm text-muted-fg">
           These settings apply only to this run and are not saved back to
           {mode === "all" ? " any instance" : " this instance"}.
         </p>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Area">
-            <select
-              value={area}
-              onChange={(e) => setArea(e.target.value)}
-              aria-label="Backup area"
-              className="h-9 w-full rounded-md border border-border bg-bg px-2 text-sm"
-            >
-              {PFSENSE_BACKUP_AREAS.map((a) => (
-                <option key={a.value} value={a.value}>{a.label}</option>
-              ))}
-            </select>
-          </Field>
-          <div className="space-y-2 self-end">
+
+        <Section
+          icon={<Package className="h-4 w-4" aria-hidden />}
+          title="Area"
+          hint="What subset of pfSense's config to pull. Default is everything."
+        >
+          <Select
+            value={area}
+            onChange={setArea}
+            options={PFSENSE_BACKUP_AREAS}
+            aria-label="Backup area"
+          />
+        </Section>
+
+        <Section
+          icon={<Package className="h-4 w-4" aria-hidden />}
+          title="Contents"
+          hint="Optional extras pfSense will include in the backup."
+        >
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <Toggle label="Include RRD graph data" checked={rrd} onChange={setRrd} />
-            <Toggle label="Include package information" checked={packages} onChange={setPackages} />
-            <Toggle label="Include SSH host keys" checked={ssh} onChange={setSsh} />
-            <Toggle label="Encrypt backup" checked={encrypt} onChange={setEncrypt} />
-          </div>
-        </div>
-        {encrypt && (
-          <Field label="Encryption password (one-shot)">
-            <Input
-              type="password"
-              value={pw}
-              onChange={(e) => setPw(e.target.value)}
-              autoFocus
+            <Toggle
+              label="Include package information"
+              checked={packages}
+              onChange={setPackages}
             />
-          </Field>
-        )}
+            <Toggle label="Include SSH host keys" checked={ssh} onChange={setSsh} />
+          </div>
+        </Section>
+
+        <Section
+          icon={<KeyRound className="h-4 w-4" aria-hidden />}
+          title="Encryption"
+          hint="Encrypt the config file with AES-256-CBC. pfSense's Restore flow accepts the output directly."
+        >
+          <Toggle label="Encrypt backup" checked={encrypt} onChange={setEncrypt} />
+          {encrypt && (
+            <div className="mt-3">
+              <Label>Encryption password (one-shot)</Label>
+              <Input
+                type="password"
+                value={pw}
+                onChange={(e) => setPw(e.target.value)}
+                autoFocus
+                className="mt-1"
+              />
+            </div>
+          )}
+        </Section>
+
         {mode === "all" && (
-          <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-fg">
-            <strong className="text-fg">Heads-up:</strong> these settings apply to every
-            enabled instance. If an instance doesn't support the selected area (e.g. a
-            package not installed on that box), its backup will fail and show up in the
-            sweep's failed list. A shared encryption password will apply to every
-            encrypted backup produced by this run.
+          <div className="flex items-start gap-2 rounded-md border border-warn/30 bg-warn/10 px-3 py-2 text-xs text-fg">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warn" aria-hidden />
+            <div>
+              <strong>Heads-up:</strong> these settings apply to every enabled instance.
+              If an instance doesn't support the selected area (e.g. a package not installed
+              on that box), its backup will fail and show up in the sweep's failed list.
+              A shared encryption password will apply to every encrypted backup produced
+              by this run.
+            </div>
           </div>
         )}
+
         {err && <p className="text-xs text-danger">{err}</p>}
       </div>
+
       <div className="mt-6 flex items-center justify-between gap-2">
         <Button variant="secondary" onClick={() => run(false)} disabled={submitting}>
           Run with stored defaults
         </Button>
         <div className="flex gap-2">
-          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button variant="secondary" onClick={onClose}>
+            Cancel
+          </Button>
           <Button onClick={() => run(true)} disabled={submitting || passwordMissing}>
             {submitting ? "Starting…" : "Run with these options"}
           </Button>
@@ -180,12 +206,26 @@ export function BackupOverridesDialog({
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Section({
+  icon,
+  title,
+  hint,
+  children,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
   return (
-    <div>
-      <Label>{label}</Label>
-      <div className="mt-1">{children}</div>
-    </div>
+    <section className="rounded-lg border border-border bg-muted/30 p-4">
+      <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-fg">
+        <span className="text-fg">{icon}</span>
+        {title}
+      </div>
+      {hint && <p className="mb-3 text-xs text-muted-fg">{hint}</p>}
+      {children}
+    </section>
   );
 }
 
@@ -199,12 +239,12 @@ function Toggle({
   onChange: (v: boolean) => void;
 }) {
   return (
-    <label className="flex items-center gap-2 text-sm">
+    <label className="flex cursor-pointer items-center gap-2 text-sm">
       <input
         type="checkbox"
         checked={checked}
         onChange={(e) => onChange(e.target.checked)}
-        className="accent-accent"
+        className="h-4 w-4 cursor-pointer accent-accent"
       />
       <span>{label}</span>
     </label>
