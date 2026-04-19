@@ -410,16 +410,26 @@ def _decrypt_row_content(row: Backup, path: Path, crypto) -> bytes:
 
 
 @router.get("/{backup_id}/content")
-async def get_content(backup_id: int, db: DbSession, crypto: CryptoDep) -> Response:
+async def get_content(
+    backup_id: int, db: DbSession, user: CurrentUser, crypto: CryptoDep
+) -> Response:
     """Decompressed XML text (used by the diff view).
 
     When the row is encrypted, we Fernet-decrypt the stored per-backup
     password, then decrypt the on-disk blob into plaintext XML — all
-    in memory. The decrypted XML never lands on disk.
+    in memory. The decrypted XML never lands on disk. The decrypt event
+    is audited so operators can see who read plaintext pfSense config
+    (which includes cert keys, VPN PSKs, admin password hashes).
     """
     row, path = await _load(db, backup_id)
     if row.encrypted:
         content = await asyncio.to_thread(_decrypt_row_content, row, path, crypto)
+        audit.record(
+            db, actor_email=user["email"], action="view_decrypted",
+            resource="backup", resource_id=backup_id,
+            details={"filename": row.filename},
+        )
+        await db.commit()
     else:
         content = await asyncio.to_thread(read_content, path)
     return Response(content=content, media_type="application/xml")
@@ -427,14 +437,20 @@ async def get_content(backup_id: int, db: DbSession, crypto: CryptoDep) -> Respo
 
 @router.get("/{backup_id}/download", response_model=None)
 async def download(
-    backup_id: int, db: DbSession, crypto: CryptoDep, raw: bool = False
+    backup_id: int,
+    db: DbSession,
+    user: CurrentUser,
+    crypto: CryptoDep,
+    raw: bool = False,
 ) -> StreamingResponse | Response:
     """Download backup bytes.
 
     For encrypted rows, the default behavior is to serve the decrypted
     XML (same UX as pfSense's post-import decrypt). Pass ``?raw=1`` to
     download the still-encrypted file as-is (for offline inspection or
-    round-trip into pfSense's import flow).
+    round-trip into pfSense's import flow). Decrypted downloads are
+    audited; the raw path is recorded too so the log shows which
+    operator pulled which file.
     """
     row, path = await _load(db, backup_id)
 
@@ -446,6 +462,12 @@ async def download(
         for suffix in (".gz",):
             if download_name.endswith(suffix):
                 download_name = download_name[: -len(suffix)]
+        audit.record(
+            db, actor_email=user["email"], action="download_decrypted",
+            resource="backup", resource_id=backup_id,
+            details={"filename": row.filename},
+        )
+        await db.commit()
         return Response(
             content=plaintext,
             media_type="application/xml",
@@ -453,6 +475,14 @@ async def download(
                 "Content-Disposition": f'attachment; filename="{download_name}"'
             },
         )
+
+    audit.record(
+        db, actor_email=user["email"],
+        action="download_raw" if row.encrypted else "download",
+        resource="backup", resource_id=backup_id,
+        details={"filename": row.filename},
+    )
+    await db.commit()
 
     async def body() -> AsyncIterator[bytes]:
         for chunk in await asyncio.to_thread(lambda: list(stream_raw(path))):
@@ -466,7 +496,9 @@ async def download(
 
 
 @router.post("/download-zip")
-async def download_zip(body: ZipRequest, db: DbSession) -> StreamingResponse:
+async def download_zip(
+    body: ZipRequest, db: DbSession, user: CurrentUser
+) -> StreamingResponse:
     """Stream multiple backups into one zip without buffering in memory (C4).
 
     ``zip_stream`` writes each file's bytes through a ``zipfile.ZipFile`` into
@@ -480,6 +512,12 @@ async def download_zip(body: ZipRequest, db: DbSession) -> StreamingResponse:
     for bid in body.ids:
         _, p = await _load(db, bid)
         paths.append(p)
+    audit.record(
+        db, actor_email=user["email"], action="download_zip",
+        resource="backup", resource_id=None,
+        details={"ids": body.ids, "count": len(body.ids)},
+    )
+    await db.commit()
     return StreamingResponse(
         _async_iter(zip_stream(paths)),
         media_type="application/zip",
@@ -498,12 +536,14 @@ async def _async_iter(it) -> AsyncIterator[bytes]:
 
 @router.get("/diff/pair")
 async def diff_pair(
-    a: int, b: int, db: DbSession, crypto: CryptoDep
+    a: int, b: int, db: DbSession, user: CurrentUser, crypto: CryptoDep
 ) -> dict[str, Any]:
     """Return both backups' decompressed XML content for a side-by-side diff view.
 
     Encrypted rows get decrypted in memory using their per-backup
-    password so the diff view sees plaintext XML on either side.
+    password so the diff view sees plaintext XML on either side. The
+    decrypt event is audited so operators can see who read plaintext
+    pfSense config via the diff path.
     """
     a_row, a_path = await _load(db, a)
     b_row, b_path = await _load(db, b)
@@ -518,6 +558,13 @@ async def diff_pair(
 
     a_content = _as_str(await asyncio.to_thread(_get, a_row, a_path))
     b_content = _as_str(await asyncio.to_thread(_get, b_row, b_path))
+    if a_row.encrypted or b_row.encrypted:
+        audit.record(
+            db, actor_email=user["email"], action="view_decrypted",
+            resource="backup_diff", resource_id=None,
+            details={"a": a_row.id, "b": b_row.id},
+        )
+        await db.commit()
     return {
         "a": {
             "id": a_row.id,

@@ -582,6 +582,7 @@ class PfSenseBackupManager:
 
         success = 0
         failure = 0
+        total_tasks = len(tasks)
         try:
             success, failure, _ = self._reencrypt_rows(
                 job_id=job_id,
@@ -593,9 +594,12 @@ class PfSenseBackupManager:
         finally:
             # Clear plaintext passwords from the task list promptly, and
             # always finalize the Job row so a mid-run exception doesn't
-            # leave a "running" Job that the UI can't drain.
+            # leave a "running" Job that the UI can't drain. Pass
+            # ``total_tasks`` separately so a ProcessPool crash between
+            # submits and completions is counted as "unprocessed" rather
+            # than silently dropped from the denominator.
             del tasks
-            self._finalize_reencrypt_job(job_id, success, failure)
+            self._finalize_reencrypt_job(job_id, success, failure, total_tasks)
 
     def reencrypt_all_backups(
         self,
@@ -645,6 +649,7 @@ class PfSenseBackupManager:
 
         success = 0
         failure = 0
+        total_tasks = len(tasks)
         try:
             success, failure, _ = self._reencrypt_rows(
                 job_id=job_id,
@@ -679,17 +684,40 @@ class PfSenseBackupManager:
                     )
         finally:
             del tasks
-            self._finalize_reencrypt_job(job_id, success, failure)
+            self._finalize_reencrypt_job(job_id, success, failure, total_tasks)
 
-    def _finalize_reencrypt_job(self, job_id: int, success: int, failure: int) -> None:
-        total = success + failure
-        status = "success" if failure == 0 else "failure"
-        if total == 0:
+    def _finalize_reencrypt_job(
+        self,
+        job_id: int,
+        success: int,
+        failure: int,
+        total_tasks: int,
+    ) -> None:
+        """Write a truthful summary even if the ProcessPool crashed mid-run.
+
+        ``total_tasks`` is the count of rows submitted to the pool, not
+        ``success + failure``. If a worker dies before its future
+        completes, that row contributes to neither counter — but it
+        still represents unprocessed work the operator needs to know
+        about. The message below distinguishes "unprocessed" from
+        "failed" so the log is honest.
+        """
+        processed = success + failure
+        unprocessed = max(0, total_tasks - processed)
+        overall_ok = failure == 0 and unprocessed == 0
+        status = "success" if overall_ok else "failure"
+
+        if total_tasks == 0:
             msg = "No encrypted backups to re-encrypt"
-        elif failure == 0:
-            msg = f"Re-encrypted {success}/{total} backup(s)"
+        elif overall_ok:
+            msg = f"Re-encrypted {success}/{total_tasks} backup(s)"
         else:
-            msg = f"Re-encrypted {success}/{total} backup(s); {failure} failed"
+            parts = [f"Re-encrypted {success}/{total_tasks} backup(s)"]
+            if failure:
+                parts.append(f"{failure} failed")
+            if unprocessed:
+                parts.append(f"{unprocessed} unprocessed (worker crash)")
+            msg = "; ".join(parts)
         self._mark_job(job_id, status=status, finished_at=datetime.now(UTC), message=msg)
 
     def _reencrypt_rows(

@@ -218,10 +218,10 @@ export function BackupsPage() {
           <tr>
             <th className="w-6"></th>
             <th className="text-left font-normal">Instance</th>
-            <SortHeader label="Started" col="started_at" current={sort} onClick={clickSort} icon={sortIcon} />
-            <SortHeader label="Duration" col="duration_seconds" current={sort} onClick={clickSort} icon={sortIcon} />
-            <SortHeader label="File" col="filename" current={sort} onClick={clickSort} icon={sortIcon} />
-            <SortHeader label="Size" col="size_bytes" current={sort} onClick={clickSort} icon={sortIcon} />
+            <SortHeader label="Started" col="started_at" current={sort} order={order} onClick={clickSort} icon={sortIcon} />
+            <SortHeader label="Duration" col="duration_seconds" current={sort} order={order} onClick={clickSort} icon={sortIcon} />
+            <SortHeader label="File" col="filename" current={sort} order={order} onClick={clickSort} icon={sortIcon} />
+            <SortHeader label="Size" col="size_bytes" current={sort} order={order} onClick={clickSort} icon={sortIcon} />
             <th className="text-left font-normal">Tag</th>
             <th className="text-left font-normal">Status</th>
             <th className="w-20"></th>
@@ -468,17 +468,24 @@ function SortHeader({
   label,
   col,
   current,
+  order,
   onClick,
   icon,
 }: {
   label: string;
   col: BackupSort;
   current: BackupSort;
+  order: BackupOrder;
   onClick: (c: BackupSort) => void;
   icon: (c: BackupSort) => React.ReactNode;
 }) {
+  // aria-sort belongs on the <th>, not the <button>. Correctly reflect
+  // the *actual* direction (order) when this column is active; "none"
+  // otherwise — WAI-ARIA sortable column semantics.
+  const ariaSort =
+    col !== current ? "none" : order === "asc" ? "ascending" : "descending";
   return (
-    <th className="text-left font-normal">
+    <th className="text-left font-normal" aria-sort={ariaSort}>
       <button
         type="button"
         onClick={() => onClick(col)}
@@ -486,9 +493,6 @@ function SortHeader({
           "inline-flex items-center gap-1 uppercase tracking-wider hover:text-fg",
           col === current && "text-fg",
         )}
-        aria-sort={
-          col !== current ? "none" : current ? "descending" : "ascending"
-        }
       >
         {label}
         {icon(col)}

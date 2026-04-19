@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Dialog } from "@/components/ui/Dialog";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -77,15 +77,22 @@ export function BackupOverridesDialog({
   const [pw, setPw] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Synchronous lock — useState can't block a second click fired before
+  // React re-renders the disabled={submitting} button. The ref is set
+  // before we hand off to any async work, so two rapid clicks can't
+  // both start backups.
+  const inFlight = useRef(false);
 
   const passwordMissing = encrypt && pw.trim().length === 0;
 
   async function run(withOverrides: boolean) {
+    if (inFlight.current) return;
     setErr(null);
     if (withOverrides && passwordMissing) {
       setErr("Password required when encryption is on.");
       return;
     }
+    inFlight.current = true;
     setSubmitting(true);
     try {
       if (!withOverrides) {
@@ -106,6 +113,7 @@ export function BackupOverridesDialog({
       setErr(String(e));
     } finally {
       setSubmitting(false);
+      inFlight.current = false;
     }
   }
 
