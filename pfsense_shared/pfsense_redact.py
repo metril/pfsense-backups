@@ -84,6 +84,13 @@ _EXACT: Final[frozenset[str]] = frozenset(
         # pfSense's ``<apikeys>`` ships web-UI API tokens inline.
         "apikey_secret",
         "api_secret",
+        # WireGuard private keys — the interface key identifies the
+        # tunnel endpoint and is as sensitive as a TLS private key.
+        # pfSense stores both interface and peer private keys under
+        # the same tag name; the peer preshared-key falls back to the
+        # existing ``presharedkey`` / ``psk`` entries above.
+        "privatekey",
+        "private_key",
         # NOTE: "token" intentionally NOT in _EXACT. Bare ``<token>``
         # appears in benign contexts (e.g. third-party package revision
         # counters), so we only redact explicit API-token fields via

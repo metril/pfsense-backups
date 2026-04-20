@@ -92,6 +92,13 @@ import type {
   ZabbixBundle,
   Vlan,
   WolHost,
+  // v0.17.0 — additional package parsers
+  AvahiConfig,
+  MiniUpnpdConfig,
+  OpenvpnClientExportConfig,
+  ShellCmdSettings,
+  SnortConfig,
+  WireGuardConfig,
   // v0.14.0
   ApiKeyEntry,
   DiagPreferences,
@@ -2319,6 +2326,12 @@ function packageCount(ip: InstalledPackages): number {
   if (ip.telegraf) n += 1;
   if (ip.frr) n += 1;
   if (ip.zabbix) n += 1;
+  if (ip.wireguard) n += 1;
+  if (ip.snort) n += 1;
+  if (ip.miniupnpd) n += 1;
+  if (ip.avahi) n += 1;
+  if (ip.openvpn_client_export) n += 1;
+  if (ip.shellcmd) n += 1;
   n += ip.unknown.length;
   return n;
 }
@@ -2329,12 +2342,20 @@ function PackagesPanel({ ip }: { ip: InstalledPackages }) {
       {ip.pfblockerng && <PfBlockerNgPanel p={ip.pfblockerng} />}
       {ip.haproxy && <HaProxyPanel p={ip.haproxy} />}
       {ip.suricata && <SuricataPanel p={ip.suricata} />}
+      {ip.snort && <SnortPanel p={ip.snort} />}
       {ip.acme && <AcmePanel p={ip.acme} />}
       {ip.squid && <SquidPanel p={ip.squid} />}
       {ip.freeradius && <FreeRadiusPanel p={ip.freeradius} />}
       {ip.telegraf && <TelegrafPanel p={ip.telegraf} />}
       {ip.frr && <FrrPanel p={ip.frr} />}
       {ip.zabbix && <ZabbixPanel p={ip.zabbix} />}
+      {ip.wireguard && <WireGuardPanel p={ip.wireguard} />}
+      {ip.miniupnpd && <MiniUpnpdPanel p={ip.miniupnpd} />}
+      {ip.avahi && <AvahiPanel p={ip.avahi} />}
+      {ip.openvpn_client_export && (
+        <OpenvpnClientExportPanel p={ip.openvpn_client_export} />
+      )}
+      {ip.shellcmd && <ShellCmdPanel p={ip.shellcmd} />}
       {ip.unknown.length > 0 && <UnknownPackagesList rows={ip.unknown} />}
     </div>
   );
@@ -2559,6 +2580,269 @@ function AcmePanel({ p }: { p: AcmeConfig }) {
             ])}
           />
         </div>
+      )}
+    </PackageCard>
+  );
+}
+
+function WireGuardPanel({ p }: { p: WireGuardConfig }) {
+  return (
+    <PackageCard title="WireGuard">
+      {p.tunnels.length === 0 && p.peers.length === 0 && (
+        <div className="text-xs text-muted-fg">
+          Package installed but no tunnels or peers configured.
+        </div>
+      )}
+      {p.tunnels.length > 0 && (
+        <div className="mb-2">
+          <div className="mb-1 text-xs uppercase text-muted-fg">
+            Tunnels ({p.tunnels.length})
+          </div>
+          <Table
+            headers={[
+              "Name",
+              "Enabled",
+              "Addresses",
+              "Listen port",
+              "Public key",
+              "Private key",
+              "Description",
+            ]}
+            rowKeys={p.tunnels.map((t) => t.name)}
+            rows={p.tunnels.map((t) => [
+              <span key="n" className="font-mono text-xs">
+                {t.name}
+              </span>,
+              <StatusPill key="e" enabled={t.enabled} />,
+              t.addresses.length > 0 ? (
+                <span key="a" className="font-mono text-xs">
+                  {t.addresses.join(", ")}
+                </span>
+              ) : (
+                "—"
+              ),
+              t.listen_port ?? "—",
+              t.public_key ? (
+                <span
+                  key="pub"
+                  className="truncate font-mono text-xs text-muted-fg"
+                  title={t.public_key}
+                >
+                  {t.public_key.slice(0, 12)}…
+                </span>
+              ) : (
+                "—"
+              ),
+              t.private_key === "***redacted***" ? <Redacted /> : "—",
+              t.descr ?? "—",
+            ])}
+          />
+        </div>
+      )}
+      {p.peers.length > 0 && (
+        <div>
+          <div className="mb-1 text-xs uppercase text-muted-fg">
+            Peers ({p.peers.length})
+          </div>
+          <Table
+            headers={[
+              "Description",
+              "Enabled",
+              "Tunnel",
+              "Endpoint",
+              "Allowed IPs",
+              "Public key",
+              "PSK",
+            ]}
+            rows={p.peers.map((pe) => [
+              pe.descr ?? "—",
+              <StatusPill key="e" enabled={pe.enabled} />,
+              pe.tun ?? "—",
+              pe.endpoint
+                ? `${pe.endpoint}${pe.port ? ":" + pe.port : ""}`
+                : "—",
+              pe.allowed_ips.length > 0 ? (
+                <span key="a" className="font-mono text-xs">
+                  {pe.allowed_ips.join(", ")}
+                </span>
+              ) : (
+                "—"
+              ),
+              pe.public_key ? (
+                <span
+                  key="pub"
+                  className="truncate font-mono text-xs text-muted-fg"
+                  title={pe.public_key}
+                >
+                  {pe.public_key.slice(0, 12)}…
+                </span>
+              ) : (
+                "—"
+              ),
+              pe.preshared_key === "***redacted***" ? <Redacted /> : "—",
+            ])}
+          />
+        </div>
+      )}
+    </PackageCard>
+  );
+}
+
+function SnortPanel({ p }: { p: SnortConfig }) {
+  return (
+    <PackageCard title="Snort (IDS/IPS)">
+      <Dl
+        items={[
+          [
+            "Subscription key",
+            p.oinkmaster_configured ? <Redacted /> : "not set",
+          ],
+          [
+            "Community rules",
+            <StatusPill key="cr" enabled={p.snort_community_rules_enabled} />,
+          ],
+          [
+            "Emerging Threats",
+            <StatusPill key="et" enabled={p.emerging_threats_enabled} />,
+          ],
+        ]}
+      />
+      {p.interfaces.length > 0 && (
+        <div className="mt-2">
+          <div className="mb-1 text-xs uppercase text-muted-fg">
+            Monitored interfaces ({p.interfaces.length})
+          </div>
+          <Table
+            headers={[
+              "Interface",
+              "Enabled",
+              "Block offenders",
+              "IPS mode",
+              "Categories",
+              "Description",
+            ]}
+            rows={p.interfaces.map((i) => [
+              i.interface ? (
+                <InterfaceChip key="i" name={i.interface} />
+              ) : (
+                i.uuid
+              ),
+              <StatusPill key="e" enabled={i.enable} />,
+              <StatusPill
+                key="bo"
+                enabled={i.blockoffenders}
+                labels={{ on: "yes", off: "no" }}
+              />,
+              i.ips_mode ?? "—",
+              i.categories.length > 0
+                ? `${i.categories.length} ruleset${i.categories.length === 1 ? "" : "s"}`
+                : "—",
+              i.descr ?? "—",
+            ])}
+          />
+        </div>
+      )}
+    </PackageCard>
+  );
+}
+
+function MiniUpnpdPanel({ p }: { p: MiniUpnpdConfig }) {
+  return (
+    <PackageCard title="miniUPnPd (UPnP & NAT-PMP)">
+      <Dl
+        items={[
+          ["Enabled", <StatusPill key="e" enabled={p.enable} />],
+          ["UPnP", <StatusPill key="u" enabled={p.enable_upnp} />],
+          ["NAT-PMP", <StatusPill key="n" enabled={p.enable_natpmp} />],
+          ["Internal interfaces", p.iface_array ?? "—"],
+          ["External interface", p.ext_iface ?? "—"],
+          ["Download", p.download ? `${p.download} kbit/s` : "—"],
+          ["Upload", p.upload ? `${p.upload} kbit/s` : "—"],
+        ]}
+      />
+      {p.permit_rules.length > 0 && (
+        <div className="mt-2">
+          <div className="mb-1 text-xs uppercase text-muted-fg">
+            Permit rules ({p.permit_rules.length})
+          </div>
+          <ul className="space-y-0.5 text-xs">
+            {p.permit_rules.map((r, i) => (
+              <li key={i} className="font-mono">
+                {r}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </PackageCard>
+  );
+}
+
+function AvahiPanel({ p }: { p: AvahiConfig }) {
+  return (
+    <PackageCard title="Avahi (mDNS reflector)">
+      <Dl
+        items={[
+          ["Enabled", <StatusPill key="e" enabled={p.enable} />],
+          ["Reflector", <StatusPill key="r" enabled={p.reflector} />],
+          ["IPv4 only", p.ipv4_only ? "yes" : ""],
+          ["IPv6 only", p.ipv6_only ? "yes" : ""],
+          ["Interfaces", p.interfaces ?? "—"],
+          ["Deny interfaces", p.allow_deny_interfaces ?? "—"],
+          ["Cache max entries", p.cache_entries_max ?? "—"],
+        ]}
+      />
+    </PackageCard>
+  );
+}
+
+function OpenvpnClientExportPanel({
+  p,
+}: {
+  p: OpenvpnClientExportConfig;
+}) {
+  return (
+    <PackageCard title="OpenVPN Client Export">
+      <Dl
+        items={[
+          [
+            "Use random local port",
+            <StatusPill key="r" enabled={p.use_random_local_port} />,
+          ],
+          [
+            "Silent install",
+            <StatusPill key="s" enabled={p.silent_install} />,
+          ],
+          ["Interface selection", p.interface_selection ?? "—"],
+          ["Hostname", p.hostname ?? "—"],
+          ["Cert subject (country)", p.ovpnexportcountry ?? "—"],
+          ["Cert subject (state)", p.ovpnexportstate ?? "—"],
+          ["Cert subject (city)", p.ovpnexportcity ?? "—"],
+        ]}
+      />
+    </PackageCard>
+  );
+}
+
+function ShellCmdPanel({ p }: { p: ShellCmdSettings }) {
+  return (
+    <PackageCard title="Shellcmd (boot / filter hooks)">
+      {p.entries.length === 0 ? (
+        <div className="text-xs text-muted-fg">No commands configured.</div>
+      ) : (
+        <Table
+          headers={["Type", "Command", "Disabled", "Description"]}
+          rows={p.entries.map((e) => [
+            <span key="t" className="font-mono text-xs">
+              {e.cmdtype ?? "shellcmd"}
+            </span>,
+            <span key="c" className="break-all font-mono text-xs">
+              {e.cmd}
+            </span>,
+            e.disabled ? "yes" : "",
+            e.descr ?? "—",
+          ])}
+        />
       )}
     </PackageCard>
   );

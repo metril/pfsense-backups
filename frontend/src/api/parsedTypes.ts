@@ -963,6 +963,94 @@ export interface UnknownPackage {
   xml: string;
 }
 
+export interface WireGuardTunnel {
+  name: string;
+  descr: string | null;
+  enabled: boolean;
+  listen_port: string | null;
+  mtu: string | null;
+  addresses: string[];
+  public_key: string | null;
+  private_key: string | null;
+}
+
+export interface WireGuardPeer {
+  descr: string | null;
+  enabled: boolean;
+  tun: string | null;
+  endpoint: string | null;
+  port: string | null;
+  persistent_keepalive: string | null;
+  allowed_ips: string[];
+  public_key: string | null;
+  preshared_key: string | null;
+}
+
+export interface WireGuardConfig {
+  tunnels: WireGuardTunnel[];
+  peers: WireGuardPeer[];
+}
+
+export interface SnortInterface {
+  uuid: string;
+  interface: string | null;
+  descr: string | null;
+  enable: boolean;
+  blockoffenders: boolean;
+  ips_mode: string | null;
+  categories: string[];
+}
+
+export interface SnortConfig {
+  oinkmaster_configured: boolean;
+  snort_community_rules_enabled: boolean;
+  emerging_threats_enabled: boolean;
+  interfaces: SnortInterface[];
+}
+
+export interface MiniUpnpdConfig {
+  enable: boolean;
+  enable_upnp: boolean;
+  enable_natpmp: boolean;
+  iface_array: string | null;
+  ext_iface: string | null;
+  download: string | null;
+  upload: string | null;
+  permit_rules: string[];
+}
+
+export interface AvahiConfig {
+  enable: boolean;
+  reflector: boolean;
+  ipv4_only: boolean;
+  ipv6_only: boolean;
+  interfaces: string | null;
+  allow_deny_interfaces: string | null;
+  cache_entries_max: string | null;
+}
+
+export interface OpenvpnClientExportConfig {
+  use_random_local_port: boolean;
+  silent_install: boolean;
+  interface_selection: string | null;
+  hostname: string | null;
+  ovpnexportcert: string | null;
+  ovpnexportcountry: string | null;
+  ovpnexportstate: string | null;
+  ovpnexportcity: string | null;
+}
+
+export interface ShellCmdEntry {
+  cmd: string;
+  cmdtype: string | null;
+  descr: string | null;
+  disabled: boolean;
+}
+
+export interface ShellCmdSettings {
+  entries: ShellCmdEntry[];
+}
+
 export interface InstalledPackages {
   pfblockerng: PfBlockerNgConfig | null;
   haproxy: HaProxyConfig | null;
@@ -973,6 +1061,12 @@ export interface InstalledPackages {
   telegraf: TelegrafConfig | null;
   frr: FrrConfig | null;
   zabbix: ZabbixBundle | null;
+  wireguard: WireGuardConfig | null;
+  snort: SnortConfig | null;
+  miniupnpd: MiniUpnpdConfig | null;
+  avahi: AvahiConfig | null;
+  openvpn_client_export: OpenvpnClientExportConfig | null;
+  shellcmd: ShellCmdSettings | null;
   unknown: UnknownPackage[];
 }
 
