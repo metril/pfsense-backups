@@ -70,14 +70,17 @@ export function useCardGroup(): CardGroupState | null {
   return useContext(Ctx);
 }
 
-/** Helper for the expand/collapse-all buttons: hands callers a
- *  already-scoped hook so the button component doesn't need to
- *  null-check. */
+/** Helper for the expand/collapse-all buttons. Memoises the returned
+ *  object so callers that put it in a ``useEffect`` dep array don't
+ *  reinstall the effect on every render — important for the keydown
+ *  listener in ``ExpandCollapseAll``, which was previously thrashing. */
 export function useCardGroupActions(): {
   expandAll: () => void;
   collapseAll: () => void;
 } | null {
   const ctx = useContext(Ctx);
-  if (!ctx) return null;
-  return { expandAll: ctx.expandAll, collapseAll: ctx.collapseAll };
+  return useMemo(() => {
+    if (!ctx) return null;
+    return { expandAll: ctx.expandAll, collapseAll: ctx.collapseAll };
+  }, [ctx?.expandAll, ctx?.collapseAll]);
 }

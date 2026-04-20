@@ -32,7 +32,16 @@ export function ExpandCollapseAll({
         (target.tagName === "INPUT" ||
           target.tagName === "TEXTAREA" ||
           target.isContentEditable);
-      if (inField) return;
+      // Also suppress the shortcut when focus is anywhere inside an
+      // open modal / listbox / command palette. The QuickJump palette
+      // steals focus to its ``<li role="option">`` items on hover,
+      // which bypasses the INPUT guard — this closest() check catches
+      // those cases without needing the palette to expose its state.
+      const inModal =
+        target?.closest(
+          '[role="dialog"], [role="listbox"], [role="menu"]',
+        ) != null;
+      if (inField || inModal) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "e") {
         e.preventDefault();

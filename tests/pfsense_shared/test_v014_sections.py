@@ -17,42 +17,72 @@ def _parse(xml: str):
     return parse(textwrap.dedent(xml).strip().encode())
 
 
-def test_sshdata_redacts_private_keys_keeps_pub_halves() -> None:
+def test_sshdata_modern_sshkeyfile_shape() -> None:
+    """pfSense 2.5+ stores SSH host keys as <sshkeyfile> entries — each
+    with <filename> + <xmldata>. Private halves (no ``.pub`` suffix)
+    must redact; ``.pub`` halves stay visible so a key rotation still
+    shows up in a diff."""
     cfg = _parse(
         """
         <pfsense>
           <sshdata>
-            <ssh_rsa_key>LEAKY_RSA_PRIVKEY</ssh_rsa_key>
-            <ssh_rsa_key_pub>ssh-rsa AAAAB3... rsa-pub</ssh_rsa_key_pub>
-            <ssh_ecdsa_key>LEAKY_ECDSA_PRIVKEY</ssh_ecdsa_key>
-            <ssh_ecdsa_key_pub>ecdsa-sha2-nistp256 AAAA... ecdsa-pub</ssh_ecdsa_key_pub>
-            <ssh_ed25519_key>LEAKY_ED25519_PRIVKEY</ssh_ed25519_key>
-            <ssh_ed25519_key_pub>ssh-ed25519 AAAA... ed25519-pub</ssh_ed25519_key_pub>
-            <ssh_dsa_key>LEAKY_DSA_PRIVKEY</ssh_dsa_key>
-            <ssh_dsa_key_pub>ssh-dss AAAA... dsa-pub</ssh_dsa_key_pub>
+            <sshkeyfile>
+              <filename>ssh_host_rsa_key</filename>
+              <xmldata>LEAKY_RSA_PRIVKEY_BLOB</xmldata>
+            </sshkeyfile>
+            <sshkeyfile>
+              <filename>ssh_host_rsa_key.pub</filename>
+              <xmldata>ssh-rsa AAAAB3... rsa-pub</xmldata>
+            </sshkeyfile>
+            <sshkeyfile>
+              <filename>ssh_host_ed25519_key</filename>
+              <xmldata>LEAKY_ED25519_PRIVKEY_BLOB</xmldata>
+            </sshkeyfile>
+            <sshkeyfile>
+              <filename>ssh_host_ed25519_key.pub</filename>
+              <xmldata>ssh-ed25519 AAAA... ed25519-pub</xmldata>
+            </sshkeyfile>
           </sshdata>
         </pfsense>
         """
     )
     s = cfg.sshdata
     assert s is not None
-    assert s.rsa_key == REDACTED
-    assert s.rsa_key_pub == "ssh-rsa AAAAB3... rsa-pub"
-    assert s.ecdsa_key == REDACTED
-    assert s.ecdsa_key_pub == "ecdsa-sha2-nistp256 AAAA... ecdsa-pub"
-    assert s.ed25519_key == REDACTED
-    assert s.ed25519_key_pub == "ssh-ed25519 AAAA... ed25519-pub"
-    assert s.dsa_key == REDACTED
-    assert s.dsa_key_pub == "ssh-dss AAAA... dsa-pub"
-
+    by_name = {k.filename: k for k in s.keys}
+    assert by_name["ssh_host_rsa_key"].is_private
+    assert by_name["ssh_host_rsa_key"].xmldata == REDACTED
+    assert not by_name["ssh_host_rsa_key.pub"].is_private
+    assert "rsa-pub" in (by_name["ssh_host_rsa_key.pub"].xmldata or "")
+    assert by_name["ssh_host_ed25519_key"].xmldata == REDACTED
+    assert "ed25519-pub" in (
+        by_name["ssh_host_ed25519_key.pub"].xmldata or ""
+    )
     blob = cfg.model_dump_json()
-    for leak in (
-        "LEAKY_RSA_PRIVKEY",
-        "LEAKY_ECDSA_PRIVKEY",
-        "LEAKY_ED25519_PRIVKEY",
-        "LEAKY_DSA_PRIVKEY",
-    ):
-        assert leak not in blob
+    assert "LEAKY_RSA_PRIVKEY_BLOB" not in blob
+    assert "LEAKY_ED25519_PRIVKEY_BLOB" not in blob
+
+
+def test_sshdata_legacy_per_algorithm_shape_still_parsed() -> None:
+    """Pre-2.5 backups used per-algorithm elements directly under
+    <sshdata>. Keep parsing them as a fallback so old backups still
+    surface host-key rotations."""
+    cfg = _parse(
+        """
+        <pfsense>
+          <sshdata>
+            <ssh_rsa_key>LEAKY_LEGACY_RSA_PRIVKEY</ssh_rsa_key>
+            <ssh_rsa_key_pub>ssh-rsa LEGACY... rsa-pub</ssh_rsa_key_pub>
+          </sshdata>
+        </pfsense>
+        """
+    )
+    s = cfg.sshdata
+    assert s is not None
+    priv = next(k for k in s.keys if k.is_private)
+    pub = next(k for k in s.keys if not k.is_private)
+    assert priv.xmldata == REDACTED
+    assert pub.xmldata == "ssh-rsa LEGACY... rsa-pub"
+    assert "LEAKY_LEGACY_RSA_PRIVKEY" not in cfg.model_dump_json()
 
 
 def test_misc_tags_parsed_no_longer_in_unrecognized() -> None:
@@ -229,7 +259,11 @@ def test_l2tp_redacts_user_passwords_and_radius_secret() -> None:
     assert "LEAKY_L2TP_USER_PW" not in blob
 
 
-def test_pppoes_redact_user_passwords() -> None:
+def test_pppoes_redact_flat_username_encoding_and_radius_secret() -> None:
+    """Real pfSense stores PPPoE users as a single <username> element
+    whose text is space-separated ``name:base64password[:ip]``
+    tuples. Make sure we parse that format and redact every password
+    including the RADIUS shared secret."""
     cfg = _parse(
         """
         <pfsense>
@@ -241,10 +275,12 @@ def test_pppoes_redact_user_passwords() -> None:
               <localip>10.9.0.1</localip>
               <remoteip>10.9.0.10</remoteip>
               <descr>edge isp</descr>
-              <user>
-                <name>customer-42</name>
-                <password>LEAKY_PPPOE_USER_PW</password>
-              </user>
+              <radius>
+                <enable/>
+                <server>10.0.0.9</server>
+                <secret>LEAKY_PPPOE_RADIUS_SECRET</secret>
+              </radius>
+              <username>alice:LEAKY_PPPOE_B64_PW_1:10.9.0.11 bob:LEAKY_PPPOE_B64_PW_2:</username>
             </pppoe>
           </pppoes>
         </pfsense>
@@ -252,9 +288,44 @@ def test_pppoes_redact_user_passwords() -> None:
     )
     assert len(cfg.pppoe_servers) == 1
     p = cfg.pppoe_servers[0]
-    assert p.users[0].password == REDACTED
+    assert p.key == "0"
+    assert p.radius_enabled is True
+    assert p.radius_server == "10.0.0.9"
+    assert p.radius_secret == REDACTED
+    assert [u.name for u in p.users] == ["alice", "bob"]
+    assert p.users[0].ip == "10.9.0.11"
+    assert p.users[1].ip is None
+    assert all(u.password == REDACTED for u in p.users)
     blob = cfg.model_dump_json()
-    assert "LEAKY_PPPOE_USER_PW" not in blob
+    assert "LEAKY_PPPOE_B64_PW_1" not in blob
+    assert "LEAKY_PPPOE_B64_PW_2" not in blob
+    assert "LEAKY_PPPOE_RADIUS_SECRET" not in blob
+
+
+def test_pppoes_missing_pppoeid_falls_back_to_stable_key() -> None:
+    """When ``<pppoeid>`` is absent, the diff key should be
+    content-derived (interface + descr) rather than loop index, so a
+    reordering can't produce false-positive diffs."""
+    cfg = _parse(
+        """
+        <pfsense>
+          <pppoes>
+            <pppoe>
+              <interface>opt1</interface>
+              <descr>east</descr>
+              <username>alice:LEAKY:</username>
+            </pppoe>
+            <pppoe>
+              <interface>opt2</interface>
+              <descr>west</descr>
+              <username>bob:LEAKY:</username>
+            </pppoe>
+          </pppoes>
+        </pfsense>
+        """
+    )
+    keys = [p.key for p in cfg.pppoe_servers]
+    assert keys == ["opt1|east", "opt2|west"]
 
 
 def test_v014_new_tags_covered_by_known_set() -> None:

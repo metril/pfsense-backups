@@ -256,8 +256,13 @@ export function buildIndex(cfg: ParsedConfig): XrefIndex {
       anchorId: `xref-rule-${r.key.replace(/[^A-Za-z0-9_-]/g, "_")}`,
       group: "security",
     };
-    if (r.interface)
+    if (r.interface) {
+      // Firewall rules can target either a physical interface or a
+      // named interface group. Populate incoming edges on both so the
+      // group chip's tooltip accurately says "used by N rules".
       linkFrom(idx.byKind.interface.get(r.interface) ?? null, self);
+      linkFrom(idx.byKind.interface_group.get(r.interface) ?? null, self);
+    }
     if (r.gateway) linkFrom(idx.byKind.gateway.get(r.gateway) ?? null, self);
     if (r.schedule)
       linkFrom(idx.byKind.schedule.get(r.schedule) ?? null, self);

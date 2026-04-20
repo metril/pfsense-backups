@@ -978,15 +978,14 @@ export interface RawSection {
 
 // ----- v0.14.0: previously-unrecognised tags now structured -----
 
+export interface SshHostKeyFile {
+  filename: string;
+  is_private: boolean;
+  xmldata: string | null;
+}
+
 export interface SshData {
-  rsa_key: string | null;
-  rsa_key_pub: string | null;
-  ecdsa_key: string | null;
-  ecdsa_key_pub: string | null;
-  ed25519_key: string | null;
-  ed25519_key_pub: string | null;
-  dsa_key: string | null;
-  dsa_key_pub: string | null;
+  keys: SshHostKeyFile[];
 }
 
 export interface LastChange {

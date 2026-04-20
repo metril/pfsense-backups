@@ -90,6 +90,7 @@ import type {
   PppoeServerEntry,
   ProxyArpEntry,
   SshData,
+  SshHostKeyFile,
 } from "@/api/parsedTypes";
 
 /** Render a server-parsed pfSense config as collapsible sections.
@@ -2850,80 +2851,72 @@ function ZabbixPanel({ p }: { p: ZabbixBundle }) {
 // ---------- v0.14.0: new section renderers --------------------------------
 
 function SshDataPanel({ s }: { s: SshData }) {
+  // Pair entries by filename stem so each algorithm shows its private
+  // + public halves on one row. pfSense writes the pair as
+  // ``ssh_host_{algo}_key`` (private) + ``ssh_host_{algo}_key.pub``.
+  type Pair = { stem: string; priv?: SshHostKeyFile; pub?: SshHostKeyFile };
+  const byStem = new Map<string, Pair>();
+  for (const k of s.keys) {
+    const stem = k.filename.replace(/\.pub$/, "");
+    const p = byStem.get(stem) ?? { stem };
+    if (k.is_private) p.priv = k;
+    else p.pub = k;
+    byStem.set(stem, p);
+  }
+  const rows = Array.from(byStem.values()).sort((a, b) =>
+    a.stem.localeCompare(b.stem),
+  );
+  if (rows.length === 0) {
+    return <div className="text-sm text-muted-fg">No host-key material.</div>;
+  }
   return (
-    <Dl
-      items={[
-        [
-          "RSA",
-          <span key="rsa" className="inline-flex items-center gap-2">
-            {s.rsa_key === "***redacted***" ? (
-              <Redacted />
-            ) : (
-              <span className="text-muted-fg">not set</span>
-            )}
-            {s.rsa_key_pub && (
-              <span className="truncate font-mono text-[11px] text-muted-fg">
-                {s.rsa_key_pub.split(" ")[0]}
-              </span>
-            )}
-          </span>,
-        ],
-        [
-          "ECDSA",
-          <span key="e" className="inline-flex items-center gap-2">
-            {s.ecdsa_key === "***redacted***" ? (
-              <Redacted />
-            ) : (
-              <span className="text-muted-fg">not set</span>
-            )}
-            {s.ecdsa_key_pub && (
-              <span className="truncate font-mono text-[11px] text-muted-fg">
-                {s.ecdsa_key_pub.split(" ")[0]}
-              </span>
-            )}
-          </span>,
-        ],
-        [
-          "Ed25519",
-          <span key="ed" className="inline-flex items-center gap-2">
-            {s.ed25519_key === "***redacted***" ? (
-              <Redacted />
-            ) : (
-              <span className="text-muted-fg">not set</span>
-            )}
-            {s.ed25519_key_pub && (
-              <span className="truncate font-mono text-[11px] text-muted-fg">
-                {s.ed25519_key_pub.split(" ")[0]}
-              </span>
-            )}
-          </span>,
-        ],
-        [
-          "DSA (legacy)",
-          <span key="d" className="inline-flex items-center gap-2">
-            {s.dsa_key === "***redacted***" ? (
-              <Redacted />
-            ) : (
-              <span className="text-muted-fg">not set</span>
-            )}
-            {s.dsa_key_pub && (
-              <span className="truncate font-mono text-[11px] text-muted-fg">
-                {s.dsa_key_pub.split(" ")[0]}
-              </span>
-            )}
-          </span>,
-        ],
-      ]}
+    <Table
+      headers={["Algorithm / filename", "Private key", "Public half"]}
+      rowKeys={rows.map((r) => r.stem)}
+      rows={rows.map((r) => [
+        <span key="n" className="font-mono text-xs">
+          {r.stem}
+        </span>,
+        r.priv?.xmldata === "***redacted***" ? (
+          <Redacted key="p" />
+        ) : r.priv?.xmldata ? (
+          <span key="p" className="font-mono text-xs">
+            (present)
+          </span>
+        ) : (
+          <span key="p" className="text-muted-fg">
+            —
+          </span>
+        ),
+        r.pub?.xmldata ? (
+          <span
+            key="pb"
+            className="truncate font-mono text-[11px] text-muted-fg"
+            title={r.pub.xmldata}
+          >
+            {r.pub.xmldata.slice(0, 64)}
+            {r.pub.xmldata.length > 64 ? "…" : ""}
+          </span>
+        ) : (
+          <span key="pb" className="text-muted-fg">
+            —
+          </span>
+        ),
+      ])}
     />
   );
 }
 
 function DiagPanel({ s }: { s: DiagPreferences }) {
+  // All three fields are pfSense webGUI preferences — none affect
+  // how this backup viewer renders. Clarify with a parenthetical
+  // so operators don't mistake "Show-all-passwords: on" for a
+  // redaction-bypass switch here.
   return (
     <Dl
       items={[
         [
-          "IPv6 NAT UI",
+          "IPv6 NAT UI (pfSense webGUI pref)",
           <StatusPill
             key="i"
             enabled={s.ipv6nat}
@@ -2931,7 +2924,7 @@ function DiagPanel({ s }: { s: DiagPreferences }) {
           />,
         ],
         [
-          "Show-no-aliases",
+          "Show-no-aliases (pfSense webGUI pref)",
           <StatusPill
             key="s"
             enabled={s.shownoaliases}
@@ -2939,7 +2932,7 @@ function DiagPanel({ s }: { s: DiagPreferences }) {
           />,
         ],
         [
-          "Show-all-passwords",
+          "Show-all-passwords (pfSense webGUI pref)",
           <StatusPill
             key="p"
             enabled={s.showallpasswords}

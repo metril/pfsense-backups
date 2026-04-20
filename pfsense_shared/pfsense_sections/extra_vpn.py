@@ -88,7 +88,9 @@ class PppoeServerEntry(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    # Stable diff key — pfSense assigns a numeric ``pppoeid``.
+    # Stable diff key — pfSense assigns a numeric ``pppoeid``. When
+    # missing we prefer the interface + descr combo over a loop index
+    # so diff key identity doesn't depend on XML child order.
     key: str
     mode: str | None = None
     interface: str | None = None
@@ -101,35 +103,59 @@ class PppoeServerEntry(BaseModel):
     users: list[PppoeUser] = []
 
 
+def _parse_pppoe_users(raw: str | None) -> list[PppoeUser]:
+    """pfSense encodes PPPoE-server users as a single ``<username>``
+    element whose text is a space-separated list of
+    ``name:base64password:ip`` tuples. The IP half is optional.
+    We surface each user as a structured entry with the password
+    redacted — the raw base64 value would reconstruct the plaintext
+    once decoded, so redacting is mandatory.
+    """
+    if not raw:
+        return []
+    out: list[PppoeUser] = []
+    for tok in raw.strip().split():
+        parts = tok.split(":")
+        if not parts or not parts[0]:
+            continue
+        name = parts[0]
+        pw = parts[1] if len(parts) > 1 else None
+        ip = parts[2] if len(parts) > 2 else None
+        out.append(
+            PppoeUser(
+                name=name,
+                ip=ip or None,
+                password=redact("password", pw),
+            )
+        )
+    return out
+
+
 def parse_pppoes(root: Element) -> list[PppoeServerEntry]:
     el = root.find("pppoes")
     if el is None:
         return []
     out: list[PppoeServerEntry] = []
-    # pfSense wraps each server in ``<pppoe>``.
-    for i, p in enumerate(children(el, "pppoe")):
-        pppoeid = text(p, "pppoeid") or str(i)
-        users: list[PppoeUser] = []
-        for u in children(p, "user"):
-            name = text(u, "name")
-            if not name:
-                continue
-            users.append(
-                PppoeUser(
-                    name=name,
-                    ip=text(u, "ip"),
-                    password=redact("password", text(u, "password")),
-                )
-            )
+    # pfSense wraps each server in ``<pppoe>``. Each has a flat
+    # ``<username>`` field (colon-encoded users) rather than nested
+    # ``<user>`` children.
+    for p in children(el, "pppoe"):
+        iface = text(p, "interface")
+        descr = text(p, "descr")
+        pppoeid = text(p, "pppoeid")
+        # Stable diff key: prefer the numeric pppoeid; fall back to a
+        # content-derived composite that's stable across re-orderings.
+        key = pppoeid or f"{iface or '?'}|{descr or '?'}"
+        users = _parse_pppoe_users(text(p, "username"))
         radius = p.find("radius")
         out.append(
             PppoeServerEntry(
-                key=pppoeid,
+                key=key,
                 mode=text(p, "mode"),
-                interface=text(p, "interface"),
+                interface=iface,
                 localip=text(p, "localip"),
                 remoteip=text(p, "remoteip"),
-                descr=text(p, "descr"),
+                descr=descr,
                 radius_enabled=bool_flag(radius, "enable") if radius is not None else False,
                 radius_server=text(radius, "server") if radius is not None else None,
                 radius_secret=redact(
