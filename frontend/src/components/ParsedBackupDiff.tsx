@@ -52,6 +52,7 @@ const SECTION_LABELS: { key: keyof ConfigDiff; label: string }[] = [
   { key: "ipsec_psks", label: "IPsec PSKs" },
   { key: "certificate_authorities", label: "CAs" },
   { key: "certificates", label: "Certificates" },
+  { key: "installedpackages", label: "Installed packages" },
   { key: "users", label: "Users" },
   { key: "groups", label: "Groups" },
   { key: "authservers", label: "Auth servers" },

@@ -502,6 +502,140 @@ export interface Certificate {
   prv: string | null;
 }
 
+// ----- installedpackages -----
+
+export interface PfBlockerNgFeed {
+  key: string;
+  header: string | null;
+  state: string | null;
+  format: string | null;
+  action: string | null;
+  url: string | null;
+}
+
+export interface PfBlockerNgConfig {
+  enable_pfblockerng: boolean;
+  keep_settings: boolean;
+  pfb_interface: string | null;
+  pfb_inbound: string | null;
+  pfb_outbound: string | null;
+  ip_enabled: boolean;
+  ipv6_enabled: boolean;
+  maxmind_key_configured: boolean;
+  dnsbl_enabled: boolean;
+  dnsbl_mode: string | null;
+  dnsbl_port: string | null;
+  feeds: PfBlockerNgFeed[];
+}
+
+export interface HaProxyFrontend {
+  name: string;
+  status: string | null;
+  type: string | null;
+  descr: string | null;
+  extaddr: string | null;
+  addresses: string[];
+  default_backend: string | null;
+  ssl: boolean;
+  forwardfor: boolean;
+}
+
+export interface HaProxyServer {
+  name: string;
+  address: string | null;
+  port: string | null;
+  ssl: boolean;
+  status: string | null;
+  weight: string | null;
+  password: string | null;
+}
+
+export interface HaProxyBackend {
+  name: string;
+  descr: string | null;
+  balance: string | null;
+  check_type: string | null;
+  servers: HaProxyServer[];
+}
+
+export interface HaProxyConfig {
+  enable: boolean;
+  advanced: string | null;
+  remotesyslog: string | null;
+  frontends: HaProxyFrontend[];
+  backends: HaProxyBackend[];
+}
+
+export interface SuricataInterface {
+  uuid: string;
+  interface: string | null;
+  descr: string | null;
+  enable: boolean;
+  blockoffenders7: boolean;
+  ips_mode: string | null;
+  eve_enable: boolean;
+  categories: string[];
+}
+
+export interface SuricataPasslistEntry {
+  key: string;
+  address: string | null;
+  descr: string | null;
+}
+
+export interface SuricataPasslist {
+  name: string;
+  descr: string | null;
+  entries: SuricataPasslistEntry[];
+}
+
+export interface SuricataConfig {
+  enable_stats: boolean;
+  oinkmaster_configured: boolean;
+  interfaces: SuricataInterface[];
+  passlists: SuricataPasslist[];
+}
+
+export interface AcmeAccountKey {
+  name: string;
+  descr: string | null;
+  acmeserver: string | null;
+  email: string | null;
+  accountkey: string | null;
+}
+
+export interface AcmeCertificate {
+  name: string;
+  acmeaccount: string | null;
+  keylength: string | null;
+  preferredchain: string | null;
+  ocspstaple: boolean;
+  dnssleep: string | null;
+  san_list: string[];
+  renewafter: string | null;
+}
+
+export interface AcmeConfig {
+  enable: boolean;
+  writecert_log: boolean;
+  account_keys: AcmeAccountKey[];
+  certificates: AcmeCertificate[];
+}
+
+export interface UnknownPackage {
+  tag: string;
+  entry_count: number;
+  xml: string;
+}
+
+export interface InstalledPackages {
+  pfblockerng: PfBlockerNgConfig | null;
+  haproxy: HaProxyConfig | null;
+  suricata: SuricataConfig | null;
+  acme: AcmeConfig | null;
+  unknown: UnknownPackage[];
+}
+
 export interface User {
   name: string;
   uid: string | null;
@@ -586,6 +720,7 @@ export interface ParsedConfig {
   users: User[];
   groups: Group[];
   authservers: AuthServer[];
+  installedpackages: InstalledPackages | null;
   unrecognized_sections: RawSection[];
 }
 
@@ -659,6 +794,7 @@ export interface ConfigDiff {
   ipsec_psks: SectionDiff;
   certificate_authorities: SectionDiff;
   certificates: SectionDiff;
+  installedpackages: SectionDiff;
   users: SectionDiff;
   groups: SectionDiff;
   authservers: SectionDiff;

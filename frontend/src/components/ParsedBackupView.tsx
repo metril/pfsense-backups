@@ -7,8 +7,14 @@ import type {
   AuthServer,
   Bridge,
   CaptivePortalZone,
+  AcmeConfig,
   Certificate,
   CertificateAuthority,
+  HaProxyConfig,
+  InstalledPackages,
+  PfBlockerNgConfig,
+  SuricataConfig,
+  UnknownPackage,
   CronJob,
   DhcpRelayConfig,
   DhcpServer,
@@ -276,6 +282,14 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
             <CertsTable rows={data.certificates} />
           </Section>
         )}
+        {data.installedpackages && (
+          <Section
+            title="Installed packages"
+            count={packageCount(data.installedpackages)}
+          >
+            <PackagesPanel ip={data.installedpackages} />
+          </Section>
+        )}
         {data.users.length > 0 && (
           <Section title="Users" count={data.users.length}>
             <UsersTable rows={data.users} />
@@ -420,6 +434,8 @@ function TableOfContents({ cfg }: { cfg: ParsedConfig }) {
     ]);
   if (cfg.certificates.length)
     entries.push(["Certificates", cfg.certificates.length]);
+  if (cfg.installedpackages)
+    entries.push(["Installed packages", packageCount(cfg.installedpackages)]);
   if (cfg.users.length) entries.push(["Users", cfg.users.length]);
   if (cfg.groups.length) entries.push(["Groups", cfg.groups.length]);
   if (cfg.authservers.length)
@@ -1371,6 +1387,264 @@ function CertsTable({ rows }: { rows: Certificate[] }) {
         c.prv === "***redacted***" ? <Redacted /> : "—",
       ])}
     />
+  );
+}
+
+function packageCount(ip: InstalledPackages): number {
+  let n = 0;
+  if (ip.pfblockerng) n += 1;
+  if (ip.haproxy) n += 1;
+  if (ip.suricata) n += 1;
+  if (ip.acme) n += 1;
+  n += ip.unknown.length;
+  return n;
+}
+
+function PackagesPanel({ ip }: { ip: InstalledPackages }) {
+  return (
+    <div className="space-y-4">
+      {ip.pfblockerng && <PfBlockerNgPanel p={ip.pfblockerng} />}
+      {ip.haproxy && <HaProxyPanel p={ip.haproxy} />}
+      {ip.suricata && <SuricataPanel p={ip.suricata} />}
+      {ip.acme && <AcmePanel p={ip.acme} />}
+      {ip.unknown.length > 0 && <UnknownPackagesList rows={ip.unknown} />}
+    </div>
+  );
+}
+
+function PackageCard({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="rounded border border-border/70 bg-muted/20 p-2">
+      <div className="mb-1 text-sm font-medium">{title}</div>
+      {children}
+    </div>
+  );
+}
+
+function PfBlockerNgPanel({ p }: { p: PfBlockerNgConfig }) {
+  return (
+    <PackageCard title="pfBlockerNG">
+      <Dl
+        items={[
+          ["Enabled", p.enable_pfblockerng ? "yes" : "no"],
+          ["Interface", p.pfb_interface ?? "—"],
+          ["IP rules", p.ip_enabled ? `yes${p.ipv6_enabled ? " (+ IPv6)" : ""}` : "no"],
+          [
+            "DNSBL",
+            p.dnsbl_enabled
+              ? `${p.dnsbl_mode ?? "?"}:${p.dnsbl_port ?? "?"}`
+              : "disabled",
+          ],
+          [
+            "MaxMind key",
+            p.maxmind_key_configured ? <Redacted /> : "not set",
+          ],
+        ]}
+      />
+      {p.feeds.length > 0 && (
+        <div className="mt-2">
+          <div className="mb-1 text-xs uppercase text-muted-fg">
+            Feeds ({p.feeds.length})
+          </div>
+          <Table
+            headers={["Header", "State", "Action", "URL"]}
+            rows={p.feeds.map((f) => [
+              f.header ?? "—",
+              f.state ?? "—",
+              f.action ?? "—",
+              <span key="u" className="break-all font-mono text-xs">
+                {f.url ?? "—"}
+              </span>,
+            ])}
+          />
+        </div>
+      )}
+    </PackageCard>
+  );
+}
+
+function HaProxyPanel({ p }: { p: HaProxyConfig }) {
+  return (
+    <PackageCard title="HAProxy">
+      <Dl
+        items={[
+          ["Enabled", p.enable ? "yes" : "no"],
+          ["Remote syslog", p.remotesyslog ?? "—"],
+        ]}
+      />
+      {p.frontends.length > 0 && (
+        <div className="mt-2">
+          <div className="mb-1 text-xs uppercase text-muted-fg">
+            Frontends ({p.frontends.length})
+          </div>
+          <Table
+            headers={["Name", "Type", "Listen", "Default backend", "SSL", "Status"]}
+            rows={p.frontends.map((f) => [
+              f.name,
+              f.type ?? "—",
+              f.addresses.join(", ") || f.extaddr || "—",
+              f.default_backend ?? "—",
+              f.ssl ? "yes" : "no",
+              f.status ?? "—",
+            ])}
+          />
+        </div>
+      )}
+      {p.backends.length > 0 && (
+        <div className="mt-2">
+          <div className="mb-1 text-xs uppercase text-muted-fg">
+            Backends ({p.backends.length})
+          </div>
+          <Table
+            headers={["Name", "Balance", "Check", "Servers"]}
+            rows={p.backends.map((b) => [
+              b.name,
+              b.balance ?? "—",
+              b.check_type ?? "—",
+              <span key="s" className="text-xs">
+                {b.servers
+                  .map((s) =>
+                    `${s.name} ${s.address ?? "?"}:${s.port ?? "?"}${s.password === "***redacted***" ? " 🔒" : ""}`,
+                  )
+                  .join(", ") || "—"}
+              </span>,
+            ])}
+          />
+        </div>
+      )}
+    </PackageCard>
+  );
+}
+
+function SuricataPanel({ p }: { p: SuricataConfig }) {
+  return (
+    <PackageCard title="Suricata IDS/IPS">
+      <Dl
+        items={[
+          ["Stats collection", p.enable_stats ? "yes" : "no"],
+          [
+            "Ruleset key (oinkcode)",
+            p.oinkmaster_configured ? <Redacted /> : "not set",
+          ],
+        ]}
+      />
+      {p.interfaces.length > 0 && (
+        <div className="mt-2">
+          <div className="mb-1 text-xs uppercase text-muted-fg">
+            Interfaces ({p.interfaces.length})
+          </div>
+          <Table
+            headers={["Interface", "Enabled", "Block", "IPS mode", "Categories"]}
+            rows={p.interfaces.map((i) => [
+              i.interface ?? i.uuid,
+              i.enable ? "yes" : "no",
+              i.blockoffenders7 ? "yes" : "no",
+              i.ips_mode ?? "—",
+              <span key="c" className="font-mono text-xs">
+                {i.categories.length ? `${i.categories.length} enabled` : "—"}
+              </span>,
+            ])}
+          />
+        </div>
+      )}
+      {p.passlists.length > 0 && (
+        <div className="mt-2">
+          <div className="mb-1 text-xs uppercase text-muted-fg">
+            Pass lists ({p.passlists.length})
+          </div>
+          <Table
+            headers={["Name", "Entries", "Description"]}
+            rows={p.passlists.map((pl) => [
+              pl.name,
+              pl.entries.length,
+              pl.descr ?? "—",
+            ])}
+          />
+        </div>
+      )}
+    </PackageCard>
+  );
+}
+
+function AcmePanel({ p }: { p: AcmeConfig }) {
+  return (
+    <PackageCard title="ACME (Let's Encrypt)">
+      <Dl
+        items={[
+          ["Enabled", p.enable ? "yes" : "no"],
+          ["Write cert log", p.writecert_log ? "yes" : "no"],
+        ]}
+      />
+      {p.account_keys.length > 0 && (
+        <div className="mt-2">
+          <div className="mb-1 text-xs uppercase text-muted-fg">
+            Account keys ({p.account_keys.length})
+          </div>
+          <Table
+            headers={["Name", "Server", "Email", "Private key"]}
+            rows={p.account_keys.map((k) => [
+              k.name,
+              k.acmeserver ?? "—",
+              k.email ?? "—",
+              k.accountkey === "***redacted***" ? <Redacted /> : "—",
+            ])}
+          />
+        </div>
+      )}
+      {p.certificates.length > 0 && (
+        <div className="mt-2">
+          <div className="mb-1 text-xs uppercase text-muted-fg">
+            Certificates ({p.certificates.length})
+          </div>
+          <Table
+            headers={["Name", "Account", "Key length", "SANs"]}
+            rows={p.certificates.map((c) => [
+              c.name,
+              c.acmeaccount ?? "—",
+              c.keylength ?? "—",
+              <span key="s" className="text-xs">
+                {c.san_list.join(", ") || "—"}
+              </span>,
+            ])}
+          />
+        </div>
+      )}
+    </PackageCard>
+  );
+}
+
+function UnknownPackagesList({ rows }: { rows: UnknownPackage[] }) {
+  return (
+    <PackageCard title={`Other packages (${rows.length})`}>
+      <p className="mb-2 text-xs text-muted-fg">
+        These packages aren't yet structured-parsed — raw XML subtree is
+        available below for reference.
+      </p>
+      <div className="space-y-2">
+        {rows.map((u) => (
+          <details
+            key={u.tag}
+            className="rounded border border-border/50 bg-bg p-2 text-sm"
+          >
+            <summary className="cursor-pointer font-mono text-xs">
+              &lt;{u.tag}&gt; &nbsp;
+              <span className="text-muted-fg">
+                {u.entry_count} child entr{u.entry_count === 1 ? "y" : "ies"}
+              </span>
+            </summary>
+            <pre className="mt-2 overflow-x-auto whitespace-pre-wrap text-xs">
+              {u.xml}
+            </pre>
+          </details>
+        ))}
+      </div>
+    </PackageCard>
   );
 }
 

@@ -46,6 +46,9 @@ from .pfsense_sections import (
     nat as _nat,
 )
 from .pfsense_sections import (
+    packages as _packages,
+)
+from .pfsense_sections import (
     pki as _pki,
 )
 from .pfsense_sections import (
@@ -77,6 +80,7 @@ from .pfsense_sections.ha import HaSync, VirtualIP
 from .pfsense_sections.interfaces import Interface
 from .pfsense_sections.layer2 import Bridge, Ppp, QinQ, Tunnel, Vlan, WolHost
 from .pfsense_sections.nat import NatRule
+from .pfsense_sections.packages import InstalledPackages
 from .pfsense_sections.pki import Certificate, CertificateAuthority
 from .pfsense_sections.revision import Revision
 from .pfsense_sections.routing import Gateway, GatewayGroup, StaticRoute
@@ -224,6 +228,10 @@ class ParsedConfig(BaseModel):
     certificate_authorities: list[CertificateAuthority] = []
     certificates: list[Certificate] = []
 
+    # Parsed <installedpackages> — known packages structured; unknown
+    # packages carried in ``installedpackages.unknown`` with raw XML.
+    installedpackages: InstalledPackages | None = None
+
     # Everything we didn't parse (outside the ignore list). Carries the
     # tag name and a serialized XML subtree so the UI can surface it.
     unrecognized_sections: list[RawSection] = []
@@ -292,6 +300,7 @@ def parse(xml_bytes: bytes | str) -> ParsedConfig:
         ipsec_psks=ipsec_psks,
         certificate_authorities=_pki.parse_cas(root),
         certificates=_pki.parse_certs(root),
+        installedpackages=_packages.parse(root),
         users=_auth.parse_users(root),
         groups=_auth.parse_groups(root),
         authservers=_auth.parse_authservers(root),

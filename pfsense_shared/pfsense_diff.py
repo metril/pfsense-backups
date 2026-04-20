@@ -118,6 +118,7 @@ class ConfigDiff(BaseModel):
     ipsec_psks: SectionDiff = SectionDiff()
     certificate_authorities: SectionDiff = SectionDiff()
     certificates: SectionDiff = SectionDiff()
+    installedpackages: SectionDiff = SectionDiff()
     users: SectionDiff = SectionDiff()
     groups: SectionDiff = SectionDiff()
     authservers: SectionDiff = SectionDiff()
@@ -252,6 +253,9 @@ def diff_configs(a: ParsedConfig, b: ParsedConfig) -> ConfigDiff:
             b.certificates,
             key="refid",
             label_fn=_label_pki,
+        ),
+        installedpackages=_diff_optional_model(
+            a.installedpackages, b.installedpackages, "installedpackages"
         ),
         users=_diff_list(a.users, b.users, key="name", label_fn=_label_named),
         groups=_diff_list(a.groups, b.groups, key="name", label_fn=_label_named),

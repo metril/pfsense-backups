@@ -46,6 +46,10 @@ _EXACT: Final[frozenset[str]] = frozenset(
         "auth_token",
         "api_key",
         "apikey",
+        "accountkey",
+        "account_key",
+        "oinkcode",
+        "maxmind_key",
         "secret",
     }
 )
