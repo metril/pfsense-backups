@@ -3543,7 +3543,7 @@ function TelegrafPanel({ p }: { p: TelegrafConfig }) {
           ["URL", p.url ?? "—"],
           ["Database / bucket", p.bucket ?? p.database ?? "—"],
           ["Organization", p.organization ?? "—"],
-          ["Username", p.username ?? "—"],
+          ["Username", <RV key="u" v={p.username} />],
           [
             "Credential",
             p.token === "***redacted***" ? <Redacted /> :
