@@ -89,6 +89,15 @@ export function itemId(kind: RefKind, key: string): string {
   return `xref-${kind}-${safe}`;
 }
 
+/** Build a stable DOM id for a row that is NOT a cross-ref target
+ *  (leaf nodes like firewall rules and NAT rules). Keeps RefKind
+ *  focused on actually-referenceable objects while still giving
+ *  these rows deep-linkable anchors. */
+export function rowAnchorId(scope: "rule" | "nat", key: string): string {
+  const safe = key.replace(/[^A-Za-z0-9_-]/g, "_");
+  return `xref-${scope}-${safe}`;
+}
+
 function emptyByKind(): Record<RefKind, Map<string, XrefTarget>> {
   const kinds: RefKind[] = [
     "interface",
@@ -303,6 +312,55 @@ export function scrollAndFlash(anchorId: string): void {
   void el.offsetWidth;
   el.classList.add("xref-flash");
   window.setTimeout(() => el.classList.remove("xref-flash"), 1600);
+}
+
+/** Given an anchor id, walk up the DOM to find the id of its enclosing
+ *  section card — either ``section-*`` (viewer) or ``diff-*`` (diff).
+ *  Used by ``expandThenScrollToHash`` to know which Card to auto-open
+ *  before scrolling. */
+export function enclosingSectionId(anchorId: string): string | null {
+  const el = document.getElementById(anchorId);
+  if (!el) return null;
+  const section = el.closest<HTMLElement>(
+    "[id^='section-'], [id^='diff-']",
+  );
+  return section?.id ?? null;
+}
+
+/** Entry point for all hash-driven navigation. Given a hash like
+ *  ``"#xref-alias-Foo"`` (with or without the leading ``#``):
+ *
+ *  1. Finds the target element and its enclosing card id.
+ *  2. Dispatches a ``pfsense-snap-to-card`` CustomEvent so whatever
+ *     CardGroupProvider is mounted can open the right card. Using an
+ *     event instead of reaching into React state keeps this helper
+ *     framework-free and callable from the ``Xref`` click handler
+ *     without prop-drilling the context.
+ *  3. Schedules ``scrollAndFlash`` in a microtask so the card has had
+ *     a render tick to mount its content before we try to scroll.
+ *
+ *  Safe to call when the target doesn't exist (no-op) or when no
+ *  provider is listening (just scrolls to whatever is already visible).
+ */
+export function expandThenScrollToHash(hash: string): void {
+  const id = hash.startsWith("#") ? hash.slice(1) : hash;
+  if (!id) return;
+  // Update the URL hash so copy-link works. Replace, don't push —
+  // back button shouldn't cycle hash values.
+  try {
+    history.replaceState(null, "", `#${id}`);
+  } catch {
+    // ignore (some sandboxed contexts).
+  }
+  const cardId = enclosingSectionId(id);
+  if (cardId) {
+    window.dispatchEvent(
+      new CustomEvent("pfsense-snap-to-card", { detail: { cardId } }),
+    );
+  }
+  // Defer scroll one frame so a just-opened card has mounted its
+  // children before we try to find the anchor.
+  requestAnimationFrame(() => scrollAndFlash(id));
 }
 
 /** Sugar for callers that want the raw href without importing itemId. */

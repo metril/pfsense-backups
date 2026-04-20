@@ -3,7 +3,11 @@ import { Search, X } from "lucide-react";
 import { Kbd } from "@/components/ui/Kbd";
 import { cn } from "@/lib/cn";
 import { groupClasses } from "@/lib/sectionGroup";
-import { allTargets, scrollAndFlash, type XrefTarget } from "@/lib/xref";
+import {
+  allTargets,
+  expandThenScrollToHash,
+  type XrefTarget,
+} from "@/lib/xref";
 import { useXrefIndex } from "@/components/xref/XrefContext";
 
 /**
@@ -80,8 +84,10 @@ export function QuickJump() {
   function pick(t: XrefTarget) {
     setOpen(false);
     // Allow the backdrop to unmount before the scroll — scrolling
-    // while a fixed-position modal is painted produces jank.
-    requestAnimationFrame(() => scrollAndFlash(t.anchorId));
+    // while a fixed-position modal is painted produces jank. Use
+    // expandThenScrollToHash so collapsed target cards auto-open
+    // via the DeepLinkBridge before the scroll fires.
+    requestAnimationFrame(() => expandThenScrollToHash(`#${t.anchorId}`));
   }
 
   function onInputKeyDown(e: ReactKeyboardEvent<HTMLInputElement>) {

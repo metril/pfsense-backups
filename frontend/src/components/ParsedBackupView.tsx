@@ -1,14 +1,28 @@
-import { memo } from "react";
+import { memo, useCallback, useMemo } from "react";
 import { Lock } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
 import { Alert } from "@/components/ui/Alert";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import { ExpandCollapseAll } from "@/components/ui/ExpandCollapseAll";
+import { FilterBar } from "@/components/ui/FilterBar";
+import {
+  FilterProvider,
+  useFilter,
+} from "@/components/ui/FilterContext";
 import { Xref } from "@/components/ui/Xref";
 import { CardGroupProvider } from "@/components/CardGroupContext";
 import { XrefProvider } from "@/components/xref/XrefContext";
+import { DeepLinkBridge } from "@/components/xref/DeepLinkBridge";
 import { QuickJump } from "@/components/xref/QuickJump";
-import { itemId } from "@/lib/xref";
+import { itemId, rowAnchorId } from "@/lib/xref";
+import {
+  buildMatcher,
+  rowHaystack,
+  type FilterMatcher,
+} from "@/lib/filter";
+import { useMediaQuery } from "@/lib/useMediaQuery";
+import { useActiveSection } from "@/lib/useActiveSection";
 import { useParsedBackup } from "@/api/queries";
 import {
   interfaceChipClasses,
@@ -102,7 +116,46 @@ import type {
  * so operators see exactly which fields are hidden.
  */
 export function ParsedBackupView({ backupId }: { backupId: number }) {
-  const { data, error, isLoading } = useParsedBackup(backupId);
+  const { data: rawData, error, isLoading } = useParsedBackup(backupId);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const filterQuery = searchParams.get("filter") ?? "";
+  const setFilterQuery = useCallback(
+    (next: string) => {
+      setSearchParams(
+        (prev) => {
+          if (next) prev.set("filter", next);
+          else prev.delete("filter");
+          return prev;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
+  const matcher = useMemo(() => buildMatcher(filterQuery), [filterQuery]);
+  // Pre-filter tabular arrays up front — the existing ``length > 0``
+  // conditionals downstream handle hiding sections automatically. This
+  // keeps the render tree untouched (just replaces ``data`` with a
+  // narrowed version when the filter is active).
+  const data = useMemo<ParsedConfig | null>(() => {
+    if (!rawData) return null;
+    if (!matcher.active) return rawData;
+    return narrowConfig(rawData, matcher);
+  }, [rawData, matcher]);
+  const showTitle = useCallback(
+    (title: string) => !matcher.active || matcher.match(title),
+    [matcher],
+  );
+  const sectionCounter = useMemo(
+    () =>
+      data && rawData
+        ? {
+            visible: countVisibleSections(data, matcher),
+            total: countVisibleSections(rawData, buildMatcher("")),
+          }
+        : undefined,
+    [data, rawData, matcher],
+  );
 
   if (isLoading)
     return <div className="p-6 text-sm text-muted-fg">Parsing config…</div>;
@@ -118,21 +171,22 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
 
   return (
     <XrefProvider data={data}>
+    <FilterProvider query={filterQuery}>
     <CardGroupProvider scope={`view:${backupId}`}>
-    <div className="h-full overflow-auto p-4">
-      <QuickJump />
-      <div className="mx-auto max-w-[1400px]">
-        <div className="mb-2 flex items-center justify-end">
-          <ExpandCollapseAll />
-        </div>
-        <TableOfContents cfg={data} />
+    <DeepLinkBridge includeHashchange />
+    <ViewerLayout
+      cfg={data}
+      filterQuery={filterQuery}
+      setFilterQuery={setFilterQuery}
+      sectionCounter={sectionCounter}
+    >
         <div className="mt-4 space-y-3">
-        {data.system && (
+        {data.system && showTitle("System") && (
           <Section title="System" count={1}>
             <SystemPanel s={data.system} />
           </Section>
         )}
-        {data.revision && (
+        {data.revision && showTitle("Last revision") && (
           <Section title="Last revision" count={1}>
             <Dl
               items={[
@@ -143,7 +197,7 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
             />
           </Section>
         )}
-        {data.lastchange && (
+        {data.lastchange && showTitle("Last change") && (
           <Section title="Last change" count={1}>
             <Dl
               items={[
@@ -153,17 +207,17 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
             />
           </Section>
         )}
-        {data.theme && (
+        {data.theme && showTitle("Theme") && (
           <Section title="Theme" count={1}>
             <Dl items={[["webGUI theme", data.theme.name ?? "—"]]} />
           </Section>
         )}
-        {data.diag && (
+        {data.diag && showTitle("Diagnostic preferences") && (
           <Section title="Diagnostic preferences" count={1}>
             <DiagPanel s={data.diag} />
           </Section>
         )}
-        {data.sshdata && (
+        {data.sshdata && showTitle("SSH host keys") && (
           <Section title="SSH host keys" count={1}>
             <SshDataPanel s={data.sshdata} />
           </Section>
@@ -188,7 +242,7 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
             <BridgesTable rows={data.bridges} />
           </Section>
         )}
-        {data.legacy_bridge && (
+        {data.legacy_bridge && showTitle("Bridge (legacy)") && (
           <Section title="Bridge (legacy)" count={1}>
             <Dl
               items={[
@@ -255,7 +309,7 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
             <VirtualIpsTable rows={data.virtual_ips} />
           </Section>
         )}
-        {data.hasync && (
+        {data.hasync && showTitle("HA / CARP sync") && (
           <Section title="HA / CARP sync" count={1}>
             <HaSyncPanel h={data.hasync} />
           </Section>
@@ -298,7 +352,7 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
             <DhcpTable rows={data.dhcp_servers} />
           </Section>
         )}
-        {data.dns && (
+        {data.dns && showTitle("DNS") && (
           <Section title="DNS" count={1}>
             <DnsPanel d={data.dns} />
           </Section>
@@ -326,12 +380,12 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
             <RadvdTable rows={data.radvd_interfaces} />
           </Section>
         )}
-        {data.notifications && (
+        {data.notifications && showTitle("Notifications") && (
           <Section title="Notifications" count={1}>
             <NotificationsPanel n={data.notifications} />
           </Section>
         )}
-        {data.ups && (
+        {data.ups && showTitle("UPS monitoring") && (
           <Section title="UPS monitoring" count={1}>
             <UpsPanel u={data.ups} />
           </Section>
@@ -344,22 +398,22 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
             <VoucherTable rows={data.voucher_rolls} />
           </Section>
         )}
-        {data.ftpproxy && (
+        {data.ftpproxy && showTitle("FTP proxy") && (
           <Section title="FTP proxy" count={1}>
             <FtpProxyPanel f={data.ftpproxy} />
           </Section>
         )}
-        {data.ntpd && (
+        {data.ntpd && showTitle("NTP server") && (
           <Section title="NTP server" count={1}>
             <NtpdPanel n={data.ntpd} />
           </Section>
         )}
-        {data.snmpd && (
+        {data.snmpd && showTitle("SNMP") && (
           <Section title="SNMP" count={1}>
             <SnmpdPanel s={data.snmpd} />
           </Section>
         )}
-        {data.syslog && (
+        {data.syslog && showTitle("Remote syslog") && (
           <Section title="Remote syslog" count={1}>
             <SyslogPanel s={data.syslog} />
           </Section>
@@ -455,12 +509,12 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
             <CrlTable rows={data.crls} />
           </Section>
         )}
-        {data.ovpnserver_wizard && (
+        {data.ovpnserver_wizard && showTitle("OpenVPN server (wizard state)") && (
           <Section title="OpenVPN server (wizard state)" count={1}>
             <OvpnServerWizardPanel w={data.ovpnserver_wizard} />
           </Section>
         )}
-        {data.l2tp && (
+        {data.l2tp && showTitle("L2TP server") && (
           <Section title="L2TP server" count={1}>
             <L2tpPanel c={data.l2tp} />
           </Section>
@@ -473,19 +527,19 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
             <PppoeServersTable rows={data.pppoe_servers} />
           </Section>
         )}
-        {data.ezshaper && (
+        {data.ezshaper && showTitle("Shaper wizard state") && (
           <Section title="Shaper wizard state" count={1}>
             <EzShaperPanel c={data.ezshaper} />
           </Section>
         )}
-        {data.dhcp_backend && (
+        {data.dhcp_backend && showTitle("DHCP backend") && (
           <Section title="DHCP backend" count={1}>
             <Dl
               items={[["Backend", data.dhcp_backend.backend ?? "—"]]}
             />
           </Section>
         )}
-        {data.installedpackages && (
+        {data.installedpackages && showTitle("Installed packages") && (
           <Section
             title="Installed packages"
             count={packageCount(data.installedpackages)}
@@ -531,12 +585,268 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
           </Section>
         )}
         </div>
-      </div>
-    </div>
+    </ViewerLayout>
     </CardGroupProvider>
+    </FilterProvider>
     </XrefProvider>
   );
 }
+
+/** Two-up wrapper: at ≥1400px renders the filter + ToC as a sticky
+ *  left sidebar with scrollable main content on the right; below
+ *  that, falls back to the v0.14 horizontal chip strip + full-width
+ *  content. Layout only — no section-rendering logic lives here. */
+function ViewerLayout({
+  cfg,
+  filterQuery,
+  setFilterQuery,
+  sectionCounter,
+  children,
+}: {
+  cfg: ParsedConfig;
+  filterQuery: string;
+  setFilterQuery: (next: string) => void;
+  sectionCounter?: { visible: number; total: number };
+  children: React.ReactNode;
+}) {
+  const isWide = useMediaQuery("(min-width: 1400px)");
+  // IntersectionObserver only runs when the sidebar is rendered —
+  // no point paying for it in narrow mode where nothing consumes
+  // the active id.
+  const activeId = useActiveSection(isWide ? "section-" : null);
+
+  if (isWide) {
+    return (
+      <div className="h-full overflow-auto p-4">
+        <QuickJump />
+        <div className="mx-auto grid max-w-[1600px] grid-cols-[15rem_1fr] gap-6">
+          <aside className="sticky top-0 max-h-screen self-start overflow-y-auto pb-4">
+            <div className="flex flex-col gap-2 pb-3">
+              <FilterBar
+                value={filterQuery}
+                onChange={setFilterQuery}
+                sectionCounter={sectionCounter}
+                placeholder="Filter (f)"
+              />
+              <ExpandCollapseAll />
+            </div>
+            <TableOfContents cfg={cfg} orientation="vertical" activeId={activeId} />
+          </aside>
+          <div className="min-w-0">
+            <FilterHiddenAnchorBanner onClear={() => setFilterQuery("")} />
+            {children}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-full overflow-auto p-4">
+      <QuickJump />
+      <div className="mx-auto max-w-[1400px]">
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <FilterBar
+            value={filterQuery}
+            onChange={setFilterQuery}
+            sectionCounter={sectionCounter}
+          />
+          <ExpandCollapseAll />
+        </div>
+        <FilterHiddenAnchorBanner onClear={() => setFilterQuery("")} />
+        <TableOfContents cfg={cfg} />
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/** Returns a ``ParsedConfig`` with every tabular array narrowed to
+ *  rows that match the filter (or left untouched when the section
+ *  title itself matches — so typing a section name keeps every row in
+ *  it). Single-entity fields (system, dns, etc.) are passed through
+ *  unchanged; the render tree gates those via ``shouldShowTitle``. */
+function narrowConfig(cfg: ParsedConfig, filter: FilterMatcher): ParsedConfig {
+  const narrow = <T,>(title: string, arr: T[]): T[] => {
+    if (filter.match(title)) return arr;
+    return arr.filter((r) => filter.match(rowHaystack(r)));
+  };
+  return {
+    ...cfg,
+    interfaces: narrow("Interfaces", cfg.interfaces),
+    vlans: narrow("VLANs", cfg.vlans),
+    bridges: narrow("Bridges", cfg.bridges),
+    gifs: narrow("GIF tunnels", cfg.gifs),
+    gres: narrow("GRE tunnels", cfg.gres),
+    ppps: narrow("PPP interfaces", cfg.ppps),
+    qinqs: narrow("QinQ", cfg.qinqs),
+    laggs: narrow("LAGG", cfg.laggs),
+    wol: narrow("Wake-on-LAN", cfg.wol),
+    virtual_ips: narrow("Virtual IPs CARP", cfg.virtual_ips),
+    gateways: narrow("Gateways", cfg.gateways),
+    gateway_groups: narrow("Gateway groups", cfg.gateway_groups),
+    static_routes: narrow("Static routes", cfg.static_routes),
+    firewall_rules: narrow("Firewall rules", cfg.firewall_rules),
+    nat_rules: narrow("NAT rules", cfg.nat_rules),
+    aliases: narrow("Aliases", cfg.aliases),
+    schedules: narrow("Schedules", cfg.schedules),
+    dhcp_servers: narrow("DHCP servers", cfg.dhcp_servers),
+    dhcp_relays: narrow("DHCP relay", cfg.dhcp_relays),
+    dyndns_entries: narrow("Dynamic DNS", cfg.dyndns_entries),
+    igmpproxy_entries: narrow("IGMP proxy", cfg.igmpproxy_entries),
+    radvd_interfaces: narrow(
+      "Router Advertisements IPv6",
+      cfg.radvd_interfaces,
+    ),
+    voucher_rolls: narrow("Captive-portal vouchers", cfg.voucher_rolls),
+    shaper_queues: narrow("Traffic shaper queues", cfg.shaper_queues),
+    dnshaper_pipes: narrow("Limiter pipes", cfg.dnshaper_pipes),
+    lb_pools: narrow("Load balancer", cfg.lb_pools),
+    lb_virtual_servers: narrow("Load balancer", cfg.lb_virtual_servers),
+    captive_portal_zones: narrow("Captive portal", cfg.captive_portal_zones),
+    openvpn_servers: narrow("OpenVPN servers", cfg.openvpn_servers),
+    openvpn_clients: narrow("OpenVPN clients", cfg.openvpn_clients),
+    openvpn_cscs: narrow(
+      "OpenVPN client-specific overrides",
+      cfg.openvpn_cscs,
+    ),
+    ipsec_phase1: narrow("IPsec phase 1", cfg.ipsec_phase1),
+    ipsec_phase2: narrow("IPsec phase 2", cfg.ipsec_phase2),
+    ipsec_psks: narrow("IPsec pre-shared keys", cfg.ipsec_psks),
+    certificate_authorities: narrow(
+      "Certificate authorities",
+      cfg.certificate_authorities,
+    ),
+    certificates: narrow("Certificates", cfg.certificates),
+    crls: narrow("Certificate revocation lists", cfg.crls),
+    users: narrow("Users", cfg.users),
+    groups: narrow("Groups", cfg.groups),
+    authservers: narrow("External auth servers", cfg.authservers),
+    sysctl: narrow("Sysctl tunables", cfg.sysctl),
+    cron: narrow("Cron jobs", cfg.cron),
+    apikeys: narrow("API keys", cfg.apikeys),
+    interface_groups: narrow("Interface groups", cfg.interface_groups),
+    proxyarp: narrow("Proxy ARP", cfg.proxyarp),
+    pppoe_servers: narrow("PPPoE servers", cfg.pppoe_servers),
+    unrecognized_sections: narrow(
+      "Other sections raw XML",
+      cfg.unrecognized_sections,
+    ),
+  };
+}
+
+/** Counts sections that would render in ``data`` given the current
+ *  filter. Used to feed the "N of M sections" counter in the FilterBar. */
+function countVisibleSections(
+  cfg: ParsedConfig,
+  filter: FilterMatcher,
+): number {
+  let n = 0;
+  const showSingle = (title: string, present: unknown) => {
+    if (present && filter.match(title)) n += 1;
+  };
+  const showArr = (arr: unknown[]) => {
+    if (arr.length > 0) n += 1;
+  };
+  showSingle("System", cfg.system);
+  showSingle("Last revision", cfg.revision);
+  showSingle("Last change", cfg.lastchange);
+  showSingle("Theme", cfg.theme);
+  showSingle("Diagnostic preferences", cfg.diag);
+  showSingle("SSH host keys", cfg.sshdata);
+  showArr(cfg.apikeys);
+  showArr(cfg.interfaces);
+  showArr(cfg.vlans);
+  showArr(cfg.bridges);
+  showSingle("Bridge legacy", cfg.legacy_bridge);
+  showArr(cfg.proxyarp);
+  showArr(cfg.gifs);
+  showArr(cfg.gres);
+  showArr(cfg.ppps);
+  showArr(cfg.qinqs);
+  showArr(cfg.laggs);
+  showArr(cfg.wol);
+  showArr(cfg.virtual_ips);
+  showSingle("HA CARP sync", cfg.hasync);
+  showArr(cfg.gateways);
+  showArr(cfg.gateway_groups);
+  showArr(cfg.static_routes);
+  showArr(cfg.firewall_rules);
+  showArr(cfg.nat_rules);
+  showArr(cfg.aliases);
+  showArr(cfg.dhcp_servers);
+  showSingle("DNS", cfg.dns);
+  showArr(cfg.dhcp_relays);
+  showArr(cfg.dyndns_entries);
+  showArr(cfg.igmpproxy_entries);
+  showSingle("Notifications", cfg.notifications);
+  showSingle("UPS monitoring", cfg.ups);
+  showArr(cfg.voucher_rolls);
+  showSingle("FTP proxy", cfg.ftpproxy);
+  showSingle("NTP server", cfg.ntpd);
+  showSingle("SNMP", cfg.snmpd);
+  showSingle("Remote syslog", cfg.syslog);
+  showArr(cfg.schedules);
+  showArr(cfg.shaper_queues);
+  showArr(cfg.dnshaper_pipes);
+  if (cfg.lb_pools.length > 0 || cfg.lb_virtual_servers.length > 0) n += 1;
+  showArr(cfg.captive_portal_zones);
+  showArr(cfg.openvpn_servers);
+  showArr(cfg.openvpn_clients);
+  showArr(cfg.openvpn_cscs);
+  showSingle("OpenVPN server wizard state", cfg.ovpnserver_wizard);
+  showSingle("L2TP server", cfg.l2tp);
+  showArr(cfg.pppoe_servers);
+  showArr(cfg.ipsec_phase1);
+  showArr(cfg.ipsec_phase2);
+  showArr(cfg.ipsec_psks);
+  showArr(cfg.certificate_authorities);
+  showArr(cfg.certificates);
+  showArr(cfg.crls);
+  showSingle("Installed packages", cfg.installedpackages);
+  showArr(cfg.users);
+  showArr(cfg.groups);
+  showArr(cfg.authservers);
+  showArr(cfg.sysctl);
+  showArr(cfg.cron);
+  showArr(cfg.interface_groups);
+  showSingle("Shaper wizard state", cfg.ezshaper);
+  showSingle("DHCP backend", cfg.dhcp_backend);
+  showArr(cfg.unrecognized_sections);
+  return n;
+}
+
+/** Renders when the URL hash points at an anchor whose enclosing
+ *  section is hidden by the active filter. Otherwise renders nothing.
+ *  Keeps operators from staring at a blank canvas after following a
+ *  share link that doesn't survive their current filter. */
+function FilterHiddenAnchorBanner({ onClear }: { onClear: () => void }) {
+  const filter = useFilter();
+  const hash = typeof window === "undefined" ? "" : window.location.hash;
+  if (!filter?.active || !hash) return null;
+  const id = hash.slice(1);
+  // Ask the DOM after the render commit — the target either exists
+  // (banner stays hidden) or doesn't (banner shows). This is a one-
+  // shot check on render, not a continuous observer; good enough
+  // because the filter is the only thing that toggles rendering.
+  if (typeof document !== "undefined" && document.getElementById(id))
+    return null;
+  return (
+    <Alert tone="warn" title="Anchor hidden by filter" className="mb-2">
+      The link you followed points at content that is hidden by your
+      current filter.{" "}
+      <button
+        type="button"
+        onClick={onClear}
+        className="font-medium underline hover:text-fg"
+      >
+        Clear filter
+      </button>
+      {" to see it."}
+    </Alert>
+  );
+}
+
 
 // ---------- primitives -----------------------------------------------------
 
@@ -639,7 +949,15 @@ function Section({
   );
 }
 
-function TableOfContents({ cfg }: { cfg: ParsedConfig }) {
+function TableOfContents({
+  cfg,
+  orientation = "horizontal",
+  activeId,
+}: {
+  cfg: ParsedConfig;
+  orientation?: "horizontal" | "vertical";
+  activeId?: string | null;
+}) {
   const entries: [string, number][] = [];
   if (cfg.system) entries.push(["System", 1]);
   if (cfg.revision) entries.push(["Last revision", 1]);
@@ -751,6 +1069,38 @@ function TableOfContents({ cfg }: { cfg: ParsedConfig }) {
       "Other sections (raw XML)",
       cfg.unrecognized_sections.length,
     ]);
+
+  if (orientation === "vertical") {
+    return (
+      <nav
+        aria-label="Sections"
+        className="flex flex-col gap-0.5 rounded border border-border bg-muted/30 p-2 text-xs"
+      >
+        <div className="mb-1 px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-fg">
+          {cfg.config_version
+            ? `Schema v${cfg.config_version}`
+            : "Sections"}
+        </div>
+        {entries.map(([title, count]) => {
+          const id = sectionId(title);
+          const active = activeId === id;
+          return (
+            <a
+              key={title}
+              href={`#${id}`}
+              className={cn(
+                "flex items-center justify-between gap-2 rounded border-l-2 border-transparent px-2 py-1 text-muted-fg hover:bg-muted hover:text-fg",
+                active && "border-accent bg-muted font-medium text-fg",
+              )}
+            >
+              <span className="truncate">{title}</span>
+              <span className="shrink-0 text-[10px] opacity-70">({count})</span>
+            </a>
+          );
+        })}
+      </nav>
+    );
+  }
 
   return (
     <div className="flex flex-wrap gap-2 rounded border border-border bg-muted/30 p-2">
@@ -982,6 +1332,7 @@ function FirewallTable({ rows }: { rows: FirewallRule[] }) {
         "Description",
       ]}
       rowKeys={rows.map((r) => r.key)}
+      rowIds={rows.map((r) => rowAnchorId("rule", r.key))}
       rows={rows.map((r, i) => [
         <span key="n" className="font-mono text-xs text-muted-fg">
           {i + 1}
@@ -1023,6 +1374,7 @@ function NatTable({ rows }: { rows: NatRule[] }) {
         "Description",
       ]}
       rowKeys={rows.map((r) => r.key)}
+      rowIds={rows.map((r) => rowAnchorId("nat", r.key))}
       rows={rows.map((r) => [
         <Badge
           key="k"

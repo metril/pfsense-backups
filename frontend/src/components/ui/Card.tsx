@@ -91,6 +91,24 @@ export function Card({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groupCtx?.resetVersion]);
 
+  // Targeted open: deep-link handler calls snapTarget(cardId); if this
+  // Card's id matches, force-open. No-op if already open; persists so
+  // the reopen sticks across navigations.
+  useEffect(() => {
+    if (!groupCtx) return;
+    if (!id) return;
+    if (groupCtx.snapTargetId !== id) return;
+    setOpen(true);
+    if (storageKey) {
+      try {
+        sessionStorage.setItem(storageKey, "open");
+      } catch {
+        // ignore
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupCtx?.snapTargetVersion]);
+
   const persistToggle = (next: boolean) => {
     setOpen(next);
     if (storageKey) {
