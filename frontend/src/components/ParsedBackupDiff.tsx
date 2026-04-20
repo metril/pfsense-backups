@@ -558,7 +558,7 @@ function DiffLayout({
   emptyBanner: ReactNode;
   children: ReactNode;
 }) {
-  const isWide = useMediaQuery("(min-width: 1400px)");
+  const isWide = useMediaQuery("(min-width: 1700px)");
   // Pass ``filterQuery`` (not a count proxy) as the rebuild key so
   // two filters leaving the same number of diff sections visible
   // still refresh the observed element set.
@@ -567,7 +567,7 @@ function DiffLayout({
   if (isWide) {
     return (
       <div className="h-full overflow-auto p-4">
-        <div className="mx-auto grid max-w-[1600px] grid-cols-[16rem_1fr] gap-6">
+        <div className="mx-auto grid max-w-[1920px] grid-cols-[16rem_1fr] gap-6">
           <aside className="sticky top-0 max-h-screen self-start overflow-y-auto pb-4">
             <div className="flex flex-col gap-2 pb-3">
               <FilterBar

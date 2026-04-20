@@ -667,6 +667,10 @@ export interface PfBlockerNgConfig {
   dnsbl_mode: string | null;
   dnsbl_port: string | null;
   feeds: PfBlockerNgFeed[];
+  topspammers_present: boolean;
+  blacklist_present: boolean;
+  safesearch_present: boolean;
+  reputation_present: boolean;
 }
 
 export interface HaProxyFrontend {
@@ -810,6 +814,10 @@ export interface SquidGuardConfig {
 export interface SquidBundle {
   squid: SquidConfig | null;
   squidguard: SquidGuardConfig | null;
+  cache_present: boolean;
+  remote_present: boolean;
+  auth_present: boolean;
+  antivirus_present: boolean;
 }
 
 export interface FreeRadiusClient {
@@ -892,6 +900,11 @@ export interface FrrConfig {
   enabled: boolean;
   bgp: FrrBgpConfig | null;
   ospf: FrrOspfConfig | null;
+  ospfd_present: boolean;
+  ospfd_areas_present: boolean;
+  ospfd_interfaces_present: boolean;
+  global_acls_present: boolean;
+  global_prefixes_present: boolean;
 }
 
 export interface ZabbixAgentConfig {

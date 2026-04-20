@@ -63,8 +63,13 @@ export function FilterBar({
     itemCounter !== undefined && value.trim() !== "" && itemCounter.hidden > 0;
 
   return (
-    <div className={cn("flex items-center gap-2", className)}>
-      <div className="relative min-w-[200px] max-w-[360px] flex-1">
+    <div
+      className={cn(
+        "flex flex-wrap items-center gap-x-2 gap-y-1",
+        className,
+      )}
+    >
+      <div className="relative min-w-[180px] max-w-[360px] flex-1">
         <Search
           aria-hidden="true"
           className="pointer-events-none absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-fg"

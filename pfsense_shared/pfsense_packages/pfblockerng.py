@@ -70,6 +70,16 @@ class PfBlockerNgConfig(BaseModel):
     dnsbl_port: str | None = None
     # Feeds flattened across v4 + v6 + DNSBL list tags.
     feeds: list[PfBlockerNgFeed] = []
+    # v0.16.0: per-category sub-feature presence. pfBlockerNG stores
+    # opt-in feature state under separate top-level tags (mostly
+    # empty in the wild — the UI-level switch is what matters). We
+    # expose presence booleans so the operator sees "feature is
+    # configured / not configured" without stranding the tags in
+    # "Other packages".
+    topspammers_present: bool = False
+    blacklist_present: bool = False
+    safesearch_present: bool = False
+    reputation_present: bool = False
 
 
 # Tags this parser consumes out of <installedpackages>. Any tag in this
@@ -84,6 +94,11 @@ CONSUMED_TAGS = frozenset(
         "pfblockerngdnsbl",
         "pfblockerngdnsblsafesearch",
         "pfblockerngglobal",
+        # v0.16.0 — per-category sub-feature placeholders.
+        "pfblockerngtopspammers",
+        "pfblockerngblacklist",
+        "pfblockerngsafesearch",
+        "pfblockerngreputation",
     }
 )
 
@@ -119,10 +134,25 @@ def parse(ip: Element) -> PfBlockerNgConfig | None:
     listsv4 = ip.find("pfblockernglistsv4")
     listsv6 = ip.find("pfblockernglistsv6")
     dnsbl_feeds = ip.find("pfblockerngdnsbl")
+    topspammers = ip.find("pfblockerngtopspammers")
+    blacklist = ip.find("pfblockerngblacklist")
+    safesearch = ip.find("pfblockerngsafesearch")
+    reputation = ip.find("pfblockerngreputation")
 
     if all(
         x is None
-        for x in (pbn, ipset, dnsblset, listsv4, listsv6, dnsbl_feeds)
+        for x in (
+            pbn,
+            ipset,
+            dnsblset,
+            listsv4,
+            listsv6,
+            dnsbl_feeds,
+            topspammers,
+            blacklist,
+            safesearch,
+            reputation,
+        )
     ):
         return None
 
@@ -150,4 +180,8 @@ def parse(ip: Element) -> PfBlockerNgConfig | None:
         dnsbl_mode=text(dnsblset, "dnsbl_mode") if dnsblset is not None else None,
         dnsbl_port=text(dnsblset, "dnsbl_port") if dnsblset is not None else None,
         feeds=feeds,
+        topspammers_present=topspammers is not None,
+        blacklist_present=blacklist is not None,
+        safesearch_present=safesearch is not None,
+        reputation_present=reputation is not None,
     )

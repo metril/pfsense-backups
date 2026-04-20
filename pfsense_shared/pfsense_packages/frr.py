@@ -64,10 +64,33 @@ class FrrConfig(BaseModel):
     enabled: bool = False
     bgp: FrrBgpConfig | None = None
     ospf: FrrOspfConfig | None = None
+    # v0.16.0: FRR's OSPFd (IPv6 OSPF) daemon and a handful of shared
+    # global policy tables live under separate top-level package tags.
+    # We surface presence so operators see the daemon/policy is
+    # configured without stranding the tags in "Other packages";
+    # structural details stay available via the raw-XML fallback.
+    ospfd_present: bool = False
+    ospfd_areas_present: bool = False
+    ospfd_interfaces_present: bool = False
+    global_acls_present: bool = False
+    global_prefixes_present: bool = False
 
 
 CONSUMED_TAGS = frozenset(
-    {"frr", "frrbgp", "frrospf", "frrglobal", "frrbgpneighbors", "frrospfinterfaces"}
+    {
+        "frr",
+        "frrbgp",
+        "frrospf",
+        "frrglobal",
+        "frrbgpneighbors",
+        "frrospfinterfaces",
+        # v0.16.0 — IPv6 OSPF daemon + global policy tables.
+        "frrospfd",
+        "frrospfdareas",
+        "frrospfdinterfaces",
+        "frrglobalacls",
+        "frrglobalprefixes",
+    }
 )
 
 
@@ -162,9 +185,35 @@ def parse(ip: Element) -> FrrConfig | None:
         global_el = ip.find("frrglobal")
     bgp = _parse_bgp(ip)
     ospf = _parse_ospf(ip)
-    if global_el is None and bgp is None and ospf is None:
+    ospfd = ip.find("frrospfd")
+    ospfd_areas = ip.find("frrospfdareas")
+    ospfd_ifaces = ip.find("frrospfdinterfaces")
+    global_acls = ip.find("frrglobalacls")
+    global_prefixes = ip.find("frrglobalprefixes")
+    if all(
+        x is None
+        for x in (
+            global_el,
+            bgp,
+            ospf,
+            ospfd,
+            ospfd_areas,
+            ospfd_ifaces,
+            global_acls,
+            global_prefixes,
+        )
+    ):
         return None
     enabled = False
     if global_el is not None:
         enabled = bool_flag(global_el, "enable") or bool_flag(global_el, "enablefrr")
-    return FrrConfig(enabled=enabled, bgp=bgp, ospf=ospf)
+    return FrrConfig(
+        enabled=enabled,
+        bgp=bgp,
+        ospf=ospf,
+        ospfd_present=ospfd is not None,
+        ospfd_areas_present=ospfd_areas is not None,
+        ospfd_interfaces_present=ospfd_ifaces is not None,
+        global_acls_present=global_acls is not None,
+        global_prefixes_present=global_prefixes is not None,
+    )

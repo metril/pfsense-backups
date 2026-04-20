@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/Button";
 import { Kbd } from "@/components/ui/Kbd";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { useCardGroupActions } from "@/components/CardGroupContext";
+import { cn } from "@/lib/cn";
 
 /**
  * Two-button toolbar that drives expand-all / collapse-all on every
@@ -58,7 +59,7 @@ export function ExpandCollapseAll({
   if (!actions) return null;
 
   return (
-    <div className={className}>
+    <div className={cn("flex items-center gap-1", className)}>
       <Tooltip
         content={
           <span className="inline-flex items-center gap-1">
@@ -88,7 +89,6 @@ export function ExpandCollapseAll({
           size="sm"
           onClick={actions.collapseAll}
           aria-label="Collapse all sections"
-          className="ml-1"
         >
           <ChevronsDownUp className="h-4 w-4" />
           Collapse all

@@ -8,7 +8,7 @@ import { ExpandCollapseAll } from "@/components/ui/ExpandCollapseAll";
 import { FilterBar } from "@/components/ui/FilterBar";
 import { FilterProvider } from "@/components/ui/FilterContext";
 import { FilterHiddenAnchorBanner } from "@/components/ui/FilterHiddenAnchorBanner";
-import { Xref } from "@/components/ui/Xref";
+import { Xref, XrefList } from "@/components/ui/Xref";
 import { CardGroupProvider } from "@/components/CardGroupContext";
 import { XrefProvider } from "@/components/xref/XrefContext";
 import { DeepLinkBridge } from "@/components/xref/DeepLinkBridge";
@@ -607,7 +607,7 @@ function ViewerLayout({
   sectionCounter?: { visible: number; total: number };
   children: React.ReactNode;
 }) {
-  const isWide = useMediaQuery("(min-width: 1400px)");
+  const isWide = useMediaQuery("(min-width: 1700px)");
   // IntersectionObserver only runs when the sidebar is rendered —
   // no point paying for it in narrow mode where nothing consumes
   // the active id. Passing ``filterQuery`` as the version rebuilds
@@ -624,7 +624,7 @@ function ViewerLayout({
     return (
       <div className="h-full overflow-auto p-4">
         <QuickJump />
-        <div className="mx-auto grid max-w-[1600px] grid-cols-[15rem_1fr] gap-6">
+        <div className="mx-auto grid max-w-[1920px] grid-cols-[15rem_1fr] gap-6">
           <aside className="sticky top-0 max-h-screen self-start overflow-y-auto pb-4">
             <div className="flex flex-col gap-2 pb-3">
               <FilterBar
@@ -1435,8 +1435,9 @@ function DhcpTable({ rows }: { rows: DhcpServer[] }) {
           key={s.interface}
           className="rounded border border-border/70 bg-muted/20 p-2"
         >
-          <div className="mb-1 text-sm font-medium">
-            DHCP on {s.interface}{" "}
+          <div className="mb-1 flex items-center gap-1 text-sm font-medium">
+            <span>DHCP on</span>
+            <InterfaceChip name={s.interface} />
             <Badge tone={s.enabled ? "success" : "muted"}>
               {s.enabled ? "enabled" : "disabled"}
             </Badge>
@@ -1643,9 +1644,7 @@ function VlansTable({ rows }: { rows: Vlan[] }) {
     <Table
       headers={["Parent", "Tag", "PCP", "Device", "Description"]}
       rows={rows.map((v) => [
-        <span key="p" className="font-mono text-xs">
-          {v.if_ ?? "—"}
-        </span>,
+        v.if_ ? <InterfaceChip key="p" name={v.if_} /> : "—",
         <span key="t" className="font-mono">
           {v.tag ?? "—"}
         </span>,
@@ -1685,7 +1684,7 @@ function TunnelsTable({ rows }: { rows: Tunnel[] }) {
       headers={["Device", "Outer if", "Remote", "Tunnel local", "Tunnel remote", "Description"]}
       rows={rows.map((t) => [
         t.name,
-        t.if_ ?? "—",
+        t.if_ ? <InterfaceChip key="i" name={t.if_} /> : "—",
         t.remote_addr ?? "—",
         t.tunnel_local_addr ?? "—",
         t.tunnel_remote_addr ?? t.tunnel_remote_net ?? "—",
@@ -1701,7 +1700,7 @@ function PppsTable({ rows }: { rows: Ppp[] }) {
       headers={["Type", "Interface", "Username", "Provider", "Description"]}
       rows={rows.map((p) => [
         p.type ?? "—",
-        p.if_ ?? "—",
+        p.if_ ? <InterfaceChip key="i" name={p.if_} /> : "—",
         p.username ?? "—",
         p.provider ?? "—",
         p.descr ?? "—",
@@ -1715,7 +1714,7 @@ function QinqTable({ rows }: { rows: QinQ[] }) {
     <Table
       headers={["Parent", "Outer tag", "Inner tags", "Description"]}
       rows={rows.map((q) => [
-        q.if_ ?? "—",
+        q.if_ ? <InterfaceChip key="p" name={q.if_} /> : "—",
         q.tag ?? "—",
         q.members.join(", ") || "—",
         q.descr ?? "—",
@@ -1809,7 +1808,15 @@ function DhcpRelayTable({ rows }: { rows: DhcpRelayConfig[] }) {
       rows={rows.map((r) => [
         r.kind,
         r.enable ? "yes" : "no",
-        r.interface.join(", ") || "—",
+        r.interface.length > 0 ? (
+          <span key="i" className="inline-flex flex-wrap gap-1">
+            {r.interface.map((name) => (
+              <InterfaceChip key={name} name={name} />
+            ))}
+          </span>
+        ) : (
+          "—"
+        ),
         r.server.join(", ") || "—",
         r.agentoption ? "yes" : "no",
       ])}
@@ -1909,7 +1916,7 @@ function ShaperTable({ rows }: { rows: ShaperQueue[] }) {
       headers={["Name", "Interface", "Priority", "Bandwidth", "Description"]}
       rows={rows.map((q) => [
         q.name,
-        q.interface ?? "—",
+        q.interface ? <InterfaceChip key="i" name={q.interface} /> : "—",
         q.priority ?? "—",
         q.bandwidth
           ? `${q.bandwidth}${q.bandwidthtype ? " " + q.bandwidthtype : ""}`
@@ -2092,7 +2099,11 @@ function OpenVpnCscTable({ rows }: { rows: OpenVpnCsc[] }) {
       rows={rows.map((c) => [
         c.common_name,
         c.disable ? "yes" : "",
-        c.server_list.join(", ") || "—",
+        c.server_list.length > 0 ? (
+          <XrefList key="s" kind="openvpn_server" keys={c.server_list} />
+        ) : (
+          "—"
+        ),
         c.tunnel_network ?? "—",
         c.description ?? "—",
       ])}
@@ -2340,6 +2351,12 @@ function PackageCard({
 }
 
 function PfBlockerNgPanel({ p }: { p: PfBlockerNgConfig }) {
+  const subFeatures = [
+    p.topspammers_present && "Top spammers",
+    p.blacklist_present && "Blacklist",
+    p.safesearch_present && "SafeSearch",
+    p.reputation_present && "Reputation",
+  ].filter((x): x is string => Boolean(x));
   return (
     <PackageCard title="pfBlockerNG">
       <Dl
@@ -2357,6 +2374,12 @@ function PfBlockerNgPanel({ p }: { p: PfBlockerNgConfig }) {
             "MaxMind key",
             p.maxmind_key_configured ? <Redacted /> : "not set",
           ],
+          ...(subFeatures.length > 0
+            ? ([["Sub-features", subFeatures.join(", ")]] as [
+                string,
+                React.ReactNode,
+              ][])
+            : []),
         ]}
       />
       {p.feeds.length > 0 && (
@@ -2935,9 +2958,16 @@ function SquidPanel({ p }: { p: SquidBundle }) {
               ["Enabled", <StatusPill key="e" enabled={p.squid.enable} />],
               [
                 "Listen",
-                p.squid.active_interface
-                  ? `${p.squid.active_interface}:${p.squid.proxy_port ?? "3128"}`
-                  : "—",
+                p.squid.active_interface ? (
+                  <span key="l" className="inline-flex items-center gap-1">
+                    <InterfaceChip name={p.squid.active_interface} />
+                    <span className="font-mono text-xs">
+                      :{p.squid.proxy_port ?? "3128"}
+                    </span>
+                  </span>
+                ) : (
+                  "—"
+                ),
               ],
               [
                 "Transparent",
@@ -2998,6 +3028,18 @@ function SquidPanel({ p }: { p: SquidBundle }) {
               ["ACLs", `${p.squidguard.acls.length}`],
             ]}
           />
+        </div>
+      )}
+      {(p.cache_present ||
+        p.remote_present ||
+        p.auth_present ||
+        p.antivirus_present) && (
+        <div className="mt-2 flex flex-wrap gap-1 text-xs">
+          <span className="text-muted-fg">Sub-features configured:</span>
+          {p.cache_present && <Badge tone="muted">cache</Badge>}
+          {p.remote_present && <Badge tone="muted">remote ACL</Badge>}
+          {p.auth_present && <Badge tone="muted">auth</Badge>}
+          {p.antivirus_present && <Badge tone="muted">antivirus</Badge>}
         </div>
       )}
     </PackageCard>
@@ -3134,6 +3176,26 @@ function FrrPanel({ p }: { p: FrrConfig }) {
                 i.md5_password === "***redacted***" ? <Redacted /> : "—",
               ])}
             />
+          )}
+        </div>
+      )}
+      {(p.ospfd_present ||
+        p.ospfd_areas_present ||
+        p.ospfd_interfaces_present ||
+        p.global_acls_present ||
+        p.global_prefixes_present) && (
+        <div className="mt-2 flex flex-wrap gap-1 text-xs">
+          <span className="text-muted-fg">
+            IPv6 OSPF + global policy:
+          </span>
+          {p.ospfd_present && <Badge tone="muted">OSPFd</Badge>}
+          {p.ospfd_areas_present && <Badge tone="muted">OSPFd areas</Badge>}
+          {p.ospfd_interfaces_present && (
+            <Badge tone="muted">OSPFd interfaces</Badge>
+          )}
+          {p.global_acls_present && <Badge tone="muted">ACLs</Badge>}
+          {p.global_prefixes_present && (
+            <Badge tone="muted">prefix lists</Badge>
           )}
         </div>
       )}

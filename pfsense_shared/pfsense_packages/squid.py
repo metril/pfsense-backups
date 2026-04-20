@@ -76,9 +76,29 @@ class SquidBundle(BaseModel):
 
     squid: SquidConfig | None = None
     squidguard: SquidGuardConfig | None = None
+    # v0.16.0: sibling sub-package tags. The pfSense Squid package
+    # stores cache tuning, remote-ACL, auth, and antivirus settings
+    # under their own top-level tags next to ``<squid>``. We surface
+    # presence so operators see the sub-feature is configured
+    # without stranding the tags in "Other packages"; structural
+    # details stay available via the raw-XML fallback.
+    cache_present: bool = False
+    remote_present: bool = False
+    auth_present: bool = False
+    antivirus_present: bool = False
 
 
-CONSUMED_TAGS = frozenset({"squid", "squidguard"})
+CONSUMED_TAGS = frozenset(
+    {
+        "squid",
+        "squidguard",
+        # v0.16.0 — sibling sub-packages.
+        "squidcache",
+        "squidremote",
+        "squidauth",
+        "squidantivirus",
+    }
+)
 
 
 def _parse_squid(el: Element | None) -> SquidConfig | None:
@@ -169,6 +189,19 @@ def _parse_squidguard(el: Element | None) -> SquidGuardConfig | None:
 def parse(ip: Element) -> SquidBundle | None:
     sq = _parse_squid(ip.find("squid"))
     sg = _parse_squidguard(ip.find("squidguard"))
-    if sq is None and sg is None:
+    cache = ip.find("squidcache")
+    remote = ip.find("squidremote")
+    auth = ip.find("squidauth")
+    antivirus = ip.find("squidantivirus")
+    if sq is None and sg is None and all(
+        x is None for x in (cache, remote, auth, antivirus)
+    ):
         return None
-    return SquidBundle(squid=sq, squidguard=sg)
+    return SquidBundle(
+        squid=sq,
+        squidguard=sg,
+        cache_present=cache is not None,
+        remote_present=remote is not None,
+        auth_present=auth is not None,
+        antivirus_present=antivirus is not None,
+    )
