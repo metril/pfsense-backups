@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo } from "react";
+import { memo, useCallback, useMemo, type ReactNode } from "react";
 import { Lock } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { Alert } from "@/components/ui/Alert";
@@ -48,6 +48,7 @@ import type {
   DnsConfig,
   DnShaperPipe,
   DyndnsEntry,
+  Endpoint,
   FirewallRule,
   FreeRadiusConfig,
   FrrConfig,
@@ -1340,12 +1341,8 @@ function FirewallTable({ rows }: { rows: FirewallRule[] }) {
         <span key="p" className="font-mono text-xs">
           {r.protocol ?? "any"}
         </span>,
-        <span key="s" className="font-mono text-xs">
-          {endpointStr(r.source)}
-        </span>,
-        <span key="dst" className="font-mono text-xs">
-          {endpointStr(r.destination)}
-        </span>,
+        <EndpointCell key="s" e={r.source} />,
+        <EndpointCell key="dst" e={r.destination} />,
         <Xref key="gw" kind="gateway" k={r.gateway} />,
         <Xref key="sch" kind="schedule" k={r.schedule} />,
         <span key="d" className="flex items-center gap-1">
@@ -1391,15 +1388,20 @@ function NatTable({ rows }: { rows: NatRule[] }) {
         <span key="p" className="font-mono text-xs">
           {r.protocol ?? "—"}
         </span>,
-        <span key="s" className="font-mono text-xs">
-          {endpointStr(r.source)}
-        </span>,
-        <span key="dst" className="font-mono text-xs">
-          {endpointStr(r.destination)}
-        </span>,
-        <span key="t" className="font-mono text-xs">
-          {r.target ?? "—"}
-        </span>,
+        <EndpointCell key="s" e={r.source} />,
+        <EndpointCell key="dst" e={r.destination} />,
+        r.target ? (
+          <Xref
+            key="t"
+            kind="alias"
+            k={r.target}
+            fallback={
+              <span className="font-mono text-xs">{r.target}</span>
+            }
+          />
+        ) : (
+          "—"
+        ),
         r.local_port ?? "—",
         <span key="d" className="flex items-center gap-1">
           {r.descr ?? "—"}
@@ -1410,15 +1412,53 @@ function NatTable({ rows }: { rows: NatRule[] }) {
   );
 }
 
-function endpointStr(e: {
-  any_: boolean;
-  network: string | null;
-  address: string | null;
-  port: string | null;
-}) {
-  if (e.any_) return "any";
-  const host = e.network ?? e.address ?? "?";
-  return e.port ? `${host}:${e.port}` : host;
+/** Renders a firewall-rule or NAT-rule endpoint (source / destination).
+ *
+ *  Before v0.18.0 this was a plain-text helper (``endpointStr``).
+ *  That stranded alias references — ``address: "RFC1918"`` where
+ *  ``RFC1918`` is a defined alias rendered as text, no click-through
+ *  to the alias definition. Now we consult the xref index: if the
+ *  ``address`` resolves to an alias, we render an ``<Xref kind="alias">``
+ *  chip; otherwise it falls back to the raw string.
+ *
+ *  ``network`` always wins over ``address`` in pfSense's endpoint
+ *  shape (``network`` = "lan subnet" / "wan net" / etc., ``address`` =
+ *  literal or alias). Only ``address`` can be an alias — ``network``
+ *  is always a special keyword. So alias-lookup runs on ``address``
+ *  only.
+ *
+ *  ``not_`` prefixes a muted ``!`` so negated rules stay obvious. */
+function EndpointCell({ e }: { e: Endpoint }) {
+  if (e.any_) {
+    return (
+      <span className="font-mono text-xs">
+        {e.not_ ? "!" : ""}any
+      </span>
+    );
+  }
+  const bang = e.not_ ? (
+    <span className="font-mono text-xs font-semibold text-warn">!</span>
+  ) : null;
+  const host: ReactNode = e.network ? (
+    <span className="font-mono text-xs">{e.network}</span>
+  ) : e.address ? (
+    <Xref
+      kind="alias"
+      k={e.address}
+      fallback={<span className="font-mono text-xs">{e.address}</span>}
+    />
+  ) : (
+    <span className="font-mono text-xs">?</span>
+  );
+  return (
+    <span className="inline-flex items-center gap-1">
+      {bang}
+      {host}
+      {e.port ? (
+        <span className="font-mono text-xs text-muted-fg">:{e.port}</span>
+      ) : null}
+    </span>
+  );
 }
 
 function AliasesTable({ rows }: { rows: Alias[] }) {
@@ -1655,6 +1695,10 @@ function VlansTable({ rows }: { rows: Vlan[] }) {
   return (
     <Table
       headers={["Parent", "Tag", "PCP", "Device", "Description"]}
+      rowKeys={rows.map((v) => v.vlanif ?? v.key)}
+      rowIds={rows.map((v) =>
+        v.vlanif ? itemId("vlan", v.vlanif) : undefined,
+      )}
       rows={rows.map((v) => [
         v.if_ ? <InterfaceChip key="p" name={v.if_} /> : "—",
         <span key="t" className="font-mono">

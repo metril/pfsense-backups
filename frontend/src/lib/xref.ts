@@ -38,7 +38,11 @@ export type RefKind =
   | "haproxy_backend"
   | "lb_pool"
   | "user"
-  | "group";
+  | "group"
+  // v0.18.0: VLAN definitions. Referenced via the ``vlanif`` key
+  // (e.g. ``"em0.100"``) from child interfaces that use the VLAN
+  // as their parent_if.
+  | "vlan";
 
 /** The section group a target belongs to (for chip coloring). */
 const KIND_TO_GROUP: Record<RefKind, SectionGroup> = {
@@ -59,6 +63,7 @@ const KIND_TO_GROUP: Record<RefKind, SectionGroup> = {
   lb_pool: "services",
   user: "vpn-pki",
   group: "vpn-pki",
+  vlan: "networking",
 };
 
 export interface XrefTarget {
@@ -117,6 +122,7 @@ function emptyByKind(): Record<RefKind, Map<string, XrefTarget>> {
     "lb_pool",
     "user",
     "group",
+    "vlan",
   ];
   return Object.fromEntries(kinds.map((k) => [k, new Map()])) as Record<
     RefKind,
@@ -152,6 +158,21 @@ export function buildIndex(cfg: ParsedConfig): XrefIndex {
   // name (wan / lan / opt1); ``descr`` is the friendly label.
   for (const i of cfg.interfaces) {
     add(idx, "interface", i.key, i.descr ?? i.key.toUpperCase(), i.if_);
+  }
+
+  // VLANs — keyed by the vlanif string (e.g. ``em0.100``). Operators
+  // jump here when a child interface's parent_if matches a VLAN
+  // definition. Secondary descriptor carries tag + parent for
+  // tooltip scannability.
+  for (const v of cfg.vlans) {
+    if (!v.vlanif) continue;
+    add(
+      idx,
+      "vlan",
+      v.vlanif,
+      v.descr ?? v.vlanif,
+      v.tag ? `tag ${v.tag}${v.if_ ? ` on ${v.if_}` : ""}` : v.if_ ?? undefined,
+    );
   }
 
   // Interface groups — firewall rules can target these the same way
@@ -379,6 +400,7 @@ const SCOPE_TO_SECTION_ID: Record<string, string> = {
   group: "section-groups",
   rule: "section-firewall-rules",
   nat: "section-nat-rules",
+  vlan: "section-vlans",
 };
 
 /** Entry point for all hash-driven navigation. Given a hash like
