@@ -327,6 +327,60 @@ export function enclosingSectionId(anchorId: string): string | null {
   return section?.id ?? null;
 }
 
+/** Fallback when ``enclosingSectionId`` returns ``null`` because the
+ *  target anchor hasn't rendered yet (typical when its Card is
+ *  collapsed — Card gates its children on ``open``). Parses an anchor
+ *  id of the form ``xref-{kind}-{key}`` or ``xref-rule-…`` /
+ *  ``xref-nat-…`` and maps it to the section id the card would carry.
+ *
+ *  Without this, pasting ``#xref-alias-Foo`` into a new tab where
+ *  sessionStorage has the Aliases card marked "closed" is a silent
+ *  no-op: the target element isn't in the DOM, so no snap event
+ *  fires, so the card never opens, so ``scrollAndFlash`` finds
+ *  nothing. With this fallback, the snap event still fires.
+ *
+ *  Returns ``null`` for ids we don't recognize (e.g. diff anchors
+ *  the user pasted manually) — caller falls back gracefully. */
+export function sectionIdForAnchor(anchorId: string): string | null {
+  if (anchorId.startsWith("section-") || anchorId.startsWith("diff-"))
+    return anchorId;
+  if (!anchorId.startsWith("xref-")) return null;
+  // ``xref-{scope}-{key}`` — scope is the kind OR "rule"/"nat" from
+  // ``rowAnchorId``.
+  const afterPrefix = anchorId.slice("xref-".length);
+  const dash = afterPrefix.indexOf("-");
+  if (dash < 0) return null;
+  const scope = afterPrefix.slice(0, dash);
+  return SCOPE_TO_SECTION_ID[scope] ?? null;
+}
+
+/** Maps an xref scope (the ``{kind}`` or ``rule``/``nat`` fragment of
+ *  a ``xref-*`` anchor id) to the DOM id of the section card that
+ *  renders rows of that kind. Mirrors the section titles in
+ *  ``ParsedBackupView.tsx`` (``section-<kebab-title>``). Keep in sync
+ *  when a new RefKind is added. */
+const SCOPE_TO_SECTION_ID: Record<string, string> = {
+  interface: "section-interfaces",
+  interface_group: "section-interface-groups",
+  gateway: "section-gateways",
+  gateway_group: "section-gateway-groups",
+  schedule: "section-schedules",
+  alias: "section-aliases",
+  ca: "section-certificate-authorities",
+  cert: "section-certificates",
+  crl: "section-certificate-revocation-lists",
+  authserver: "section-external-auth-servers",
+  openvpn_server: "section-openvpn-servers",
+  openvpn_client: "section-openvpn-clients",
+  ipsec_phase1: "section-ipsec--phase-1",
+  haproxy_backend: "section-installed-packages",
+  lb_pool: "section-load-balancer",
+  user: "section-users",
+  group: "section-groups",
+  rule: "section-firewall-rules",
+  nat: "section-nat-rules",
+};
+
 /** Entry point for all hash-driven navigation. Given a hash like
  *  ``"#xref-alias-Foo"`` (with or without the leading ``#``):
  *
@@ -352,15 +406,23 @@ export function expandThenScrollToHash(hash: string): void {
   } catch {
     // ignore (some sandboxed contexts).
   }
-  const cardId = enclosingSectionId(id);
+  // First try the DOM-ancestor approach — fastest, covers anchors
+  // whose card is already open. If that fails (anchor element not
+  // rendered because its card is collapsed), fall back to the
+  // scope→section-id table so we can still snap the right card open
+  // before the retry scroll.
+  const cardId = enclosingSectionId(id) ?? sectionIdForAnchor(id);
   if (cardId) {
     window.dispatchEvent(
       new CustomEvent("pfsense-snap-to-card", { detail: { cardId } }),
     );
   }
-  // Defer scroll one frame so a just-opened card has mounted its
-  // children before we try to find the anchor.
-  requestAnimationFrame(() => scrollAndFlash(id));
+  // Double-RAF: one frame for React to flush the Card's state update,
+  // a second frame for the Card's children to commit before we try
+  // to find the anchor. Without this, scrollAndFlash races the snap.
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => scrollAndFlash(id)),
+  );
 }
 
 /** Sugar for callers that want the raw href without importing itemId. */

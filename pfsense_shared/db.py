@@ -18,6 +18,8 @@ from pathlib import Path
 from alembic.config import Config as AlembicConfig
 from sqlalchemy import event, select
 from sqlalchemy.engine import Engine
+from sqlalchemy.engine.interfaces import DBAPIConnection
+from sqlalchemy.pool import ConnectionPoolEntry
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -38,7 +40,10 @@ log = logging.getLogger(__name__)
 # --------------------------------------------------------------------- #
 
 
-def _sqlite_pragmas(dbapi_conn, _connection_record) -> None:
+def _sqlite_pragmas(
+    dbapi_conn: DBAPIConnection,
+    _connection_record: ConnectionPoolEntry,
+) -> None:
     cursor = dbapi_conn.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
     cursor.execute("PRAGMA foreign_keys=ON")

@@ -6,10 +6,8 @@ import { Card } from "@/components/ui/Card";
 import { Alert } from "@/components/ui/Alert";
 import { ExpandCollapseAll } from "@/components/ui/ExpandCollapseAll";
 import { FilterBar } from "@/components/ui/FilterBar";
-import {
-  FilterProvider,
-  useFilter,
-} from "@/components/ui/FilterContext";
+import { FilterProvider } from "@/components/ui/FilterContext";
+import { FilterHiddenAnchorBanner } from "@/components/ui/FilterHiddenAnchorBanner";
 import { Xref } from "@/components/ui/Xref";
 import { CardGroupProvider } from "@/components/CardGroupContext";
 import { XrefProvider, type XrefSide } from "@/components/xref/XrefContext";
@@ -451,30 +449,6 @@ function formatValueForHaystack(v: unknown): string {
   }
 }
 
-/** Renders when the URL hash points at an anchor whose enclosing
- *  diff section is hidden by the active filter. Otherwise nothing. */
-function FilterHiddenAnchorBanner({ onClear }: { onClear: () => void }) {
-  const filter = useFilter();
-  const hash = typeof window === "undefined" ? "" : window.location.hash;
-  if (!filter?.active || !hash) return null;
-  const id = hash.slice(1);
-  if (typeof document !== "undefined" && document.getElementById(id))
-    return null;
-  return (
-    <Alert tone="warn" title="Anchor hidden by filter" className="mb-2">
-      The link you followed points at content that is hidden by your
-      current filter.{" "}
-      <button
-        type="button"
-        onClick={onClear}
-        className="font-medium underline hover:text-fg"
-      >
-        Clear filter
-      </button>
-      {" to see it."}
-    </Alert>
-  );
-}
 
 /** Summary strip — one chip per section with colored delta counts.
  *  Sections with zero changes are hidden (keeps it scannable when only
@@ -585,7 +559,13 @@ function DiffLayout({
   children: ReactNode;
 }) {
   const isWide = useMediaQuery("(min-width: 1400px)");
-  const activeId = useActiveSection(isWide ? "diff-" : null);
+  // Version the observer on ``sectionCounter.visible`` so the
+  // IntersectionObserver is rebuilt when the filter changes the
+  // set of rendered diff section cards.
+  const activeId = useActiveSection(
+    isWide ? "diff-" : null,
+    sectionCounter?.visible ?? 0,
+  );
 
   if (isWide) {
     return (

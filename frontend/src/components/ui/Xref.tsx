@@ -142,8 +142,13 @@ function XrefInner({
   );
 }
 
-/** Memoized — re-renders only when kind/k/side change. Chips are
- *  rendered hundreds of times on big configs. */
+/** Memoized to skip re-renders caused by sibling / parent state
+ *  changes — kind/k/side prop stability + memo avoids thrashing the
+ *  hundreds of chips a big config produces. Note: any change to the
+ *  ``XrefContext`` value (stacked providers mounting, a fresh config
+ *  arriving) still re-renders every chip because ``useXrefEntry``
+ *  reads from context. In practice that's a one-time cost per data
+ *  arrival, not a per-keystroke cost. */
 export const Xref = memo(XrefInner);
 
 /** Convenience for lists: render a comma-free row of chips. */

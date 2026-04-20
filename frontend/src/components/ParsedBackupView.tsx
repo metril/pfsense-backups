@@ -6,10 +6,8 @@ import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import { ExpandCollapseAll } from "@/components/ui/ExpandCollapseAll";
 import { FilterBar } from "@/components/ui/FilterBar";
-import {
-  FilterProvider,
-  useFilter,
-} from "@/components/ui/FilterContext";
+import { FilterProvider } from "@/components/ui/FilterContext";
+import { FilterHiddenAnchorBanner } from "@/components/ui/FilterHiddenAnchorBanner";
 import { Xref } from "@/components/ui/Xref";
 import { CardGroupProvider } from "@/components/CardGroupContext";
 import { XrefProvider } from "@/components/xref/XrefContext";
@@ -612,8 +610,14 @@ function ViewerLayout({
   const isWide = useMediaQuery("(min-width: 1400px)");
   // IntersectionObserver only runs when the sidebar is rendered —
   // no point paying for it in narrow mode where nothing consumes
-  // the active id.
-  const activeId = useActiveSection(isWide ? "section-" : null);
+  // the active id. The ``version`` arg rebuilds the observer when
+  // the rendered section count changes (filter apply/clear), so
+  // newly-mounted sections get observed and the highlight doesn't
+  // go stale.
+  const activeId = useActiveSection(
+    isWide ? "section-" : null,
+    sectionCounter?.visible ?? 0,
+  );
 
   if (isWide) {
     return (
@@ -682,7 +686,7 @@ function narrowConfig(cfg: ParsedConfig, filter: FilterMatcher): ParsedConfig {
     qinqs: narrow("QinQ", cfg.qinqs),
     laggs: narrow("LAGG", cfg.laggs),
     wol: narrow("Wake-on-LAN", cfg.wol),
-    virtual_ips: narrow("Virtual IPs CARP", cfg.virtual_ips),
+    virtual_ips: narrow("Virtual IPs / CARP", cfg.virtual_ips),
     gateways: narrow("Gateways", cfg.gateways),
     gateway_groups: narrow("Gateway groups", cfg.gateway_groups),
     static_routes: narrow("Static routes", cfg.static_routes),
@@ -695,7 +699,7 @@ function narrowConfig(cfg: ParsedConfig, filter: FilterMatcher): ParsedConfig {
     dyndns_entries: narrow("Dynamic DNS", cfg.dyndns_entries),
     igmpproxy_entries: narrow("IGMP proxy", cfg.igmpproxy_entries),
     radvd_interfaces: narrow(
-      "Router Advertisements IPv6",
+      "Router Advertisements (IPv6)",
       cfg.radvd_interfaces,
     ),
     voucher_rolls: narrow("Captive-portal vouchers", cfg.voucher_rolls),
@@ -729,7 +733,7 @@ function narrowConfig(cfg: ParsedConfig, filter: FilterMatcher): ParsedConfig {
     proxyarp: narrow("Proxy ARP", cfg.proxyarp),
     pppoe_servers: narrow("PPPoE servers", cfg.pppoe_servers),
     unrecognized_sections: narrow(
-      "Other sections raw XML",
+      "Other sections (raw XML)",
       cfg.unrecognized_sections,
     ),
   };
@@ -758,7 +762,7 @@ function countVisibleSections(
   showArr(cfg.interfaces);
   showArr(cfg.vlans);
   showArr(cfg.bridges);
-  showSingle("Bridge legacy", cfg.legacy_bridge);
+  showSingle("Bridge (legacy)", cfg.legacy_bridge);
   showArr(cfg.proxyarp);
   showArr(cfg.gifs);
   showArr(cfg.gres);
@@ -767,7 +771,7 @@ function countVisibleSections(
   showArr(cfg.laggs);
   showArr(cfg.wol);
   showArr(cfg.virtual_ips);
-  showSingle("HA CARP sync", cfg.hasync);
+  showSingle("HA / CARP sync", cfg.hasync);
   showArr(cfg.gateways);
   showArr(cfg.gateway_groups);
   showArr(cfg.static_routes);
@@ -794,7 +798,7 @@ function countVisibleSections(
   showArr(cfg.openvpn_servers);
   showArr(cfg.openvpn_clients);
   showArr(cfg.openvpn_cscs);
-  showSingle("OpenVPN server wizard state", cfg.ovpnserver_wizard);
+  showSingle("OpenVPN server (wizard state)", cfg.ovpnserver_wizard);
   showSingle("L2TP server", cfg.l2tp);
   showArr(cfg.pppoe_servers);
   showArr(cfg.ipsec_phase1);
@@ -814,37 +818,6 @@ function countVisibleSections(
   showSingle("DHCP backend", cfg.dhcp_backend);
   showArr(cfg.unrecognized_sections);
   return n;
-}
-
-/** Renders when the URL hash points at an anchor whose enclosing
- *  section is hidden by the active filter. Otherwise renders nothing.
- *  Keeps operators from staring at a blank canvas after following a
- *  share link that doesn't survive their current filter. */
-function FilterHiddenAnchorBanner({ onClear }: { onClear: () => void }) {
-  const filter = useFilter();
-  const hash = typeof window === "undefined" ? "" : window.location.hash;
-  if (!filter?.active || !hash) return null;
-  const id = hash.slice(1);
-  // Ask the DOM after the render commit — the target either exists
-  // (banner stays hidden) or doesn't (banner shows). This is a one-
-  // shot check on render, not a continuous observer; good enough
-  // because the filter is the only thing that toggles rendering.
-  if (typeof document !== "undefined" && document.getElementById(id))
-    return null;
-  return (
-    <Alert tone="warn" title="Anchor hidden by filter" className="mb-2">
-      The link you followed points at content that is hidden by your
-      current filter.{" "}
-      <button
-        type="button"
-        onClick={onClear}
-        className="font-medium underline hover:text-fg"
-      >
-        Clear filter
-      </button>
-      {" to see it."}
-    </Alert>
-  );
 }
 
 

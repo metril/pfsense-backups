@@ -16,8 +16,17 @@ import { useEffect, useState } from "react";
  * (``"section-"``) and the diff (``"diff-"``) can share one hook.
  * Pass ``null`` to disable (e.g. on narrow viewports where the sticky
  * sidebar isn't rendered — no need to pay for the observer).
+ *
+ * ``version`` is a hint to rebuild the observer — bump it from the
+ * caller whenever the set of rendered sections changes (filter apply,
+ * filter clear, a fresh config arriving). Without this, sections that
+ * mount AFTER the observer was set up are invisible to it, so the
+ * sidebar highlight goes stale after a filter change.
  */
-export function useActiveSection(prefix: string | null): string | null {
+export function useActiveSection(
+  prefix: string | null,
+  version: number = 0,
+): string | null {
   const [activeId, setActiveId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -63,7 +72,7 @@ export function useActiveSection(prefix: string | null): string | null {
 
     for (const t of targets) observer.observe(t);
     return () => observer.disconnect();
-  }, [prefix]);
+  }, [prefix, version]);
 
   return activeId;
 }

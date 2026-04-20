@@ -18,11 +18,13 @@ import { useCardGroup } from "@/components/CardGroupContext";
  *   context directly).
  *
  * Props:
- *   ``includeHashchange`` — viewer uses ``true`` (chip strip + ctrl-L
- *   edits can change the hash in-page); diff uses ``false`` because
- *   the only diff-page hash mutations come from the summary strip
- *   which already scrolls natively, and the cross-page route mode
- *   arrivals are fresh loads.
+ *   ``includeHashchange`` — both pages default this to ``true``. The
+ *   diff page's summary strip anchors fire ``hashchange`` natively,
+ *   and since v0.14.0 those targets may be collapsed cards that need
+ *   to be auto-opened before the scroll lands. Setting this to
+ *   ``false`` skips that auto-open and produces the same silent
+ *   no-op the v0.15.0 review flagged. Pass ``false`` only for pages
+ *   with no Card collapse behaviour at all.
  */
 export function DeepLinkBridge({
   includeHashchange = true,
