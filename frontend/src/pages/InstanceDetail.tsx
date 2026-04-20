@@ -304,14 +304,24 @@ export function InstanceDetailPage() {
           </tbody>
         </table>
       </div>
-      {(backups.data ?? []).length > 15 && (
-        <Link
-          to={`/backups?instance=${id}`}
-          className="mt-2 inline-flex items-center gap-1 text-xs text-muted-fg hover:text-accent"
-        >
-          <Split className="h-3 w-3" /> view all backups for this instance
-        </Link>
-      )}
+      <div className="mt-2 flex flex-wrap items-center gap-4 text-xs">
+        {(backups.data ?? []).length > 0 && (
+          <Link
+            to={`/instances/${id}/history`}
+            className="inline-flex items-center gap-1 text-muted-fg hover:text-accent"
+          >
+            scrub through history →
+          </Link>
+        )}
+        {(backups.data ?? []).length > 15 && (
+          <Link
+            to={`/backups?instance=${id}`}
+            className="inline-flex items-center gap-1 text-muted-fg hover:text-accent"
+          >
+            <Split className="h-3 w-3" /> view all backups for this instance
+          </Link>
+        )}
+      </div>
 
       {/* Recent jobs */}
       <h2 className="mt-6 text-sm font-semibold uppercase tracking-wider text-muted-fg">

@@ -5,6 +5,7 @@ import {
   Check,
   ClipboardCopy,
   Download,
+  History,
   Pencil,
   Split,
   Tag as TagIcon,
@@ -329,6 +330,15 @@ export function BackupViewPage() {
           >
             <Split className="h-4 w-4" />
             Diff vs previous
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => nav(`/instances/${detail.instance_id}/history`)}
+            title="Scrub through every backup for this instance"
+          >
+            <History className="h-4 w-4" />
+            History
           </Button>
           <Button variant="secondary" size="sm" onClick={copyToClipboard}>
             <ClipboardCopy className="h-4 w-4" />

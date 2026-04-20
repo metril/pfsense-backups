@@ -7,6 +7,7 @@ import { Login } from "./pages/Login";
 import { Dashboard } from "./pages/Dashboard";
 import { InstancesPage } from "./pages/Instances";
 import { InstanceDetailPage } from "./pages/InstanceDetail";
+import { InstanceHistoryPage } from "./pages/InstanceHistory";
 import { BackupsPage } from "./pages/Backups";
 import { BackupDiffPage } from "./pages/BackupDiff";
 import { BackupViewPage } from "./pages/BackupView";
@@ -41,6 +42,7 @@ export default function App() {
         <Route index element={<Dashboard />} />
         <Route path="instances" element={<InstancesPage />} />
         <Route path="instances/:id" element={<InstanceDetailPage />} />
+        <Route path="instances/:id/history" element={<InstanceHistoryPage />} />
         <Route path="backups" element={<BackupsPage />} />
         <Route path="backups/:id/view" element={<BackupViewPage />} />
         <Route path="backups/diff/:a/:b" element={<BackupDiffPage />} />

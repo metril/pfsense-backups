@@ -52,6 +52,16 @@
   animation: flash 1.5s ease-out;
 }
 
+/* History-timeline diff overlay (v0.23.0). Applied by
+   InstanceHistoryPage to any xref / field anchor that changed
+   between the focused backup and the one before it. ``box-shadow
+   inset`` renders reliably on ``<tr>`` elements (where ``outline``
+   can be flaky across browsers) and on regular block elements. */
+[data-xref-changed="true"] {
+  background-color: hsl(var(--warn) / 0.08);
+  box-shadow: inset 3px 0 0 0 hsl(var(--warn) / 0.8);
+}
+
 /* Sticky-ToC + xref anchors use scroll-margin-top so anchored jumps
    don't hide the target under the fixed header. 5rem covers the app
    topbar plus breathing room. */
