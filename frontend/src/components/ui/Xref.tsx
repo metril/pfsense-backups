@@ -10,6 +10,7 @@ import {
 import { useXrefHistory } from "@/components/xref/XrefHistory";
 import {
   expandThenScrollToHash,
+  findOriginLabel,
   findTargetByAnchorId,
   resolve,
   xrefHref,
@@ -57,8 +58,17 @@ function labelForOrigin(
   if (index) {
     const target = findTargetByAnchorId(index, originId);
     if (target) return `${target.kind.replace(/_/g, " ")}: ${target.label}`;
+    // Leaf rows (firewall rules, NATs) aren't proper xref targets —
+    // their descriptions are recorded separately in
+    // ``index.originLabels`` at build time so we can surface a
+    // readable row label instead of the opaque tracker key.
+    const origin = findOriginLabel(index, originId);
+    if (origin) {
+      const scope = /^xref-([^-]+)-/.exec(originId)?.[1] ?? "row";
+      return `${scope.replace(/_/g, " ")}: ${origin}`;
+    }
   }
-  // Leaf rows: ``xref-rule-{tracker}`` or ``xref-nat-{tracker}``.
+  // Ultimate fallback: parse the id and show ``rule: tracker_…``.
   const m = /^xref-([^-]+)-(.+)$/.exec(originId);
   if (m) return `${m[1].replace(/_/g, " ")}: ${m[2]}`;
   return "previous location";

@@ -84,6 +84,14 @@ export interface XrefIndex {
   /** Reverse index: anchorId → every other target that points at it.
    *  Used by the tooltip to say "Used by N other items." */
   incoming: Map<string, XrefTarget[]>;
+  /** Human labels for leaf rows that aren't proper xref targets —
+   *  firewall rules and NAT rules anchored via ``rowAnchorId``. Keyed
+   *  by anchorId, value is the row's description (or a sensible
+   *  fallback derived from its shape). Used exclusively by the
+   *  xref back-navigation stack so the floating pill reads
+   *  ``Back to rule: Block Tor exit nodes`` rather than
+   *  ``Back to rule: 1706288423_0``. */
+  originLabels: Map<string, string>;
 }
 
 /** Build a stable DOM id for a referenceable row. */
@@ -152,7 +160,11 @@ function add(
 
 /** Build the xref index from a parsed config. Runs in O(refs). */
 export function buildIndex(cfg: ParsedConfig): XrefIndex {
-  const idx: XrefIndex = { byKind: emptyByKind(), incoming: new Map() };
+  const idx: XrefIndex = {
+    byKind: emptyByKind(),
+    incoming: new Map(),
+    originLabels: new Map(),
+  };
 
   // Interfaces — the parser exposes ``key`` as the pfSense-internal
   // name (wan / lan / opt1); ``descr`` is the friendly label.
@@ -279,11 +291,21 @@ export function buildIndex(cfg: ParsedConfig): XrefIndex {
   };
 
   for (const r of cfg.firewall_rules) {
+    const anchorId = rowAnchorId("rule", r.key);
+    // Prefer the rule's description; fall back to an action + iface
+    // summary (``pass on lan``) before the opaque tracker key so the
+    // back-nav pill is always somewhat readable.
+    const fallback =
+      r.interface && r.type
+        ? `${r.type} on ${r.interface}`
+        : `rule ${r.key}`;
+    const label = r.descr ?? fallback;
+    idx.originLabels.set(anchorId, label);
     const self: XrefTarget = {
       kind: "interface", // placeholder "from" — callers don't render back
       key: r.key,
-      label: r.descr ?? `rule ${r.key}`,
-      anchorId: `xref-rule-${r.key.replace(/[^A-Za-z0-9_-]/g, "_")}`,
+      label,
+      anchorId,
       group: "security",
     };
     if (r.interface) {
@@ -296,6 +318,18 @@ export function buildIndex(cfg: ParsedConfig): XrefIndex {
     if (r.gateway) linkFrom(idx.byKind.gateway.get(r.gateway) ?? null, self);
     if (r.schedule)
       linkFrom(idx.byKind.schedule.get(r.schedule) ?? null, self);
+  }
+
+  // NAT rules are deep-link targets (anchored via ``rowAnchorId("nat",
+  // key)``) but never referenced in a ``RefKind`` sense, so they only
+  // need an origin label for the back-nav pill.
+  for (const n of cfg.nat_rules) {
+    const anchorId = rowAnchorId("nat", n.key);
+    const fallback =
+      n.interface && n.target
+        ? `NAT on ${n.interface} → ${n.target}`
+        : `NAT ${n.key}`;
+    idx.originLabels.set(anchorId, n.descr ?? fallback);
   }
 
   return idx;
@@ -336,6 +370,16 @@ export function findTargetByAnchorId(
     }
   }
   return null;
+}
+
+/** Human label for a leaf row (firewall rule, NAT rule). Returns
+ *  ``null`` when the id doesn't correspond to a known leaf — callers
+ *  then fall back to parsing the id itself. */
+export function findOriginLabel(
+  index: XrefIndex,
+  anchorId: string,
+): string | null {
+  return index.originLabels.get(anchorId) ?? null;
 }
 
 /** Scroll to an anchor id and play the flash animation. Used by
