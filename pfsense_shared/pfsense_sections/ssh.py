@@ -88,28 +88,34 @@ def parse(root: Element) -> SshData | None:
         )
 
     # Pre-2.5 legacy shape: per-algorithm elements directly under
-    # ``<sshdata>``. Read both private (``ssh_rsa_key``) and public
-    # (``ssh_rsa_key_pub``) names; surface them as keyfile entries so
-    # the UI renders them uniformly.
+    # ``<sshdata>``. Only read these when the modern ``<sshkeyfile>``
+    # loop didn't already produce the same filename — otherwise a
+    # migration-in-progress snapshot that carries both shapes would
+    # emit duplicate entries.
+    seen_filenames = {k.filename for k in keys}
     for algo in ("rsa", "ecdsa", "ed25519", "dsa"):
-        priv = text(el, f"ssh_{algo}_key")
-        if priv:
-            keys.append(
-                SshHostKeyFile(
-                    filename=f"ssh_host_{algo}_key",
-                    is_private=True,
-                    xmldata=redact(f"ssh_{algo}_key", priv),
+        priv_name = f"ssh_host_{algo}_key"
+        pub_name = f"{priv_name}.pub"
+        if priv_name not in seen_filenames:
+            priv = text(el, f"ssh_{algo}_key")
+            if priv:
+                keys.append(
+                    SshHostKeyFile(
+                        filename=priv_name,
+                        is_private=True,
+                        xmldata=redact(f"ssh_{algo}_key", priv),
+                    )
                 )
-            )
-        pub = text(el, f"ssh_{algo}_key_pub")
-        if pub:
-            keys.append(
-                SshHostKeyFile(
-                    filename=f"ssh_host_{algo}_key.pub",
-                    is_private=False,
-                    xmldata=pub,
+        if pub_name not in seen_filenames:
+            pub = text(el, f"ssh_{algo}_key_pub")
+            if pub:
+                keys.append(
+                    SshHostKeyFile(
+                        filename=pub_name,
+                        is_private=False,
+                        xmldata=pub,
+                    )
                 )
-            )
 
     if not keys:
         return None

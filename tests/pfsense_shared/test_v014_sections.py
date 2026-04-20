@@ -65,24 +65,87 @@ def test_sshdata_modern_sshkeyfile_shape() -> None:
 def test_sshdata_legacy_per_algorithm_shape_still_parsed() -> None:
     """Pre-2.5 backups used per-algorithm elements directly under
     <sshdata>. Keep parsing them as a fallback so old backups still
-    surface host-key rotations."""
+    surface host-key rotations. Exercises all four algorithms so the
+    redaction-tag derivation is covered end-to-end."""
     cfg = _parse(
         """
         <pfsense>
           <sshdata>
             <ssh_rsa_key>LEAKY_LEGACY_RSA_PRIVKEY</ssh_rsa_key>
             <ssh_rsa_key_pub>ssh-rsa LEGACY... rsa-pub</ssh_rsa_key_pub>
+            <ssh_ecdsa_key>LEAKY_LEGACY_ECDSA_PRIVKEY</ssh_ecdsa_key>
+            <ssh_ecdsa_key_pub>ecdsa-sha2-nistp256 LEGACY... ecdsa-pub</ssh_ecdsa_key_pub>
+            <ssh_ed25519_key>LEAKY_LEGACY_ED25519_PRIVKEY</ssh_ed25519_key>
+            <ssh_ed25519_key_pub>ssh-ed25519 LEGACY... ed25519-pub</ssh_ed25519_key_pub>
+            <ssh_dsa_key>LEAKY_LEGACY_DSA_PRIVKEY</ssh_dsa_key>
+            <ssh_dsa_key_pub>ssh-dss LEGACY... dsa-pub</ssh_dsa_key_pub>
           </sshdata>
         </pfsense>
         """
     )
     s = cfg.sshdata
     assert s is not None
-    priv = next(k for k in s.keys if k.is_private)
-    pub = next(k for k in s.keys if not k.is_private)
-    assert priv.xmldata == REDACTED
-    assert pub.xmldata == "ssh-rsa LEGACY... rsa-pub"
-    assert "LEAKY_LEGACY_RSA_PRIVKEY" not in cfg.model_dump_json()
+    by_name = {k.filename: k for k in s.keys}
+    for algo in ("rsa", "ecdsa", "ed25519", "dsa"):
+        priv = by_name[f"ssh_host_{algo}_key"]
+        pub = by_name[f"ssh_host_{algo}_key.pub"]
+        assert priv.is_private
+        assert priv.xmldata == REDACTED
+        assert not pub.is_private
+        assert f"{algo}-pub" in (pub.xmldata or "") or "pub" in (
+            pub.xmldata or ""
+        )
+    blob = cfg.model_dump_json()
+    for leak in (
+        "LEAKY_LEGACY_RSA_PRIVKEY",
+        "LEAKY_LEGACY_ECDSA_PRIVKEY",
+        "LEAKY_LEGACY_ED25519_PRIVKEY",
+        "LEAKY_LEGACY_DSA_PRIVKEY",
+    ):
+        assert leak not in blob
+
+
+def test_sshdata_mixed_shape_dedupes_by_filename() -> None:
+    """Migration-in-progress snapshots may carry both the modern
+    ``<sshkeyfile>`` entries AND the legacy per-algorithm elements
+    for the same algorithm. The parser must prefer the modern shape
+    and not double-emit the same filename."""
+    cfg = _parse(
+        """
+        <pfsense>
+          <sshdata>
+            <sshkeyfile>
+              <filename>ssh_host_rsa_key</filename>
+              <xmldata>MODERN_RSA_PRIVKEY</xmldata>
+            </sshkeyfile>
+            <sshkeyfile>
+              <filename>ssh_host_rsa_key.pub</filename>
+              <xmldata>ssh-rsa MODERN... rsa-pub</xmldata>
+            </sshkeyfile>
+            <ssh_rsa_key>OLD_RSA_PRIVKEY_IGNORED</ssh_rsa_key>
+            <ssh_rsa_key_pub>ssh-rsa OLD... ignored</ssh_rsa_key_pub>
+            <ssh_ed25519_key>OLD_ED25519_PRIVKEY_PROMOTED</ssh_ed25519_key>
+          </sshdata>
+        </pfsense>
+        """
+    )
+    s = cfg.sshdata
+    assert s is not None
+    filenames = [k.filename for k in s.keys]
+    # Each filename appears at most once — no duplicates from the
+    # legacy fallback.
+    assert len(filenames) == len(set(filenames))
+    # Modern wins for rsa; legacy promotes ed25519 that the modern
+    # block didn't supply.
+    assert "ssh_host_rsa_key" in filenames
+    assert "ssh_host_ed25519_key" in filenames
+    blob = cfg.model_dump_json()
+    # Modern private is redacted.
+    assert "MODERN_RSA_PRIVKEY" not in blob
+    # Legacy content ignored entirely when modern wins.
+    assert "OLD_RSA_PRIVKEY_IGNORED" not in blob
+    # Legacy private for a separate algo still redacts.
+    assert "OLD_ED25519_PRIVKEY_PROMOTED" not in blob
 
 
 def test_misc_tags_parsed_no_longer_in_unrecognized() -> None:
