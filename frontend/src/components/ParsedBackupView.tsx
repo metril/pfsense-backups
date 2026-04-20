@@ -200,7 +200,7 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
     // rule pointing at alias ``RFC1918`` while the user has filtered on
     // ``"LAN"``). Using the narrowed ``data`` would produce dead chips.
     <XrefProvider data={rawData!}>
-    <XrefHistoryProvider>
+    <XrefHistoryProvider scope={`view:${backupId}`}>
     <FilterProvider query={filterQuery}>
     <CardGroupProvider scope={`view:${backupId}`}>
     <DeepLinkBridge includeHashchange />

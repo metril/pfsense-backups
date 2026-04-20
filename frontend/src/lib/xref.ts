@@ -17,7 +17,7 @@
  * table in this file.
  */
 
-import type { ParsedConfig } from "@/api/parsedTypes";
+import type { Endpoint, NatRule, ParsedConfig } from "@/api/parsedTypes";
 import type { SectionGroup } from "@/lib/sectionGroup";
 
 /** Every kind of referenceable object in a pfSense config. */
@@ -156,6 +156,45 @@ function add(
   };
   idx.byKind[kind].set(key, t);
   return t;
+}
+
+/** Render an ``Endpoint`` as the compact ``host[:port]`` form used by
+ *  the NAT origin-label fallbacks. ``any`` shows as ``any``; a
+ *  negated endpoint gets a leading ``!``. Keeps the output short
+ *  enough to fit inside the back-nav pill. */
+function endpointCompact(e: Endpoint): string {
+  const bang = e.not_ ? "!" : "";
+  if (e.any_) return `${bang}any`;
+  const host = e.network ?? e.address ?? "?";
+  const port = e.port ? `:${e.port}` : "";
+  return `${bang}${host}${port}`;
+}
+
+/** Describe a NAT rule in a single line when the operator hasn't
+ *  supplied a ``<descr>``. Format depends on the kind so the label
+ *  matches the mental model for that NAT shape:
+ *   - ``port_forward``: ``{proto} {dst} → {target}:{local_port} on {iface}``
+ *   - ``one_to_one``:   ``{src} ↔ {target} on {iface}``
+ *   - ``outbound``:     ``{src} → {target} on {iface}``
+ */
+function natFallbackLabel(n: NatRule): string {
+  const iface = n.interface ? ` on ${n.interface}` : "";
+  const proto = n.protocol ? `${n.protocol} ` : "";
+  const target = n.target ?? "?";
+  if (n.kind === "port_forward") {
+    const dst = endpointCompact(n.destination);
+    const lport = n.local_port ? `:${n.local_port}` : "";
+    return `${proto}${dst} → ${target}${lport}${iface}`;
+  }
+  if (n.kind === "one_to_one") {
+    const src = endpointCompact(n.source);
+    return `${src} ↔ ${target}${iface}`;
+  }
+  if (n.kind === "outbound") {
+    const src = endpointCompact(n.source);
+    return `${proto}${src} → ${target}${iface}`;
+  }
+  return `NAT ${n.key}`;
 }
 
 /** Build the xref index from a parsed config. Runs in O(refs). */
@@ -325,11 +364,7 @@ export function buildIndex(cfg: ParsedConfig): XrefIndex {
   // need an origin label for the back-nav pill.
   for (const n of cfg.nat_rules) {
     const anchorId = rowAnchorId("nat", n.key);
-    const fallback =
-      n.interface && n.target
-        ? `NAT on ${n.interface} → ${n.target}`
-        : `NAT ${n.key}`;
-    idx.originLabels.set(anchorId, n.descr ?? fallback);
+    idx.originLabels.set(anchorId, n.descr ?? natFallbackLabel(n));
   }
 
   return idx;
