@@ -1,9 +1,10 @@
 import { ChevronDown, ChevronRight } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/cn";
 import { Badge } from "@/components/ui/Badge";
 import { groupClasses, type SectionGroup } from "@/lib/sectionGroup";
+import { useCardGroup } from "@/components/CardGroupContext";
 
 /**
  * Section Card — the primary container for parsed-config sections.
@@ -14,7 +15,13 @@ import { groupClasses, type SectionGroup } from "@/lib/sectionGroup";
  * Body uses neutral ``bg-bg`` — we deliberately don't flood-fill: table
  * content needs native contrast to stay legible.
  *
- * The Card is collapsible (click the header to toggle). Default is open.
+ * Collapsible (click the header to toggle). Default is open. When
+ * rendered inside a ``<CardGroupProvider>`` the card also:
+ *   - snaps to the provider's ``snapTo`` state whenever the provider's
+ *     ``resetVersion`` ticks (expand-all / collapse-all); and
+ *   - persists its own open/closed state under ``cardState:{scope}:{id}``
+ *     in ``sessionStorage`` so navigating away + back preserves
+ *     per-card layout.
  */
 export function Card({
   title,
@@ -37,7 +44,64 @@ export function Card({
   children: ReactNode;
   className?: string;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
+  const groupCtx = useCardGroup();
+  const storageKey =
+    groupCtx?.scope && id ? `cardState:${groupCtx.scope}:${id}` : null;
+
+  // Seed from sessionStorage if the key is present, else fall back to
+  // ``defaultOpen``. The read happens once in the initializer so we
+  // don't flicker open → closed on mount.
+  const [open, setOpen] = useState<boolean>(() => {
+    if (storageKey) {
+      try {
+        const persisted = sessionStorage.getItem(storageKey);
+        if (persisted === "open") return true;
+        if (persisted === "closed") return false;
+      } catch {
+        // sessionStorage unavailable (private mode, SSR, etc.) — fall through.
+      }
+    }
+    return defaultOpen;
+  });
+
+  // Broadcast: when the provider's resetVersion ticks, snap to the new
+  // ``snapTo`` state. Skip the initial mount so the seed above is
+  // respected.
+  const initialMountRef = useRef(true);
+  useEffect(() => {
+    if (!groupCtx) return;
+    if (initialMountRef.current) {
+      initialMountRef.current = false;
+      return;
+    }
+    setOpen(groupCtx.snapTo);
+    if (storageKey) {
+      try {
+        sessionStorage.setItem(
+          storageKey,
+          groupCtx.snapTo ? "open" : "closed",
+        );
+      } catch {
+        // ignore
+      }
+    }
+    // Only snap when resetVersion ticks. Deliberately omitting snapTo
+    // from deps — we only want to react to a fresh broadcast, not a
+    // mid-mount context value change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupCtx?.resetVersion]);
+
+  const persistToggle = (next: boolean) => {
+    setOpen(next);
+    if (storageKey) {
+      try {
+        sessionStorage.setItem(storageKey, next ? "open" : "closed");
+      } catch {
+        // ignore
+      }
+    }
+  };
+
   const gc = groupClasses(group);
   return (
     <section
@@ -50,7 +114,7 @@ export function Card({
     >
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => persistToggle(!open)}
         aria-expanded={open}
         className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-muted/40"
       >

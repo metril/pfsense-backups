@@ -74,6 +74,16 @@ _EXACT: Final[frozenset[str]] = frozenset(
         # <tlspsk>; <tls_psk> is the normalised form some parsers use.
         "tlspsk",
         "tls_psk",
+        # SSH host private keys persisted in ``<sshdata>``. Leaking any
+        # of these would re-key the firewall's host identity across
+        # every known-host pin in the ops tooling.
+        "ssh_rsa_key",
+        "ssh_ecdsa_key",
+        "ssh_ed25519_key",
+        "ssh_dsa_key",
+        # pfSense's ``<apikeys>`` ships web-UI API tokens inline.
+        "apikey_secret",
+        "api_secret",
         # NOTE: "token" intentionally NOT in _EXACT. Bare ``<token>``
         # appears in benign contexts (e.g. third-party package revision
         # counters), so we only redact explicit API-token fields via

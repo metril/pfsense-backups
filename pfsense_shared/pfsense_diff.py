@@ -131,6 +131,20 @@ class ConfigDiff(BaseModel):
     users: SectionDiff = SectionDiff()
     groups: SectionDiff = SectionDiff()
     authservers: SectionDiff = SectionDiff()
+    # v0.14.0 — new tags now parsed.
+    sshdata: SectionDiff = SectionDiff()
+    lastchange: SectionDiff = SectionDiff()
+    theme: SectionDiff = SectionDiff()
+    diag: SectionDiff = SectionDiff()
+    dhcp_backend: SectionDiff = SectionDiff()
+    legacy_bridge: SectionDiff = SectionDiff()
+    proxyarp: SectionDiff = SectionDiff()
+    interface_groups: SectionDiff = SectionDiff()
+    ezshaper: SectionDiff = SectionDiff()
+    ovpnserver_wizard: SectionDiff = SectionDiff()
+    apikeys: SectionDiff = SectionDiff()
+    l2tp: SectionDiff = SectionDiff()
+    pppoe_servers: SectionDiff = SectionDiff()
     unrecognized_sections: SectionDiff = SectionDiff()
     # Top-level scalar meta (config_version) — tiny, so we inline it.
     config_version: SectionDiff = SectionDiff()
@@ -303,6 +317,39 @@ def diff_configs(a: ParsedConfig, b: ParsedConfig) -> ConfigDiff:
         groups=_diff_list(a.groups, b.groups, key="name", label_fn=_label_named),
         authservers=_diff_list(
             a.authservers, b.authservers, key="name", label_fn=_label_named
+        ),
+        sshdata=_diff_optional_model(a.sshdata, b.sshdata, "sshdata"),
+        lastchange=_diff_optional_model(a.lastchange, b.lastchange, "lastchange"),
+        theme=_diff_optional_model(a.theme, b.theme, "theme"),
+        diag=_diff_optional_model(a.diag, b.diag, "diag"),
+        dhcp_backend=_diff_optional_model(
+            a.dhcp_backend, b.dhcp_backend, "dhcp_backend"
+        ),
+        legacy_bridge=_diff_optional_model(
+            a.legacy_bridge, b.legacy_bridge, "legacy_bridge"
+        ),
+        proxyarp=_diff_list(
+            a.proxyarp, b.proxyarp, key="key", label_fn=_label_proxyarp
+        ),
+        interface_groups=_diff_list(
+            a.interface_groups,
+            b.interface_groups,
+            key="ifname",
+            label_fn=_label_named,
+        ),
+        ezshaper=_diff_optional_model(a.ezshaper, b.ezshaper, "ezshaper"),
+        ovpnserver_wizard=_diff_optional_model(
+            a.ovpnserver_wizard, b.ovpnserver_wizard, "ovpnserver_wizard"
+        ),
+        apikeys=_diff_list(
+            a.apikeys, b.apikeys, key="key", label_fn=_label_apikey
+        ),
+        l2tp=_diff_optional_model(a.l2tp, b.l2tp, "l2tp"),
+        pppoe_servers=_diff_list(
+            a.pppoe_servers,
+            b.pppoe_servers,
+            key="key",
+            label_fn=_label_pppoe,
         ),
         unrecognized_sections=_diff_list(
             a.unrecognized_sections,
@@ -480,6 +527,24 @@ def _label_vip(m: dict[str, Any]) -> str:
     vhid = m.get("vhid")
     vhid_str = f" vhid={vhid}" if vhid else ""
     return f"[{mode}] {iface} {subnet}{vhid_str}"
+
+
+def _label_proxyarp(m: dict[str, Any]) -> str:
+    iface = m.get("interface") or "?"
+    net = m.get("network") or "?"
+    return f"{iface} {net}"
+
+
+def _label_apikey(m: dict[str, Any]) -> str:
+    user = m.get("username") or "?"
+    descr = m.get("descr") or ""
+    return f"{user}: {descr}" if descr else str(user)
+
+
+def _label_pppoe(m: dict[str, Any]) -> str:
+    iface = m.get("interface") or "?"
+    descr = m.get("descr") or ""
+    return f"{iface} {descr}".strip()
 
 
 # ---------- building blocks -------------------------------------------------

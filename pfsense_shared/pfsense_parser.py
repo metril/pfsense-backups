@@ -25,6 +25,9 @@ from .pfsense_sections import (
     aliases as _aliases,
 )
 from .pfsense_sections import (
+    apikeys as _apikeys,
+)
+from .pfsense_sections import (
     auth as _auth,
 )
 from .pfsense_sections import (
@@ -32,6 +35,9 @@ from .pfsense_sections import (
 )
 from .pfsense_sections import (
     dyndns as _dyndns,
+)
+from .pfsense_sections import (
+    extra_vpn as _extra_vpn,
 )
 from .pfsense_sections import (
     firewall as _firewall,
@@ -44,6 +50,9 @@ from .pfsense_sections import (
 )
 from .pfsense_sections import (
     layer2 as _layer2,
+)
+from .pfsense_sections import (
+    misc as _misc,
 )
 from .pfsense_sections import (
     nat as _nat,
@@ -70,6 +79,9 @@ from .pfsense_sections import (
     services_extra as _services_extra,
 )
 from .pfsense_sections import (
+    ssh as _ssh,
+)
+from .pfsense_sections import (
     sysctl as _sysctl,
 )
 from .pfsense_sections import (
@@ -79,13 +91,26 @@ from .pfsense_sections import (
     vpn as _vpn,
 )
 from .pfsense_sections.aliases import Alias
+from .pfsense_sections.apikeys import ApiKeyEntry
 from .pfsense_sections.auth import AuthServer, Group, User
 from .pfsense_sections.cron import CronJob
 from .pfsense_sections.dyndns import DyndnsEntry
+from .pfsense_sections.extra_vpn import L2tpConfig, PppoeServerEntry
 from .pfsense_sections.firewall import FirewallRule
 from .pfsense_sections.ha import HaSync, VirtualIP
 from .pfsense_sections.interfaces import Interface
 from .pfsense_sections.layer2 import Bridge, Lagg, Ppp, QinQ, Tunnel, Vlan, WolHost
+from .pfsense_sections.misc import (
+    DhcpBackend,
+    DiagPreferences,
+    EzShaperConfig,
+    InterfaceGroup,
+    LastChange,
+    LegacyBridge,
+    OvpnServerWizard,
+    ProxyArpEntry,
+    ThemePreference,
+)
 from .pfsense_sections.nat import NatRule
 from .pfsense_sections.notifications import NotificationConfig
 from .pfsense_sections.packages import InstalledPackages
@@ -114,6 +139,7 @@ from .pfsense_sections.services_extra import (
     UpsConfig,
     VoucherRoll,
 )
+from .pfsense_sections.ssh import SshData
 from .pfsense_sections.sysctl import SysctlTunable
 from .pfsense_sections.system import SystemInfo
 from .pfsense_sections.vpn import (
@@ -186,6 +212,20 @@ _KNOWN: Final[frozenset[str]] = frozenset(
         "ups",
         "voucher",
         "ftpproxy",
+        # v0.14.0 — remaining tags operators still saw in "Other sections"
+        "sshdata",
+        "lastchange",
+        "theme",
+        "diag",
+        "dhcpbackend",
+        "bridge",  # singular legacy
+        "proxyarp",
+        "ifgroups",
+        "ezshaper",
+        "ovpnserver",
+        "apikeys",
+        "l2tp",
+        "pppoes",
     }
 )
 
@@ -263,6 +303,21 @@ class ParsedConfig(BaseModel):
     certificate_authorities: list[CertificateAuthority] = []
     certificates: list[Certificate] = []
     crls: list[CertificateRevocationList] = []
+
+    # v0.14.0 — tags operators still saw surfaced in the raw-XML panel.
+    sshdata: SshData | None = None
+    lastchange: LastChange | None = None
+    theme: ThemePreference | None = None
+    diag: DiagPreferences | None = None
+    dhcp_backend: DhcpBackend | None = None
+    legacy_bridge: LegacyBridge | None = None
+    proxyarp: list[ProxyArpEntry] = []
+    interface_groups: list[InterfaceGroup] = []
+    ezshaper: EzShaperConfig | None = None
+    ovpnserver_wizard: OvpnServerWizard | None = None
+    apikeys: list[ApiKeyEntry] = []
+    l2tp: L2tpConfig | None = None
+    pppoe_servers: list[PppoeServerEntry] = []
 
     # Parsed <installedpackages> — known packages structured; unknown
     # packages carried in ``installedpackages.unknown`` with raw XML.
@@ -345,6 +400,19 @@ def parse(xml_bytes: bytes | str) -> ParsedConfig:
         certificate_authorities=_pki.parse_cas(root),
         certificates=_pki.parse_certs(root),
         crls=_pki.parse_crls(root),
+        sshdata=_ssh.parse(root),
+        lastchange=_misc.parse_lastchange(root),
+        theme=_misc.parse_theme(root),
+        diag=_misc.parse_diag(root),
+        dhcp_backend=_misc.parse_dhcpbackend(root),
+        legacy_bridge=_misc.parse_legacy_bridge(root),
+        proxyarp=_misc.parse_proxyarp(root),
+        interface_groups=_misc.parse_ifgroups(root),
+        ezshaper=_misc.parse_ezshaper(root),
+        ovpnserver_wizard=_misc.parse_ovpnserver(root),
+        apikeys=_apikeys.parse(root),
+        l2tp=_extra_vpn.parse_l2tp(root),
+        pppoe_servers=_extra_vpn.parse_pppoes(root),
         installedpackages=_packages.parse(root),
         users=_auth.parse_users(root),
         groups=_auth.parse_groups(root),

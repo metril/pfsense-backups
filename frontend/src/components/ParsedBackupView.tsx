@@ -3,7 +3,9 @@ import { Lock } from "lucide-react";
 import { Alert } from "@/components/ui/Alert";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
+import { ExpandCollapseAll } from "@/components/ui/ExpandCollapseAll";
 import { Xref } from "@/components/ui/Xref";
+import { CardGroupProvider } from "@/components/CardGroupContext";
 import { XrefProvider } from "@/components/xref/XrefContext";
 import { QuickJump } from "@/components/xref/QuickJump";
 import { itemId } from "@/lib/xref";
@@ -78,6 +80,16 @@ import type {
   ZabbixBundle,
   Vlan,
   WolHost,
+  // v0.14.0
+  ApiKeyEntry,
+  DiagPreferences,
+  EzShaperConfig,
+  InterfaceGroup,
+  L2tpConfig,
+  OvpnServerWizard,
+  PppoeServerEntry,
+  ProxyArpEntry,
+  SshData,
 } from "@/api/parsedTypes";
 
 /** Render a server-parsed pfSense config as collapsible sections.
@@ -105,9 +117,13 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
 
   return (
     <XrefProvider data={data}>
+    <CardGroupProvider scope={`view:${backupId}`}>
     <div className="h-full overflow-auto p-4">
       <QuickJump />
       <div className="mx-auto max-w-[1400px]">
+        <div className="mb-2 flex items-center justify-end">
+          <ExpandCollapseAll />
+        </div>
         <TableOfContents cfg={data} />
         <div className="mt-4 space-y-3">
         {data.system && (
@@ -126,6 +142,36 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
             />
           </Section>
         )}
+        {data.lastchange && (
+          <Section title="Last change" count={1}>
+            <Dl
+              items={[
+                ["Time (epoch)", data.lastchange.time ?? "—"],
+                ["By", data.lastchange.username ?? "—"],
+              ]}
+            />
+          </Section>
+        )}
+        {data.theme && (
+          <Section title="Theme" count={1}>
+            <Dl items={[["webGUI theme", data.theme.name ?? "—"]]} />
+          </Section>
+        )}
+        {data.diag && (
+          <Section title="Diagnostic preferences" count={1}>
+            <DiagPanel s={data.diag} />
+          </Section>
+        )}
+        {data.sshdata && (
+          <Section title="SSH host keys" count={1}>
+            <SshDataPanel s={data.sshdata} />
+          </Section>
+        )}
+        {data.apikeys.length > 0 && (
+          <Section title="API keys" count={data.apikeys.length}>
+            <ApiKeysTable rows={data.apikeys} />
+          </Section>
+        )}
         {data.interfaces.length > 0 && (
           <Section title="Interfaces" count={data.interfaces.length}>
             <InterfacesTable rows={data.interfaces} />
@@ -139,6 +185,38 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
         {data.bridges.length > 0 && (
           <Section title="Bridges" count={data.bridges.length}>
             <BridgesTable rows={data.bridges} />
+          </Section>
+        )}
+        {data.legacy_bridge && (
+          <Section title="Bridge (legacy)" count={1}>
+            <Dl
+              items={[
+                ["Enabled", data.legacy_bridge.enabled ? "yes" : "no"],
+                [
+                  "Members",
+                  <span key="m" className="inline-flex flex-wrap gap-1">
+                    {data.legacy_bridge.interfaces.length
+                      ? data.legacy_bridge.interfaces.map((m) => (
+                          <InterfaceChip key={m} name={m} />
+                        ))
+                      : "—"}
+                  </span>,
+                ],
+              ]}
+            />
+          </Section>
+        )}
+        {data.interface_groups.length > 0 && (
+          <Section
+            title="Interface groups"
+            count={data.interface_groups.length}
+          >
+            <InterfaceGroupsTable rows={data.interface_groups} />
+          </Section>
+        )}
+        {data.proxyarp.length > 0 && (
+          <Section title="Proxy ARP" count={data.proxyarp.length}>
+            <ProxyArpTable rows={data.proxyarp} />
           </Section>
         )}
         {data.gifs.length > 0 && (
@@ -376,6 +454,36 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
             <CrlTable rows={data.crls} />
           </Section>
         )}
+        {data.ovpnserver_wizard && (
+          <Section title="OpenVPN server (wizard state)" count={1}>
+            <OvpnServerWizardPanel w={data.ovpnserver_wizard} />
+          </Section>
+        )}
+        {data.l2tp && (
+          <Section title="L2TP server" count={1}>
+            <L2tpPanel c={data.l2tp} />
+          </Section>
+        )}
+        {data.pppoe_servers.length > 0 && (
+          <Section
+            title="PPPoE servers"
+            count={data.pppoe_servers.length}
+          >
+            <PppoeServersTable rows={data.pppoe_servers} />
+          </Section>
+        )}
+        {data.ezshaper && (
+          <Section title="Shaper wizard state" count={1}>
+            <EzShaperPanel c={data.ezshaper} />
+          </Section>
+        )}
+        {data.dhcp_backend && (
+          <Section title="DHCP backend" count={1}>
+            <Dl
+              items={[["Backend", data.dhcp_backend.backend ?? "—"]]}
+            />
+          </Section>
+        )}
         {data.installedpackages && (
           <Section
             title="Installed packages"
@@ -424,6 +532,7 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
         </div>
       </div>
     </div>
+    </CardGroupProvider>
     </XrefProvider>
   );
 }
@@ -488,6 +597,20 @@ const TITLE_TO_KEY: Record<string, string> = {
   Groups: "groups",
   "External auth servers": "authservers",
   "Installed packages": "installedpackages",
+  // v0.14.0
+  "Last change": "lastchange",
+  Theme: "theme",
+  "Diagnostic preferences": "diag",
+  "SSH host keys": "sshdata",
+  "API keys": "apikeys",
+  "Bridge (legacy)": "legacy_bridge",
+  "Interface groups": "interface_groups",
+  "Proxy ARP": "proxyarp",
+  "OpenVPN server (wizard state)": "ovpnserver_wizard",
+  "L2TP server": "l2tp",
+  "PPPoE servers": "pppoe_servers",
+  "Shaper wizard state": "ezshaper",
+  "DHCP backend": "dhcp_backend",
 };
 
 /** Section shim over Card — existing call sites keep using `<Section>` so
@@ -606,6 +729,22 @@ function TableOfContents({ cfg }: { cfg: ParsedConfig }) {
     entries.push(["External auth servers", cfg.authservers.length]);
   if (cfg.sysctl.length) entries.push(["Sysctl tunables", cfg.sysctl.length]);
   if (cfg.cron.length) entries.push(["Cron jobs", cfg.cron.length]);
+  if (cfg.apikeys.length) entries.push(["API keys", cfg.apikeys.length]);
+  if (cfg.sshdata) entries.push(["SSH host keys", 1]);
+  if (cfg.interface_groups.length)
+    entries.push(["Interface groups", cfg.interface_groups.length]);
+  if (cfg.proxyarp.length) entries.push(["Proxy ARP", cfg.proxyarp.length]);
+  if (cfg.pppoe_servers.length)
+    entries.push(["PPPoE servers", cfg.pppoe_servers.length]);
+  if (cfg.l2tp) entries.push(["L2TP server", 1]);
+  if (cfg.ovpnserver_wizard)
+    entries.push(["OpenVPN server (wizard state)", 1]);
+  if (cfg.ezshaper) entries.push(["Shaper wizard state", 1]);
+  if (cfg.legacy_bridge) entries.push(["Bridge (legacy)", 1]);
+  if (cfg.diag) entries.push(["Diagnostic preferences", 1]);
+  if (cfg.theme) entries.push(["Theme", 1]);
+  if (cfg.dhcp_backend) entries.push(["DHCP backend", 1]);
+  if (cfg.lastchange) entries.push(["Last change", 1]);
   if (cfg.unrecognized_sections.length)
     entries.push([
       "Other sections (raw XML)",
@@ -2705,5 +2844,312 @@ function ZabbixPanel({ p }: { p: ZabbixBundle }) {
         </div>
       )}
     </PackageCard>
+  );
+}
+
+// ---------- v0.14.0: new section renderers --------------------------------
+
+function SshDataPanel({ s }: { s: SshData }) {
+  return (
+    <Dl
+      items={[
+        [
+          "RSA",
+          <span key="rsa" className="inline-flex items-center gap-2">
+            {s.rsa_key === "***redacted***" ? (
+              <Redacted />
+            ) : (
+              <span className="text-muted-fg">not set</span>
+            )}
+            {s.rsa_key_pub && (
+              <span className="truncate font-mono text-[11px] text-muted-fg">
+                {s.rsa_key_pub.split(" ")[0]}
+              </span>
+            )}
+          </span>,
+        ],
+        [
+          "ECDSA",
+          <span key="e" className="inline-flex items-center gap-2">
+            {s.ecdsa_key === "***redacted***" ? (
+              <Redacted />
+            ) : (
+              <span className="text-muted-fg">not set</span>
+            )}
+            {s.ecdsa_key_pub && (
+              <span className="truncate font-mono text-[11px] text-muted-fg">
+                {s.ecdsa_key_pub.split(" ")[0]}
+              </span>
+            )}
+          </span>,
+        ],
+        [
+          "Ed25519",
+          <span key="ed" className="inline-flex items-center gap-2">
+            {s.ed25519_key === "***redacted***" ? (
+              <Redacted />
+            ) : (
+              <span className="text-muted-fg">not set</span>
+            )}
+            {s.ed25519_key_pub && (
+              <span className="truncate font-mono text-[11px] text-muted-fg">
+                {s.ed25519_key_pub.split(" ")[0]}
+              </span>
+            )}
+          </span>,
+        ],
+        [
+          "DSA (legacy)",
+          <span key="d" className="inline-flex items-center gap-2">
+            {s.dsa_key === "***redacted***" ? (
+              <Redacted />
+            ) : (
+              <span className="text-muted-fg">not set</span>
+            )}
+            {s.dsa_key_pub && (
+              <span className="truncate font-mono text-[11px] text-muted-fg">
+                {s.dsa_key_pub.split(" ")[0]}
+              </span>
+            )}
+          </span>,
+        ],
+      ]}
+    />
+  );
+}
+
+function DiagPanel({ s }: { s: DiagPreferences }) {
+  return (
+    <Dl
+      items={[
+        [
+          "IPv6 NAT UI",
+          <StatusPill
+            key="i"
+            enabled={s.ipv6nat}
+            labels={{ on: "on", off: "off" }}
+          />,
+        ],
+        [
+          "Show-no-aliases",
+          <StatusPill
+            key="s"
+            enabled={s.shownoaliases}
+            labels={{ on: "on", off: "off" }}
+          />,
+        ],
+        [
+          "Show-all-passwords",
+          <StatusPill
+            key="p"
+            enabled={s.showallpasswords}
+            labels={{ on: "on", off: "off" }}
+          />,
+        ],
+      ]}
+    />
+  );
+}
+
+function ApiKeysTable({ rows }: { rows: ApiKeyEntry[] }) {
+  return (
+    <Table
+      headers={["User", "Description", "Key", "Secret"]}
+      rowKeys={rows.map((r) => r.key)}
+      rows={rows.map((r) => [
+        <Xref key="u" kind="user" k={r.username} />,
+        r.descr ?? "—",
+        <span key="k" className="font-mono text-xs">
+          {r.apikey ?? "—"}
+        </span>,
+        <RV v={r.apisecret} key="s" />,
+      ])}
+    />
+  );
+}
+
+function InterfaceGroupsTable({ rows }: { rows: InterfaceGroup[] }) {
+  return (
+    <Table
+      headers={["Group", "Members", "Description"]}
+      rowKeys={rows.map((r) => r.ifname)}
+      rowIds={rows.map((r) => itemId("interface_group", r.ifname))}
+      rows={rows.map((r) => [
+        <span key="n" className="font-mono text-xs font-medium">
+          {r.ifname}
+        </span>,
+        <span key="m" className="inline-flex flex-wrap gap-1">
+          {r.members.length
+            ? r.members.map((m) => <InterfaceChip key={m} name={m} />)
+            : "—"}
+        </span>,
+        r.descr ?? "—",
+      ])}
+    />
+  );
+}
+
+function ProxyArpTable({ rows }: { rows: ProxyArpEntry[] }) {
+  return (
+    <Table
+      headers={["Interface", "Network", "Description"]}
+      rowKeys={rows.map((r) => r.key)}
+      rows={rows.map((r) => [
+        <InterfaceChip key="i" name={r.interface} />,
+        <span key="n" className="font-mono text-xs">
+          {r.network ?? "—"}
+        </span>,
+        r.descr ?? "—",
+      ])}
+    />
+  );
+}
+
+function OvpnServerWizardPanel({ w }: { w: OvpnServerWizard }) {
+  return (
+    <Dl
+      items={[
+        ["Wizard step", w.step ?? "—"],
+        ["Description", w.description ?? "—"],
+        ["CA cert", w.cacrt ? "captured" : "—"],
+        [
+          "CA private key",
+          w.cakey === "***redacted***" ? <Redacted key="c" /> : "—",
+        ],
+        ["Server cert", w.crt ? "captured" : "—"],
+        [
+          "Server private key",
+          w.key === "***redacted***" ? <Redacted key="k" /> : "—",
+        ],
+      ]}
+    />
+  );
+}
+
+function L2tpPanel({ c }: { c: L2tpConfig }) {
+  return (
+    <div className="space-y-3">
+      <Dl
+        items={[
+          ["Mode", c.mode ?? "—"],
+          ["Interface", <InterfaceChip key="i" name={c.interface} />],
+          ["Local IP", c.localip ?? "—"],
+          ["Remote IP pool", c.remoteip ?? "—"],
+          [
+            "RADIUS",
+            c.radius_enabled ? (
+              <span className="inline-flex items-center gap-2">
+                <Badge tone="success">enabled</Badge>
+                {c.radius_server ?? ""}
+                {c.radius_secret === "***redacted***" && <Redacted />}
+              </span>
+            ) : (
+              "disabled"
+            ),
+          ],
+        ]}
+      />
+      {c.users.length > 0 && (
+        <div>
+          <div className="mb-1 text-xs uppercase text-muted-fg">
+            Users ({c.users.length})
+          </div>
+          <Table
+            headers={["Name", "IP", "Password"]}
+            rowKeys={c.users.map((u) => u.name)}
+            rows={c.users.map((u) => [
+              u.name,
+              u.ip ?? "—",
+              <RV v={u.password} key="p" />,
+            ])}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PppoeServersTable({ rows }: { rows: PppoeServerEntry[] }) {
+  return (
+    <div className="space-y-3">
+      {rows.map((p) => (
+        <div
+          key={p.key}
+          className="rounded border border-border/70 bg-muted/20 p-2"
+        >
+          <div className="mb-1 text-sm font-medium">
+            PPPoE #{p.key} <InterfaceChip name={p.interface} />{" "}
+            <span className="text-muted-fg">{p.descr ?? ""}</span>
+          </div>
+          <Dl
+            items={[
+              ["Mode", p.mode ?? "—"],
+              ["Local IP", p.localip ?? "—"],
+              ["Remote IP pool", p.remoteip ?? "—"],
+              [
+                "RADIUS",
+                p.radius_enabled ? (
+                  <span className="inline-flex items-center gap-2">
+                    <Badge tone="success">enabled</Badge>
+                    {p.radius_server ?? ""}
+                    {p.radius_secret === "***redacted***" && <Redacted />}
+                  </span>
+                ) : (
+                  "disabled"
+                ),
+              ],
+              [
+                "Users",
+                p.users.length ? `${p.users.length} account(s)` : "—",
+              ],
+            ]}
+          />
+          {p.users.length > 0 && (
+            <div className="mt-2">
+              <Table
+                headers={["Name", "IP", "Password"]}
+                rowKeys={p.users.map((u) => u.name)}
+                rows={p.users.map((u) => [
+                  u.name,
+                  u.ip ?? "—",
+                  <RV v={u.password} key="pw" />,
+                ])}
+              />
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function EzShaperPanel({ c }: { c: EzShaperConfig }) {
+  return (
+    <div className="space-y-3">
+      <Dl
+        items={[
+          ["Wizard step", c.step ?? "—"],
+          ["Interface", <InterfaceChip key="i" name={c.interface} />],
+          ["Upload", c.upload ?? "—"],
+          ["Download", c.download ?? "—"],
+        ]}
+      />
+      {c.queues.length > 0 && (
+        <div>
+          <div className="mb-1 text-xs uppercase text-muted-fg">
+            Queues ({c.queues.length})
+          </div>
+          <Table
+            headers={["Name", "Bandwidth", "Unit"]}
+            rowKeys={c.queues.map((q) => q.name)}
+            rows={c.queues.map((q) => [
+              q.name,
+              q.bandwidth ?? "—",
+              q.bandwidth_unit ?? "—",
+            ])}
+          />
+        </div>
+      )}
+    </div>
   );
 }

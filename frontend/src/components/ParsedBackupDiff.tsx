@@ -3,6 +3,8 @@ import { Lock } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import { Alert } from "@/components/ui/Alert";
+import { ExpandCollapseAll } from "@/components/ui/ExpandCollapseAll";
+import { CardGroupProvider } from "@/components/CardGroupContext";
 import { useParsedDiffPair } from "@/api/queries";
 import { cn } from "@/lib/cn";
 import {
@@ -86,6 +88,20 @@ const SECTION_LABELS: SectionLabel[] = [
   lbl("authservers", "Auth servers"),
   lbl("sysctl", "Sysctl"),
   lbl("cron", "Cron"),
+  // v0.14.0
+  lbl("lastchange", "Last change"),
+  lbl("theme", "Theme"),
+  lbl("diag", "Diagnostic prefs"),
+  lbl("dhcp_backend", "DHCP backend"),
+  lbl("legacy_bridge", "Bridge (legacy)"),
+  lbl("proxyarp", "Proxy ARP"),
+  lbl("interface_groups", "Interface groups"),
+  lbl("ezshaper", "Shaper wizard"),
+  lbl("ovpnserver_wizard", "OpenVPN wizard"),
+  lbl("apikeys", "API keys"),
+  lbl("l2tp", "L2TP server"),
+  lbl("pppoe_servers", "PPPoE servers"),
+  lbl("sshdata", "SSH host keys"),
   lbl("unrecognized_sections", "Other sections"),
 ];
 
@@ -131,32 +147,37 @@ export function ParsedBackupDiff({
   );
 
   return (
-    <div className="h-full overflow-auto p-4">
-      <div className="mx-auto max-w-[1400px]">
-        {totalChanges === 0 ? (
-          <Alert tone="ok" title="No changes">
-            No semantic changes detected across any tracked section.
-          </Alert>
-        ) : (
-          <SummaryStrip diff={data} />
-        )}
-        <div className="mt-4 space-y-3">
-          {SECTION_LABELS.map(({ key, label, group }) => {
-            const s = data[key];
-            if (!sectionHasChanges(s)) return null;
-            return (
-              <DiffSectionCard
-                key={key}
-                id={`diff-${String(key)}`}
-                label={label}
-                group={group}
-                section={s}
-              />
-            );
-          })}
+    <CardGroupProvider scope={`diff:${a}-${b}`}>
+      <div className="h-full overflow-auto p-4">
+        <div className="mx-auto max-w-[1400px]">
+          <div className="mb-2 flex items-center justify-end">
+            <ExpandCollapseAll />
+          </div>
+          {totalChanges === 0 ? (
+            <Alert tone="ok" title="No changes">
+              No semantic changes detected across any tracked section.
+            </Alert>
+          ) : (
+            <SummaryStrip diff={data} />
+          )}
+          <div className="mt-4 space-y-3">
+            {SECTION_LABELS.map(({ key, label, group }) => {
+              const s = data[key];
+              if (!sectionHasChanges(s)) return null;
+              return (
+                <DiffSectionCard
+                  key={key}
+                  id={`diff-${String(key)}`}
+                  label={label}
+                  group={group}
+                  section={s}
+                />
+              );
+            })}
+          </div>
         </div>
       </div>
-    </div>
+    </CardGroupProvider>
   );
 }
 

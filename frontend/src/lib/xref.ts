@@ -23,6 +23,7 @@ import type { SectionGroup } from "@/lib/sectionGroup";
 /** Every kind of referenceable object in a pfSense config. */
 export type RefKind =
   | "interface"
+  | "interface_group"
   | "gateway"
   | "gateway_group"
   | "schedule"
@@ -42,6 +43,7 @@ export type RefKind =
 /** The section group a target belongs to (for chip coloring). */
 const KIND_TO_GROUP: Record<RefKind, SectionGroup> = {
   interface: "networking",
+  interface_group: "networking",
   gateway: "networking",
   gateway_group: "networking",
   schedule: "security",
@@ -90,6 +92,7 @@ export function itemId(kind: RefKind, key: string): string {
 function emptyByKind(): Record<RefKind, Map<string, XrefTarget>> {
   const kinds: RefKind[] = [
     "interface",
+    "interface_group",
     "gateway",
     "gateway_group",
     "schedule",
@@ -140,6 +143,19 @@ export function buildIndex(cfg: ParsedConfig): XrefIndex {
   // name (wan / lan / opt1); ``descr`` is the friendly label.
   for (const i of cfg.interfaces) {
     add(idx, "interface", i.key, i.descr ?? i.key.toUpperCase(), i.if_);
+  }
+
+  // Interface groups — firewall rules can target these the same way
+  // they target individual interfaces, so they belong in the same
+  // jump target vocabulary.
+  for (const ig of cfg.interface_groups) {
+    add(
+      idx,
+      "interface_group",
+      ig.ifname,
+      ig.ifname,
+      ig.descr ?? ig.members.join(", "),
+    );
   }
 
   // Gateways — keyed by name; descr makes the tooltip useful.

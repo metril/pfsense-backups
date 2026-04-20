@@ -976,6 +976,123 @@ export interface RawSection {
   xml: string;
 }
 
+// ----- v0.14.0: previously-unrecognised tags now structured -----
+
+export interface SshData {
+  rsa_key: string | null;
+  rsa_key_pub: string | null;
+  ecdsa_key: string | null;
+  ecdsa_key_pub: string | null;
+  ed25519_key: string | null;
+  ed25519_key_pub: string | null;
+  dsa_key: string | null;
+  dsa_key_pub: string | null;
+}
+
+export interface LastChange {
+  time: string | null;
+  username: string | null;
+}
+
+export interface ThemePreference {
+  name: string | null;
+}
+
+export interface DiagPreferences {
+  ipv6nat: boolean;
+  shownoaliases: boolean;
+  showallpasswords: boolean;
+}
+
+export interface DhcpBackend {
+  backend: string | null;
+}
+
+export interface LegacyBridge {
+  enabled: boolean;
+  interfaces: string[];
+}
+
+export interface ProxyArpEntry {
+  key: string;
+  interface: string | null;
+  network: string | null;
+  descr: string | null;
+}
+
+export interface InterfaceGroup {
+  ifname: string;
+  members: string[];
+  descr: string | null;
+}
+
+export interface EzShaperQueue {
+  name: string;
+  bandwidth: string | null;
+  bandwidth_unit: string | null;
+}
+
+export interface EzShaperConfig {
+  step: string | null;
+  interface: string | null;
+  upload: string | null;
+  download: string | null;
+  queues: EzShaperQueue[];
+}
+
+export interface OvpnServerWizard {
+  step: string | null;
+  description: string | null;
+  cacrt: string | null;
+  cakey: string | null;
+  crt: string | null;
+  key: string | null;
+}
+
+export interface ApiKeyEntry {
+  key: string;
+  username: string | null;
+  descr: string | null;
+  apikey: string | null;
+  apisecret: string | null;
+}
+
+export interface L2tpUser {
+  name: string;
+  ip: string | null;
+  password: string | null;
+}
+
+export interface L2tpConfig {
+  mode: string | null;
+  interface: string | null;
+  localip: string | null;
+  remoteip: string | null;
+  radius_enabled: boolean;
+  radius_server: string | null;
+  radius_secret: string | null;
+  users: L2tpUser[];
+}
+
+export interface PppoeUser {
+  name: string;
+  ip: string | null;
+  password: string | null;
+}
+
+export interface PppoeServerEntry {
+  key: string;
+  mode: string | null;
+  interface: string | null;
+  localip: string | null;
+  remoteip: string | null;
+  descr: string | null;
+  radius_enabled: boolean;
+  radius_server: string | null;
+  radius_secret: string | null;
+  users: PppoeUser[];
+}
+
 export interface ParsedConfig {
   config_version: string | null;
   system: SystemInfo | null;
@@ -1030,6 +1147,20 @@ export interface ParsedConfig {
   users: User[];
   groups: Group[];
   authservers: AuthServer[];
+  // v0.14.0 additions
+  sshdata: SshData | null;
+  lastchange: LastChange | null;
+  theme: ThemePreference | null;
+  diag: DiagPreferences | null;
+  dhcp_backend: DhcpBackend | null;
+  legacy_bridge: LegacyBridge | null;
+  proxyarp: ProxyArpEntry[];
+  interface_groups: InterfaceGroup[];
+  ezshaper: EzShaperConfig | null;
+  ovpnserver_wizard: OvpnServerWizard | null;
+  apikeys: ApiKeyEntry[];
+  l2tp: L2tpConfig | null;
+  pppoe_servers: PppoeServerEntry[];
   installedpackages: InstalledPackages | null;
   unrecognized_sections: RawSection[];
 }
@@ -1117,6 +1248,20 @@ export interface ConfigDiff {
   users: SectionDiff;
   groups: SectionDiff;
   authservers: SectionDiff;
+  // v0.14.0 additions
+  sshdata: SectionDiff;
+  lastchange: SectionDiff;
+  theme: SectionDiff;
+  diag: SectionDiff;
+  dhcp_backend: SectionDiff;
+  legacy_bridge: SectionDiff;
+  proxyarp: SectionDiff;
+  interface_groups: SectionDiff;
+  ezshaper: SectionDiff;
+  ovpnserver_wizard: SectionDiff;
+  apikeys: SectionDiff;
+  l2tp: SectionDiff;
+  pppoe_servers: SectionDiff;
   unrecognized_sections: SectionDiff;
   config_version: SectionDiff;
 }

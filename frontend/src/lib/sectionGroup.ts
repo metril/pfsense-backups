@@ -30,6 +30,12 @@ const GROUP_MEMBERS: Record<Exclude<SectionGroup, "neutral">, string[]> = {
     // system group — operators reading the diff expect a pfSense
     // config-version bump next to revision changes.
     "config_version",
+    // v0.14.0 — cosmetic / system-local tags
+    "lastchange",
+    "theme",
+    "diag",
+    "sshdata",
+    "apikeys",
   ],
   networking: [
     "interfaces",
@@ -48,6 +54,10 @@ const GROUP_MEMBERS: Record<Exclude<SectionGroup, "neutral">, string[]> = {
     "hasync",
     "igmpproxy_entries",
     "radvd_interfaces",
+    // v0.14.0
+    "legacy_bridge",
+    "proxyarp",
+    "interface_groups",
   ],
   security: ["firewall_rules", "nat_rules", "aliases", "schedules"],
   services: [
@@ -66,6 +76,9 @@ const GROUP_MEMBERS: Record<Exclude<SectionGroup, "neutral">, string[]> = {
     "ups",
     "voucher_rolls",
     "ftpproxy",
+    // v0.14.0
+    "dhcp_backend",
+    "ezshaper",
   ],
   "vpn-pki": [
     "openvpn_servers",
@@ -80,6 +93,10 @@ const GROUP_MEMBERS: Record<Exclude<SectionGroup, "neutral">, string[]> = {
     "users",
     "groups",
     "authservers",
+    // v0.14.0 — legacy wizard state + L2TP / PPPoE servers
+    "ovpnserver_wizard",
+    "l2tp",
+    "pppoe_servers",
   ],
   packages: ["installedpackages"],
 };
