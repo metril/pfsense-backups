@@ -58,6 +58,25 @@ class FrrOspfConfig(BaseModel):
     interfaces: list[FrrOspfInterface] = []
 
 
+class FrrOspfdInterface(BaseModel):
+    """Single row of ``<frrospfdinterfaces>`` — OSPFv3 (IPv6) per-
+    interface configuration. Mirrors ``FrrOspfInterface`` for IPv4;
+    any MD5 / BGP-AO key fields are redacted via the existing
+    ``ospf_password`` redaction tag."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    interface: str
+    area: str | None = None
+    cost: str | None = None
+    priority: str | None = None
+    hello_interval: str | None = None
+    dead_interval: str | None = None
+    # Redacted when the interface uses MD5 auth (rare for OSPFv3 —
+    # IPsec AH is more typical — but some builds surface a key here).
+    md5_password: str | None = None
+
+
 class FrrConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -74,6 +93,11 @@ class FrrConfig(BaseModel):
     ospfd_interfaces_present: bool = False
     global_acls_present: bool = False
     global_prefixes_present: bool = False
+    # v0.16.1: structured OSPFv3 interface rows so any MD5 auth keys
+    # pass through the redaction engine instead of being silently
+    # dropped. Empty list when no interface rows exist OR when the
+    # tag is absent entirely.
+    ospfd_interfaces: list[FrrOspfdInterface] = []
 
 
 CONSUMED_TAGS = frozenset(
@@ -179,6 +203,43 @@ def _parse_ospf(ip: Element) -> FrrOspfConfig | None:
     )
 
 
+def _parse_ospfd_interfaces(
+    ifaces_el: Element | None,
+) -> list[FrrOspfdInterface]:
+    """OSPFv3 per-interface rows. Same row shape as the OSPFv2
+    parser; we pipe any MD5 key field through redact() defensively
+    even though OSPFv3 typically uses IPsec AH instead."""
+    if ifaces_el is None:
+        return []
+    out: list[FrrOspfdInterface] = []
+    rows = children(ifaces_el, "item")
+    if not rows:
+        rows = children(ifaces_el, "config")
+    for i in rows:
+        iface = text(i, "interface") or text(i, "interfacename")
+        if not iface:
+            continue
+        out.append(
+            FrrOspfdInterface(
+                interface=iface,
+                area=text(i, "area"),
+                cost=text(i, "cost"),
+                priority=text(i, "priority"),
+                hello_interval=text(i, "hello_interval")
+                or text(i, "hellointerval"),
+                dead_interval=text(i, "dead_interval")
+                or text(i, "deadinterval"),
+                md5_password=redact(
+                    "ospf_password",
+                    text(i, "md5_password")
+                    or text(i, "md5password")
+                    or text(i, "ospf6authkey"),
+                ),
+            )
+        )
+    return out
+
+
 def parse(ip: Element) -> FrrConfig | None:
     global_el = ip.find("frr")
     if global_el is None:
@@ -187,7 +248,8 @@ def parse(ip: Element) -> FrrConfig | None:
     ospf = _parse_ospf(ip)
     ospfd = ip.find("frrospfd")
     ospfd_areas = ip.find("frrospfdareas")
-    ospfd_ifaces = ip.find("frrospfdinterfaces")
+    ospfd_ifaces_el = ip.find("frrospfdinterfaces")
+    ospfd_ifaces = _parse_ospfd_interfaces(ospfd_ifaces_el)
     global_acls = ip.find("frrglobalacls")
     global_prefixes = ip.find("frrglobalprefixes")
     if all(
@@ -198,7 +260,7 @@ def parse(ip: Element) -> FrrConfig | None:
             ospf,
             ospfd,
             ospfd_areas,
-            ospfd_ifaces,
+            ospfd_ifaces_el,
             global_acls,
             global_prefixes,
         )
@@ -213,7 +275,8 @@ def parse(ip: Element) -> FrrConfig | None:
         ospf=ospf,
         ospfd_present=ospfd is not None,
         ospfd_areas_present=ospfd_areas is not None,
-        ospfd_interfaces_present=ospfd_ifaces is not None,
+        ospfd_interfaces_present=ospfd_ifaces_el is not None,
         global_acls_present=global_acls is not None,
         global_prefixes_present=global_prefixes is not None,
+        ospfd_interfaces=ospfd_ifaces,
     )

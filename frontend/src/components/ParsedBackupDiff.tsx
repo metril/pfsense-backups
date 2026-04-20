@@ -542,7 +542,12 @@ function SummaryStrip({
 
 /** Two-up wrapper for the diff page. Mirrors ``ViewerLayout`` —
  *  sticky sidebar with filter + expand/collapse + summary strip above
- *  1400px, stacked layout below. */
+ *  1700px, stacked layout below. The sidebar is 16rem here (vs the
+ *  viewer's 15rem) because the diff's vertical summary strip chips
+ *  carry colored delta counts (e.g. ``+3 ~5 −2``) on top of the
+ *  section title — the extra rem keeps those from wrapping. Breakpoint
+ *  crossover math: viewport − 16rem sidebar − 1.5rem gap − 2rem
+ *  padding = narrow-mode content (1368px) at ~1716px ≈ 1700px. */
 function DiffLayout({
   diff,
   filterQuery,
@@ -593,7 +598,7 @@ function DiffLayout({
   return (
     <div className="h-full overflow-auto p-4">
       <div className="mx-auto max-w-[1400px]">
-        <div className="mb-2 flex items-center justify-between gap-3">
+        <div className="mb-2 flex items-start justify-between gap-3">
           <FilterBar
             value={filterQuery}
             onChange={setFilterQuery}

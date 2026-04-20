@@ -671,6 +671,8 @@ export interface PfBlockerNgConfig {
   blacklist_present: boolean;
   safesearch_present: boolean;
   reputation_present: boolean;
+  dnsbl_safesearch_present: boolean;
+  global_present: boolean;
 }
 
 export interface HaProxyFrontend {
@@ -811,12 +813,25 @@ export interface SquidGuardConfig {
   acls: SquidGuardAcl[];
 }
 
+export interface SquidAuthConfig {
+  auth_method: string | null;
+  ldap_server: string | null;
+  ldap_port: string | null;
+  ldap_binddn: string | null;
+  ldap_pass: string | null;
+  ldap_search_base: string | null;
+  ldap_filter: string | null;
+  radius_server: string | null;
+  radius_port: string | null;
+  radius_secret: string | null;
+}
+
 export interface SquidBundle {
   squid: SquidConfig | null;
   squidguard: SquidGuardConfig | null;
   cache_present: boolean;
   remote_present: boolean;
-  auth_present: boolean;
+  auth: SquidAuthConfig | null;
   antivirus_present: boolean;
 }
 
@@ -896,6 +911,16 @@ export interface FrrOspfConfig {
   interfaces: FrrOspfInterface[];
 }
 
+export interface FrrOspfdInterface {
+  interface: string;
+  area: string | null;
+  cost: string | null;
+  priority: string | null;
+  hello_interval: string | null;
+  dead_interval: string | null;
+  md5_password: string | null;
+}
+
 export interface FrrConfig {
   enabled: boolean;
   bgp: FrrBgpConfig | null;
@@ -905,6 +930,7 @@ export interface FrrConfig {
   ospfd_interfaces_present: boolean;
   global_acls_present: boolean;
   global_prefixes_present: boolean;
+  ospfd_interfaces: FrrOspfdInterface[];
 }
 
 export interface ZabbixAgentConfig {

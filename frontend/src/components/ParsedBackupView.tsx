@@ -590,10 +590,15 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
   );
 }
 
-/** Two-up wrapper: at ≥1400px renders the filter + ToC as a sticky
+/** Two-up wrapper: at ≥1700px renders the filter + ToC as a sticky
  *  left sidebar with scrollable main content on the right; below
  *  that, falls back to the v0.14 horizontal chip strip + full-width
- *  content. Layout only — no section-rendering logic lives here. */
+ *  content. The 1700px crossover is the point at which sidebar-
+ *  mode content (viewport − 15rem sidebar − 1.5rem gap − 2rem
+ *  padding) first equals narrow-mode content (capped at 1368px) —
+ *  keep the breakpoint in sync with the sidebar-width change in the
+ *  grid template below. Layout only — no section-rendering logic
+ *  lives here. */
 function ViewerLayout({
   cfg,
   filterQuery,
@@ -650,7 +655,7 @@ function ViewerLayout({
     <div className="h-full overflow-auto p-4">
       <QuickJump />
       <div className="mx-auto max-w-[1400px]">
-        <div className="mb-2 flex items-center justify-between gap-3">
+        <div className="mb-2 flex items-start justify-between gap-3">
           <FilterBar
             value={filterQuery}
             onChange={setFilterQuery}
@@ -2356,6 +2361,8 @@ function PfBlockerNgPanel({ p }: { p: PfBlockerNgConfig }) {
     p.blacklist_present && "Blacklist",
     p.safesearch_present && "SafeSearch",
     p.reputation_present && "Reputation",
+    p.dnsbl_safesearch_present && "DNSBL SafeSearch",
+    p.global_present && "Global",
   ].filter((x): x is string => Boolean(x));
   return (
     <PackageCard title="pfBlockerNG">
@@ -2979,11 +2986,15 @@ function SquidPanel({ p }: { p: SquidBundle }) {
               ],
               [
                 "Allowed interfaces",
-                <span key="ai" className="flex flex-wrap gap-1">
-                  {p.squid.allow_interface.map((i) => (
-                    <InterfaceChip key={i} name={i} />
-                  ))}
-                </span>,
+                p.squid.allow_interface.length > 0 ? (
+                  <span key="ai" className="flex flex-wrap gap-1">
+                    {p.squid.allow_interface.map((i) => (
+                      <InterfaceChip key={i} name={i} />
+                    ))}
+                  </span>
+                ) : (
+                  "—"
+                ),
               ],
               ["Auth method", p.squid.auth_method ?? "none"],
               ["LDAP server", p.squid.ldap_server ?? "—"],
@@ -3030,15 +3041,36 @@ function SquidPanel({ p }: { p: SquidBundle }) {
           />
         </div>
       )}
-      {(p.cache_present ||
-        p.remote_present ||
-        p.auth_present ||
-        p.antivirus_present) && (
+      {p.auth && (
+        <div className="mt-2">
+          <div className="mb-1 text-xs uppercase text-muted-fg">
+            Authentication
+          </div>
+          <Dl
+            items={[
+              ["Method", p.auth.auth_method ?? "—"],
+              ["LDAP server", p.auth.ldap_server ?? "—"],
+              ["LDAP bind DN", p.auth.ldap_binddn ?? "—"],
+              [
+                "LDAP bind password",
+                p.auth.ldap_pass === "***redacted***" ? <Redacted /> : "—",
+              ],
+              ["LDAP base", p.auth.ldap_search_base ?? "—"],
+              ["LDAP filter", p.auth.ldap_filter ?? "—"],
+              ["RADIUS server", p.auth.radius_server ?? "—"],
+              [
+                "RADIUS secret",
+                p.auth.radius_secret === "***redacted***" ? <Redacted /> : "—",
+              ],
+            ]}
+          />
+        </div>
+      )}
+      {(p.cache_present || p.remote_present || p.antivirus_present) && (
         <div className="mt-2 flex flex-wrap gap-1 text-xs">
           <span className="text-muted-fg">Sub-features configured:</span>
           {p.cache_present && <Badge tone="muted">cache</Badge>}
           {p.remote_present && <Badge tone="muted">remote ACL</Badge>}
-          {p.auth_present && <Badge tone="muted">auth</Badge>}
           {p.antivirus_present && <Badge tone="muted">antivirus</Badge>}
         </div>
       )}
@@ -3177,6 +3209,29 @@ function FrrPanel({ p }: { p: FrrConfig }) {
               ])}
             />
           )}
+        </div>
+      )}
+      {p.ospfd_interfaces.length > 0 && (
+        <div className="mt-2">
+          <div className="mb-1 text-xs uppercase text-muted-fg">
+            OSPFv3 interfaces
+          </div>
+          <Table
+            headers={[
+              "Interface",
+              "Area",
+              "Cost",
+              "Hello / Dead",
+              "MD5",
+            ]}
+            rows={p.ospfd_interfaces.map((i) => [
+              <InterfaceChip key="i" name={i.interface} />,
+              i.area ?? "—",
+              i.cost ?? "—",
+              `${i.hello_interval ?? "?"} / ${i.dead_interval ?? "?"}`,
+              i.md5_password === "***redacted***" ? <Redacted /> : "—",
+            ])}
+          />
         </div>
       )}
       {(p.ospfd_present ||

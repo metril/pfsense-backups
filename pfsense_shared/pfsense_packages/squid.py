@@ -68,6 +68,31 @@ class SquidGuardConfig(BaseModel):
     acls: list[SquidGuardAcl] = []
 
 
+class SquidAuthConfig(BaseModel):
+    """Auth configuration from ``<squidauth>`` — the "Authentication"
+    tab of the Squid package. Separate from ``<squid>``, which carries
+    the cache daemon's own LDAP bind credentials for the HTTP proxy.
+    This block covers the secondary auth method (LDAP bind or RADIUS
+    shared secret used by the per-user auth helper).
+
+    ``ldap_pass`` and ``radius_secret`` are credentials — routed
+    through the redaction engine (``ldap_bindpw`` / ``radius_secret``
+    tags, both already in ``_EXACT``)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    auth_method: str | None = None
+    ldap_server: str | None = None
+    ldap_port: str | None = None
+    ldap_binddn: str | None = None
+    ldap_pass: str | None = None  # redacted
+    ldap_search_base: str | None = None
+    ldap_filter: str | None = None
+    radius_server: str | None = None
+    radius_port: str | None = None
+    radius_secret: str | None = None  # redacted
+
+
 class SquidBundle(BaseModel):
     """Combined output — Squid + squidGuard sit under ``installedpackages.squid``
     in the ParsedConfig for convenience."""
@@ -78,13 +103,13 @@ class SquidBundle(BaseModel):
     squidguard: SquidGuardConfig | None = None
     # v0.16.0: sibling sub-package tags. The pfSense Squid package
     # stores cache tuning, remote-ACL, auth, and antivirus settings
-    # under their own top-level tags next to ``<squid>``. We surface
-    # presence so operators see the sub-feature is configured
-    # without stranding the tags in "Other packages"; structural
-    # details stay available via the raw-XML fallback.
+    # under their own top-level tags next to ``<squid>``. Presence
+    # booleans surface which sub-feature is configured;
+    # ``auth`` is structured because it carries credentials that
+    # must be routed through the redaction engine (v0.16.1).
     cache_present: bool = False
     remote_present: bool = False
-    auth_present: bool = False
+    auth: SquidAuthConfig | None = None
     antivirus_present: bool = False
 
 
@@ -186,15 +211,44 @@ def _parse_squidguard(el: Element | None) -> SquidGuardConfig | None:
     )
 
 
+def _parse_squidauth(el: Element | None) -> SquidAuthConfig | None:
+    """``<squidauth>`` is the Authentication tab's backing store. It
+    can carry either inline fields or a single ``<item>`` wrapper
+    (package-version dependent). Credentials are always redacted."""
+    if el is None:
+        return None
+    # Unwrap ``<item>`` if present. Using an explicit ``is not None``
+    # check — ``find() or el`` would trigger a future-removed truth
+    # test on Element, which Python warns about.
+    item_el = el.find("item")
+    item = item_el if item_el is not None else el
+    return SquidAuthConfig(
+        auth_method=text(item, "auth_method"),
+        ldap_server=text(item, "ldap_server"),
+        ldap_port=text(item, "ldap_port"),
+        ldap_binddn=text(item, "ldap_user") or text(item, "ldap_binddn"),
+        ldap_pass=redact(
+            "ldap_bindpw", text(item, "ldap_pass") or text(item, "ldap_bindpw")
+        ),
+        ldap_search_base=text(item, "ldap_basedomain")
+        or text(item, "ldap_search_base"),
+        ldap_filter=text(item, "ldap_userattribute")
+        or text(item, "ldap_filter"),
+        radius_server=text(item, "radius_server"),
+        radius_port=text(item, "radius_port"),
+        radius_secret=redact("radius_secret", text(item, "radius_secret")),
+    )
+
+
 def parse(ip: Element) -> SquidBundle | None:
     sq = _parse_squid(ip.find("squid"))
     sg = _parse_squidguard(ip.find("squidguard"))
     cache = ip.find("squidcache")
     remote = ip.find("squidremote")
-    auth = ip.find("squidauth")
+    auth = _parse_squidauth(ip.find("squidauth"))
     antivirus = ip.find("squidantivirus")
-    if sq is None and sg is None and all(
-        x is None for x in (cache, remote, auth, antivirus)
+    if sq is None and sg is None and auth is None and all(
+        x is None for x in (cache, remote, antivirus)
     ):
         return None
     return SquidBundle(
@@ -202,6 +256,6 @@ def parse(ip: Element) -> SquidBundle | None:
         squidguard=sg,
         cache_present=cache is not None,
         remote_present=remote is not None,
-        auth_present=auth is not None,
+        auth=auth,
         antivirus_present=antivirus is not None,
     )

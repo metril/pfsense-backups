@@ -80,6 +80,12 @@ class PfBlockerNgConfig(BaseModel):
     blacklist_present: bool = False
     safesearch_present: bool = False
     reputation_present: bool = False
+    # v0.16.1: these two tags pre-date v0.16.0 in CONSUMED_TAGS but
+    # lacked a presence signal — they were silently swallowed when
+    # present. Surfaced now so operators see the DNSBL SafeSearch
+    # sub-tab and Global config page aren't ignored.
+    dnsbl_safesearch_present: bool = False
+    global_present: bool = False
 
 
 # Tags this parser consumes out of <installedpackages>. Any tag in this
@@ -138,6 +144,8 @@ def parse(ip: Element) -> PfBlockerNgConfig | None:
     blacklist = ip.find("pfblockerngblacklist")
     safesearch = ip.find("pfblockerngsafesearch")
     reputation = ip.find("pfblockerngreputation")
+    dnsbl_safesearch = ip.find("pfblockerngdnsblsafesearch")
+    pbn_global = ip.find("pfblockerngglobal")
 
     if all(
         x is None
@@ -152,6 +160,8 @@ def parse(ip: Element) -> PfBlockerNgConfig | None:
             blacklist,
             safesearch,
             reputation,
+            dnsbl_safesearch,
+            pbn_global,
         )
     ):
         return None
@@ -160,6 +170,13 @@ def parse(ip: Element) -> PfBlockerNgConfig | None:
     feeds.extend(_collect_feeds(listsv4, "config", "row"))
     feeds.extend(_collect_feeds(listsv6, "config", "row"))
     feeds.extend(_collect_feeds(dnsbl_feeds, "config", "row"))
+    # v0.16.1 — some operator configs store ET Pro / Snort VRT feeds
+    # under the Reputation and Blacklist sub-tabs instead of the main
+    # v4/v6/DNSBL list tags. If those tabs emit ``<config><row>`` rows
+    # in the same shape, walk them too so their subscriber credentials
+    # flow through ``_scrub_feed_url``. A missing container is a no-op.
+    feeds.extend(_collect_feeds(reputation, "config", "row"))
+    feeds.extend(_collect_feeds(blacklist, "config", "row"))
 
     # MaxMind key redaction: we report "configured" / "not configured"
     # rather than carrying the key through the parser at all.
@@ -184,4 +201,6 @@ def parse(ip: Element) -> PfBlockerNgConfig | None:
         blacklist_present=blacklist is not None,
         safesearch_present=safesearch is not None,
         reputation_present=reputation is not None,
+        dnsbl_safesearch_present=dnsbl_safesearch is not None,
+        global_present=pbn_global is not None,
     )
