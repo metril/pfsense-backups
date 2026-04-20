@@ -668,7 +668,7 @@ function ViewerLayout({
                 sectionCounter={sectionCounter}
                 placeholder="Filter (f)"
               />
-              <ExpandCollapseAll />
+              <ExpandCollapseAll orientation="vertical" />
             </div>
             <TableOfContents cfg={cfg} orientation="vertical" activeId={activeId} />
           </aside>

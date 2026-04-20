@@ -116,12 +116,18 @@ export function useCardGroupActions(): {
   snapTarget: (cardId: string) => void;
 } | null {
   const ctx = useContext(Ctx);
+  // Hoisting each callback into its own local lets the memo deps
+  // reference concrete identifiers — ESLint's exhaustive-deps rule
+  // can't statically reason about ``ctx?.x`` and would otherwise
+  // insist on depending on ``ctx`` itself, which defeats the
+  // granularity (the provider re-memoises on state changes like
+  // ``resetVersion`` ticks, but the callbacks stay stable via
+  // ``useCallback([])``).
+  const expandAll = ctx?.expandAll;
+  const collapseAll = ctx?.collapseAll;
+  const snapTarget = ctx?.snapTarget;
   return useMemo(() => {
-    if (!ctx) return null;
-    return {
-      expandAll: ctx.expandAll,
-      collapseAll: ctx.collapseAll,
-      snapTarget: ctx.snapTarget,
-    };
-  }, [ctx?.expandAll, ctx?.collapseAll, ctx?.snapTarget]);
+    if (!expandAll || !collapseAll || !snapTarget) return null;
+    return { expandAll, collapseAll, snapTarget };
+  }, [expandAll, collapseAll, snapTarget]);
 }

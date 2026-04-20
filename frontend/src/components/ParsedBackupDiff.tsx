@@ -581,7 +581,7 @@ function DiffLayout({
                 sectionCounter={sectionCounter}
                 placeholder="Filter (f)"
               />
-              <ExpandCollapseAll />
+              <ExpandCollapseAll orientation="vertical" />
             </div>
             <SummaryStrip diff={diff} orientation="vertical" activeId={activeId} />
           </aside>

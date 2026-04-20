@@ -18,8 +18,14 @@ import { cn } from "@/lib/cn";
  */
 export function ExpandCollapseAll({
   className,
+  orientation = "horizontal",
 }: {
   className?: string;
+  /** ``"vertical"`` stacks the buttons full-width so they fit a
+   *  narrow sticky sidebar (the 15rem ToC column) without the
+   *  ``Expand all`` / ``Collapse all`` label wrapping onto two
+   *  lines. Default stays horizontal for the wide header strip. */
+  orientation?: "horizontal" | "vertical";
 }) {
   const actions = useCardGroupActions();
 
@@ -58,8 +64,17 @@ export function ExpandCollapseAll({
 
   if (!actions) return null;
 
+  const isVertical = orientation === "vertical";
+  const buttonClass = isVertical ? "w-full justify-start" : undefined;
+
   return (
-    <div className={cn("flex items-center gap-1", className)}>
+    <div
+      className={cn(
+        "flex gap-1",
+        isVertical ? "flex-col items-stretch" : "items-center",
+        className,
+      )}
+    >
       <Tooltip
         content={
           <span className="inline-flex items-center gap-1">
@@ -70,6 +85,7 @@ export function ExpandCollapseAll({
         <Button
           variant="secondary"
           size="sm"
+          className={buttonClass}
           onClick={actions.expandAll}
           aria-label="Expand all sections"
         >
@@ -87,6 +103,7 @@ export function ExpandCollapseAll({
         <Button
           variant="secondary"
           size="sm"
+          className={buttonClass}
           onClick={actions.collapseAll}
           aria-label="Collapse all sections"
         >
