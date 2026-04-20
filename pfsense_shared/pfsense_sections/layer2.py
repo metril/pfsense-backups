@@ -88,6 +88,20 @@ class WolHost(BaseModel):
     descr: str | None = None
 
 
+class Lagg(BaseModel):
+    """LAGG (link aggregation) interface — LACP or failover bond."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Stable key: the synthesized laggN device.
+    laggif: str
+    members: list[str] = []
+    proto: str | None = None  # lacp | failover | loadbalance | roundrobin | none
+    lacptimeout: str | None = None
+    lacp_fast_timeout: bool = False
+    descr: str | None = None
+
+
 def parse_vlans(root: Element) -> list[Vlan]:
     el = root.find("vlans")
     if el is None:
@@ -201,6 +215,29 @@ def parse_qinqs(root: Element) -> list[QinQ]:
                 tag=tag,
                 members=members_raw.split() if members_raw else [],
                 descr=text(q, "descr"),
+            )
+        )
+    return out
+
+
+def parse_laggs(root: Element) -> list[Lagg]:
+    el = root.find("laggs")
+    if el is None:
+        return []
+    out: list[Lagg] = []
+    for la in children(el, "lagg"):
+        name = text(la, "laggif")
+        if not name:
+            continue
+        members_raw = text(la, "members") or ""
+        out.append(
+            Lagg(
+                laggif=name,
+                members=members_raw.split(",") if members_raw else [],
+                proto=text(la, "proto"),
+                lacptimeout=text(la, "lacptimeout"),
+                lacp_fast_timeout=bool_flag(la, "lacp_fast_timeout"),
+                descr=text(la, "descr"),
             )
         )
     return out

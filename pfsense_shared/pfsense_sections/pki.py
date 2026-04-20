@@ -46,6 +46,29 @@ class Certificate(BaseModel):
     metadata: CertMetadata | None = None
 
 
+class CertificateRevocationList(BaseModel):
+    """pfSense Certificate Revocation List — ties to a CA via ``caref``.
+
+    The UI surface is small (method=internal/existing, CRL descr, list
+    of revoked cert refids with a reason code) but it completes the PKI
+    review story: ops folks spot "cert X was revoked in yesterday's
+    backup but not today's" which would otherwise be invisible.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    refid: str
+    descr: str | None = None
+    caref: str | None = None  # which CA this CRL belongs to
+    method: str | None = None  # "internal" | "existing" | "imported"
+    lifetime: str | None = None
+    serial: str | None = None
+    # Revoked certs (by cert refid) + reason codes.
+    revoked_cert_refids: list[str] = []
+    # Raw CRL PEM text or base64. We don't attempt to parse it.
+    text: str | None = None
+
+
 def parse_cas(root: Element) -> list[CertificateAuthority]:
     out: list[CertificateAuthority] = []
     for ca in children(root, "ca"):
@@ -61,6 +84,32 @@ def parse_cas(root: Element) -> list[CertificateAuthority]:
                 prv=redact("prv", text(ca, "prv")),
                 serial=text(ca, "serial"),
                 metadata=decode_x509(crt),
+            )
+        )
+    return out
+
+
+def parse_crls(root: Element) -> list[CertificateRevocationList]:
+    out: list[CertificateRevocationList] = []
+    for crl in children(root, "crl"):
+        refid = text(crl, "refid")
+        if not refid:
+            continue
+        revoked: list[str] = []
+        for cert in children(crl, "cert"):
+            rr = text(cert, "refid")
+            if rr:
+                revoked.append(rr)
+        out.append(
+            CertificateRevocationList(
+                refid=refid,
+                descr=text(crl, "descr"),
+                caref=text(crl, "caref"),
+                method=text(crl, "method"),
+                lifetime=text(crl, "lifetime"),
+                serial=text(crl, "serial"),
+                revoked_cert_refids=revoked,
+                text=text(crl, "text"),
             )
         )
     return out

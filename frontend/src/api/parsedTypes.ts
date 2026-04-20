@@ -127,6 +127,15 @@ export interface WolHost {
   descr: string | null;
 }
 
+export interface Lagg {
+  laggif: string;
+  members: string[];
+  proto: string | null;
+  lacptimeout: string | null;
+  lacp_fast_timeout: boolean;
+  descr: string | null;
+}
+
 export interface VirtualIP {
   key: string;
   mode: string | null;
@@ -389,6 +398,112 @@ export interface CaptivePortalZone {
   radius_secret: string | null;
 }
 
+export interface DyndnsEntry {
+  key: string;
+  type: string | null;
+  interface: string | null;
+  host: string | null;
+  domainname: string | null;
+  mx: string | null;
+  descr: string | null;
+  enabled: boolean;
+  wildcard: boolean;
+  force_update: boolean;
+  verboselog: boolean;
+  username: string | null;
+  password: string | null;
+}
+
+export interface SmtpNotifier {
+  enabled: boolean;
+  ipaddress: string | null;
+  port: string | null;
+  timeout: string | null;
+  ssl: boolean;
+  sslvalidate: boolean;
+  fromaddress: string | null;
+  notifyemailaddress: string | null;
+  authentication_mechanism: string | null;
+  username: string | null;
+  password: string | null;
+}
+
+export interface PushoverNotifier {
+  enabled: boolean;
+  api_key: string | null;
+  user_key: string | null;
+}
+
+export interface GrowlNotifier {
+  enabled: boolean;
+  name: string | null;
+  notification_name: string | null;
+  ipaddress: string | null;
+  password: string | null;
+}
+
+export interface TelegramNotifier {
+  enabled: boolean;
+  chat_id: string | null;
+  api_token: string | null;
+}
+
+export interface SlackNotifier {
+  enabled: boolean;
+  webhook_url: string | null;
+}
+
+export interface NotificationConfig {
+  smtp: SmtpNotifier | null;
+  pushover: PushoverNotifier | null;
+  growl: GrowlNotifier | null;
+  telegram: TelegramNotifier | null;
+  slack: SlackNotifier | null;
+}
+
+export interface IgmpProxyEntry {
+  key: string;
+  type: string | null;
+  ifname: string | null;
+  descr: string | null;
+  threshold: string | null;
+  networks: string[];
+}
+
+export interface RadvdInterfaceConfig {
+  interface: string;
+  ramode: string | null;
+  rapriority: string | null;
+  ramininterval: string | null;
+  ramaxinterval: string | null;
+  ralifetime: string | null;
+  radomainsearchlist: string | null;
+  radns: string[];
+}
+
+export interface UpsConfig {
+  enable: boolean;
+  driver: string | null;
+  port: string | null;
+  cable: string | null;
+  upsname: string | null;
+  remoteuser: string | null;
+  remotepassword: string | null;
+}
+
+export interface VoucherRoll {
+  number: string;
+  minutes: string | null;
+  count: string | null;
+  descr: string | null;
+}
+
+export interface FtpProxyConfig {
+  enable: boolean;
+  ports: string | null;
+  interface: string | null;
+}
+
 export interface OpenVpnServer {
   vpnid: string;
   description: string | null;
@@ -516,6 +631,17 @@ export interface Certificate {
   metadata: CertMetadata | null;
 }
 
+export interface CertificateRevocationList {
+  refid: string;
+  descr: string | null;
+  caref: string | null;
+  method: string | null;
+  lifetime: string | null;
+  serial: string | null;
+  revoked_cert_refids: string[];
+  text: string | null;
+}
+
 // ----- installedpackages -----
 
 export interface PfBlockerNgFeed {
@@ -636,6 +762,161 @@ export interface AcmeConfig {
   certificates: AcmeCertificate[];
 }
 
+// --- v0.12.0 package types ---
+
+export interface SquidConfig {
+  enable: boolean;
+  active_interface: string | null;
+  proxy_port: string | null;
+  transparent_mode: boolean;
+  allow_interface: string[];
+  auth_method: string | null;
+  auth_realm: string | null;
+  ldap_server: string | null;
+  ldap_binddn: string | null;
+  ldap_bindpw: string | null;
+  ntlm_domain: string | null;
+  ntlm_admin_username: string | null;
+  ntlm_admin_password: string | null;
+}
+
+export interface SquidGuardTarget {
+  name: string;
+  descr: string | null;
+  domain_list: string[];
+  url_list: string[];
+  enabled: boolean;
+}
+
+export interface SquidGuardAcl {
+  name: string;
+  descr: string | null;
+  source: string | null;
+  time_range: string | null;
+  redirect: string | null;
+  enabled: boolean;
+}
+
+export interface SquidGuardConfig {
+  enabled: boolean;
+  blacklist_enabled: boolean;
+  blacklist_url: string | null;
+  strip_path: boolean;
+  targets: SquidGuardTarget[];
+  acls: SquidGuardAcl[];
+}
+
+export interface SquidBundle {
+  squid: SquidConfig | null;
+  squidguard: SquidGuardConfig | null;
+}
+
+export interface FreeRadiusClient {
+  name: string;
+  ipaddr: string | null;
+  shortname: string | null;
+  shared_secret: string | null;
+  nas_type: string | null;
+  descr: string | null;
+}
+
+export interface FreeRadiusUser {
+  name: string;
+  password: string | null;
+  auth_type: string | null;
+  expiration: string | null;
+  descr: string | null;
+}
+
+export interface FreeRadiusInterface {
+  key: string;
+  ipaddr: string | null;
+  port: string | null;
+  ip_type: string | null;
+  interface_type: string | null;
+}
+
+export interface FreeRadiusConfig {
+  enabled: boolean;
+  interfaces: FreeRadiusInterface[];
+  clients: FreeRadiusClient[];
+  users: FreeRadiusUser[];
+}
+
+export interface TelegrafConfig {
+  enabled: boolean;
+  interval: string | null;
+  output_plugin: string | null;
+  url: string | null;
+  database: string | null;
+  organization: string | null;
+  bucket: string | null;
+  username: string | null;
+  password: string | null;
+  token: string | null;
+}
+
+export interface FrrBgpNeighbor {
+  name: string;
+  remote_as: string | null;
+  peer_address: string | null;
+  descr: string | null;
+  password: string | null;
+}
+
+export interface FrrBgpConfig {
+  enabled: boolean;
+  local_as: string | null;
+  router_id: string | null;
+  neighbors: FrrBgpNeighbor[];
+}
+
+export interface FrrOspfInterface {
+  interface: string;
+  area: string | null;
+  cost: string | null;
+  priority: string | null;
+  hello_interval: string | null;
+  dead_interval: string | null;
+  md5_password: string | null;
+}
+
+export interface FrrOspfConfig {
+  enabled: boolean;
+  router_id: string | null;
+  interfaces: FrrOspfInterface[];
+}
+
+export interface FrrConfig {
+  enabled: boolean;
+  bgp: FrrBgpConfig | null;
+  ospf: FrrOspfConfig | null;
+}
+
+export interface ZabbixAgentConfig {
+  enabled: boolean;
+  server: string | null;
+  serveractive: string | null;
+  hostname: string | null;
+  listenport: string | null;
+  tls_psk_identity: string | null;
+  tls_psk: string | null;
+}
+
+export interface ZabbixProxyConfig {
+  enabled: boolean;
+  server: string | null;
+  hostname: string | null;
+  listenport: string | null;
+  tls_psk_identity: string | null;
+  tls_psk: string | null;
+}
+
+export interface ZabbixBundle {
+  agent: ZabbixAgentConfig | null;
+  proxy: ZabbixProxyConfig | null;
+}
+
 export interface UnknownPackage {
   tag: string;
   entry_count: number;
@@ -647,6 +928,11 @@ export interface InstalledPackages {
   haproxy: HaProxyConfig | null;
   suricata: SuricataConfig | null;
   acme: AcmeConfig | null;
+  squid: SquidBundle | null;
+  freeradius: FreeRadiusConfig | null;
+  telegraf: TelegrafConfig | null;
+  frr: FrrConfig | null;
+  zabbix: ZabbixBundle | null;
   unknown: UnknownPackage[];
 }
 
@@ -702,6 +988,7 @@ export interface ParsedConfig {
   gres: Tunnel[];
   ppps: Ppp[];
   qinqs: QinQ[];
+  laggs: Lagg[];
   wol: WolHost[];
   gateways: Gateway[];
   gateway_groups: GatewayGroup[];
@@ -711,6 +998,8 @@ export interface ParsedConfig {
   firewall_rules: FirewallRule[];
   nat_rules: NatRule[];
   aliases: Alias[];
+  dyndns_entries: DyndnsEntry[];
+  notifications: NotificationConfig | null;
   dhcp_servers: DhcpServer[];
   dhcp_relays: DhcpRelayConfig[];
   dns: DnsConfig | null;
@@ -723,6 +1012,11 @@ export interface ParsedConfig {
   lb_pools: LoadBalancerPool[];
   lb_virtual_servers: LoadBalancerVirtualServer[];
   captive_portal_zones: CaptivePortalZone[];
+  igmpproxy_entries: IgmpProxyEntry[];
+  radvd_interfaces: RadvdInterfaceConfig[];
+  ups: UpsConfig | null;
+  voucher_rolls: VoucherRoll[];
+  ftpproxy: FtpProxyConfig | null;
   openvpn_servers: OpenVpnServer[];
   openvpn_clients: OpenVpnClient[];
   openvpn_cscs: OpenVpnCsc[];
@@ -731,6 +1025,7 @@ export interface ParsedConfig {
   ipsec_psks: IpsecPskEntry[];
   certificate_authorities: CertificateAuthority[];
   certificates: Certificate[];
+  crls: CertificateRevocationList[];
   users: User[];
   groups: Group[];
   authservers: AuthServer[];
@@ -779,6 +1074,7 @@ export interface ConfigDiff {
   gres: SectionDiff;
   ppps: SectionDiff;
   qinqs: SectionDiff;
+  laggs: SectionDiff;
   wol: SectionDiff;
   gateways: SectionDiff;
   gateway_groups: SectionDiff;
@@ -788,6 +1084,8 @@ export interface ConfigDiff {
   firewall_rules: SectionDiff;
   nat_rules: SectionDiff;
   aliases: SectionDiff;
+  dyndns_entries: SectionDiff;
+  notifications: SectionDiff;
   dhcp_servers: SectionDiff;
   dhcp_relays: SectionDiff;
   dns: SectionDiff;
@@ -800,6 +1098,11 @@ export interface ConfigDiff {
   lb_pools: SectionDiff;
   lb_virtual_servers: SectionDiff;
   captive_portal_zones: SectionDiff;
+  igmpproxy_entries: SectionDiff;
+  radvd_interfaces: SectionDiff;
+  ups: SectionDiff;
+  voucher_rolls: SectionDiff;
+  ftpproxy: SectionDiff;
   openvpn_servers: SectionDiff;
   openvpn_clients: SectionDiff;
   openvpn_cscs: SectionDiff;
@@ -808,6 +1111,7 @@ export interface ConfigDiff {
   ipsec_psks: SectionDiff;
   certificate_authorities: SectionDiff;
   certificates: SectionDiff;
+  crls: SectionDiff;
   installedpackages: SectionDiff;
   users: SectionDiff;
   groups: SectionDiff;

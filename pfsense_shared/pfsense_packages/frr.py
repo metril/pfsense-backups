@@ -1,0 +1,165 @@
+"""Parses FRR (Free Range Routing) package config under
+``<installedpackages>``.
+
+The pfSense FRR package exposes OSPF and BGP daemons. Config shapes
+vary by version — we capture the common surface: daemon enables,
+router IDs, BGP peers, OSPF areas + interfaces. BGP / OSPF auth
+passwords (MD5 keys) are redacted.
+"""
+
+from __future__ import annotations
+
+from xml.etree.ElementTree import Element
+
+from pydantic import BaseModel, ConfigDict
+
+from pfsense_shared.pfsense_redact import redact
+from pfsense_shared.pfsense_sections._helpers import bool_flag, children, text
+
+
+class FrrBgpNeighbor(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str  # peer-group / neighbor name
+    remote_as: str | None = None
+    peer_address: str | None = None
+    descr: str | None = None
+    # Redacted — MD5 password / TCP-AO key
+    password: str | None = None
+
+
+class FrrBgpConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    local_as: str | None = None
+    router_id: str | None = None
+    neighbors: list[FrrBgpNeighbor] = []
+
+
+class FrrOspfInterface(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    interface: str
+    area: str | None = None
+    cost: str | None = None
+    priority: str | None = None
+    hello_interval: str | None = None
+    dead_interval: str | None = None
+    # Redacted when the interface uses MD5 auth
+    md5_password: str | None = None
+
+
+class FrrOspfConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    router_id: str | None = None
+    interfaces: list[FrrOspfInterface] = []
+
+
+class FrrConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    bgp: FrrBgpConfig | None = None
+    ospf: FrrOspfConfig | None = None
+
+
+CONSUMED_TAGS = frozenset(
+    {"frr", "frrbgp", "frrospf", "frrglobal", "frrbgpneighbors", "frrospfinterfaces"}
+)
+
+
+def _parse_bgp(ip: Element) -> FrrBgpConfig | None:
+    bgp_el = ip.find("frrbgp")
+    if bgp_el is None:
+        bgp_el = ip.find("frrglobal")
+    if bgp_el is None:
+        return None
+    neighbors: list[FrrBgpNeighbor] = []
+    neighbors_el = ip.find("frrbgpneighbors")
+    if neighbors_el is not None:
+        neighbor_rows = children(neighbors_el, "item")
+        if not neighbor_rows:
+            neighbor_rows = children(neighbors_el, "config")
+        for n in neighbor_rows:
+            name = (
+                text(n, "name")
+                or text(n, "peergroupname")
+                or text(n, "peer_address")
+                or "?"
+            )
+            neighbors.append(
+                FrrBgpNeighbor(
+                    name=name,
+                    remote_as=text(n, "remote_as") or text(n, "remoteas"),
+                    peer_address=text(n, "peer_address") or text(n, "peeraddr"),
+                    descr=text(n, "descr"),
+                    password=redact(
+                        "bgp_password",
+                        text(n, "password")
+                        or text(n, "md5password")
+                        or text(n, "bgp_password"),
+                    ),
+                )
+            )
+    return FrrBgpConfig(
+        enabled=bool_flag(bgp_el, "enable") or bool_flag(bgp_el, "enablebgp"),
+        local_as=text(bgp_el, "local_as") or text(bgp_el, "asnum"),
+        router_id=text(bgp_el, "router_id") or text(bgp_el, "routerid"),
+        neighbors=neighbors,
+    )
+
+
+def _parse_ospf(ip: Element) -> FrrOspfConfig | None:
+    ospf_el = ip.find("frrospf")
+    if ospf_el is None:
+        ospf_el = ip.find("frrglobal")
+    if ospf_el is None:
+        return None
+    interfaces: list[FrrOspfInterface] = []
+    ifaces_el = ip.find("frrospfinterfaces")
+    if ifaces_el is not None:
+        iface_rows = children(ifaces_el, "item")
+        if not iface_rows:
+            iface_rows = children(ifaces_el, "config")
+        for i in iface_rows:
+            iface = text(i, "interface") or text(i, "interfacename")
+            if not iface:
+                continue
+            interfaces.append(
+                FrrOspfInterface(
+                    interface=iface,
+                    area=text(i, "area"),
+                    cost=text(i, "cost"),
+                    priority=text(i, "priority"),
+                    hello_interval=text(i, "hello_interval")
+                    or text(i, "hellointerval"),
+                    dead_interval=text(i, "dead_interval")
+                    or text(i, "deadinterval"),
+                    md5_password=redact(
+                        "ospf_password",
+                        text(i, "md5_password") or text(i, "md5password"),
+                    ),
+                )
+            )
+    return FrrOspfConfig(
+        enabled=bool_flag(ospf_el, "enable") or bool_flag(ospf_el, "enableospf"),
+        router_id=text(ospf_el, "router_id") or text(ospf_el, "routerid"),
+        interfaces=interfaces,
+    )
+
+
+def parse(ip: Element) -> FrrConfig | None:
+    global_el = ip.find("frr")
+    if global_el is None:
+        global_el = ip.find("frrglobal")
+    bgp = _parse_bgp(ip)
+    ospf = _parse_ospf(ip)
+    if global_el is None and bgp is None and ospf is None:
+        return None
+    enabled = False
+    if global_el is not None:
+        enabled = bool_flag(global_el, "enable")
+    return FrrConfig(enabled=enabled, bgp=bgp, ospf=ospf)

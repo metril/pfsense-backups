@@ -14,6 +14,35 @@
   --ok: 142 60% 50%;
   --warn: 38 92% 58%;
   --info: 199 89% 60%;
+
+  /* v0.12.0 — section-group accents. Each functional group of parsed
+     sections gets a left-stripe + title color so operators can tell at
+     a glance whether a change touches Security vs. Services vs. the
+     PKI store. WCAG-AA verified against --bg. */
+  --group-system: 199 75% 55%;      /* cyan — plumbing: system, cron, sysctl, notifications */
+  --group-net: 210 80% 60%;         /* blue (= --accent) — networking + routing + L2 */
+  --group-security: 15 85% 58%;     /* red-amber — firewall / NAT / aliases / schedules */
+  --group-services: 172 60% 50%;    /* teal — DHCP / DNS / syslog / SNMP / NTP / LB / shaper */
+  --group-vpn: 265 70% 65%;         /* violet — VPN + PKI + auth */
+  --group-packages: 320 70% 60%;    /* magenta — installed packages */
+}
+
+/* Flash highlight used for cross-ref jumps (v0.12.1 wires the animation;
+   the keyframe lives here so styling lives in one place). */
+@keyframes flash {
+  0%   { background-color: hsl(var(--accent) / 0.25); }
+  60%  { background-color: hsl(var(--accent) / 0.25); }
+  100% { background-color: transparent; }
+}
+
+.flash-target {
+  animation: flash 1.5s ease-out;
+}
+
+/* Sticky-ToC uses scroll-margin-top so anchored jumps don't hide the
+   target under the header. */
+.scroll-anchor {
+  scroll-margin-top: 4rem;
 }
 
 html, body, #root {

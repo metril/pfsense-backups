@@ -31,6 +31,9 @@ from .pfsense_sections import (
     cron as _cron,
 )
 from .pfsense_sections import (
+    dyndns as _dyndns,
+)
+from .pfsense_sections import (
     firewall as _firewall,
 )
 from .pfsense_sections import (
@@ -44,6 +47,9 @@ from .pfsense_sections import (
 )
 from .pfsense_sections import (
     nat as _nat,
+)
+from .pfsense_sections import (
+    notifications as _notifications,
 )
 from .pfsense_sections import (
     packages as _packages,
@@ -75,13 +81,19 @@ from .pfsense_sections import (
 from .pfsense_sections.aliases import Alias
 from .pfsense_sections.auth import AuthServer, Group, User
 from .pfsense_sections.cron import CronJob
+from .pfsense_sections.dyndns import DyndnsEntry
 from .pfsense_sections.firewall import FirewallRule
 from .pfsense_sections.ha import HaSync, VirtualIP
 from .pfsense_sections.interfaces import Interface
-from .pfsense_sections.layer2 import Bridge, Ppp, QinQ, Tunnel, Vlan, WolHost
+from .pfsense_sections.layer2 import Bridge, Lagg, Ppp, QinQ, Tunnel, Vlan, WolHost
 from .pfsense_sections.nat import NatRule
+from .pfsense_sections.notifications import NotificationConfig
 from .pfsense_sections.packages import InstalledPackages
-from .pfsense_sections.pki import Certificate, CertificateAuthority
+from .pfsense_sections.pki import (
+    Certificate,
+    CertificateAuthority,
+    CertificateRevocationList,
+)
 from .pfsense_sections.revision import Revision
 from .pfsense_sections.routing import Gateway, GatewayGroup, StaticRoute
 from .pfsense_sections.services import DhcpServer, DnsConfig
@@ -89,13 +101,18 @@ from .pfsense_sections.services_extra import (
     CaptivePortalZone,
     DhcpRelayConfig,
     DnShaperPipe,
+    FtpProxyConfig,
+    IgmpProxyEntry,
     LoadBalancerPool,
     LoadBalancerVirtualServer,
     NtpdConfig,
+    RadvdInterfaceConfig,
     Schedule,
     ShaperQueue,
     SnmpdConfig,
     SyslogConfig,
+    UpsConfig,
+    VoucherRoll,
 )
 from .pfsense_sections.sysctl import SysctlTunable
 from .pfsense_sections.system import SystemInfo
@@ -131,7 +148,7 @@ _KNOWN: Final[frozenset[str]] = frozenset(
         "dhcpdv6",
         "unbound",
         "dnsmasq",
-        # v0.11.1+ — known but not yet parsed; already-planned follow-ups
+        # v0.11.1 — L2 / routing extras
         "vlans",
         "bridges",
         "gifs",
@@ -141,7 +158,7 @@ _KNOWN: Final[frozenset[str]] = frozenset(
         "wol",
         "virtualip",
         "hasync",
-        # v0.11.2+
+        # v0.11.2 — services
         "ntpd",
         "snmpd",
         "syslog",
@@ -152,13 +169,23 @@ _KNOWN: Final[frozenset[str]] = frozenset(
         "load_balancer",
         "dhcrelay",
         "dhcrelay6",
-        # v0.11.3+
+        # v0.11.4 — VPN / crypto
         "openvpn",
         "ipsec",
         "ca",
         "cert",
-        # v0.11.4+
+        "crl",
+        # v0.11.5 — packages
         "installedpackages",
+        # v0.12.0 — broader coverage
+        "dyndnses",
+        "laggs",
+        "notifications",
+        "igmpproxy",
+        "radvd",
+        "ups",
+        "voucher",
+        "ftpproxy",
     }
 )
 
@@ -194,6 +221,7 @@ class ParsedConfig(BaseModel):
     gres: list[Tunnel] = []
     ppps: list[Ppp] = []
     qinqs: list[QinQ] = []
+    laggs: list[Lagg] = []
     wol: list[WolHost] = []
     gateways: list[Gateway] = []
     gateway_groups: list[GatewayGroup] = []
@@ -203,6 +231,8 @@ class ParsedConfig(BaseModel):
     firewall_rules: list[FirewallRule] = []
     nat_rules: list[NatRule] = []
     aliases: list[Alias] = []
+    dyndns_entries: list[DyndnsEntry] = []
+    notifications: NotificationConfig | None = None
     dhcp_servers: list[DhcpServer] = []
     dhcp_relays: list[DhcpRelayConfig] = []
     dns: DnsConfig | None = None
@@ -215,6 +245,11 @@ class ParsedConfig(BaseModel):
     lb_pools: list[LoadBalancerPool] = []
     lb_virtual_servers: list[LoadBalancerVirtualServer] = []
     captive_portal_zones: list[CaptivePortalZone] = []
+    igmpproxy_entries: list[IgmpProxyEntry] = []
+    radvd_interfaces: list[RadvdInterfaceConfig] = []
+    ups: UpsConfig | None = None
+    voucher_rolls: list[VoucherRoll] = []
+    ftpproxy: FtpProxyConfig | None = None
     users: list[User] = []
     groups: list[Group] = []
     authservers: list[AuthServer] = []
@@ -227,6 +262,7 @@ class ParsedConfig(BaseModel):
     ipsec_psks: list[IpsecPskEntry] = []
     certificate_authorities: list[CertificateAuthority] = []
     certificates: list[Certificate] = []
+    crls: list[CertificateRevocationList] = []
 
     # Parsed <installedpackages> — known packages structured; unknown
     # packages carried in ``installedpackages.unknown`` with raw XML.
@@ -271,6 +307,7 @@ def parse(xml_bytes: bytes | str) -> ParsedConfig:
         gres=_layer2.parse_gres(root),
         ppps=_layer2.parse_ppps(root),
         qinqs=_layer2.parse_qinqs(root),
+        laggs=_layer2.parse_laggs(root),
         wol=_layer2.parse_wol(root),
         gateways=gws,
         gateway_groups=ggroups,
@@ -280,6 +317,8 @@ def parse(xml_bytes: bytes | str) -> ParsedConfig:
         firewall_rules=_firewall.parse(root),
         nat_rules=_nat.parse(root),
         aliases=_aliases.parse(root),
+        dyndns_entries=_dyndns.parse(root),
+        notifications=_notifications.parse(root),
         dhcp_servers=_services.parse_dhcp(root),
         dhcp_relays=_services_extra.parse_dhcp_relay(root),
         dns=_services.parse_dns(root),
@@ -292,6 +331,11 @@ def parse(xml_bytes: bytes | str) -> ParsedConfig:
         lb_pools=lb_pools,
         lb_virtual_servers=lb_vservers,
         captive_portal_zones=_services_extra.parse_captive_portal(root),
+        igmpproxy_entries=_services_extra.parse_igmpproxy(root),
+        radvd_interfaces=_services_extra.parse_radvd(root),
+        ups=_services_extra.parse_ups(root),
+        voucher_rolls=_services_extra.parse_vouchers(root),
+        ftpproxy=_services_extra.parse_ftpproxy(root),
         openvpn_servers=ovpn_servers,
         openvpn_clients=ovpn_clients,
         openvpn_cscs=ovpn_cscs,
@@ -300,6 +344,7 @@ def parse(xml_bytes: bytes | str) -> ParsedConfig:
         ipsec_psks=ipsec_psks,
         certificate_authorities=_pki.parse_cas(root),
         certificates=_pki.parse_certs(root),
+        crls=_pki.parse_crls(root),
         installedpackages=_packages.parse(root),
         users=_auth.parse_users(root),
         groups=_auth.parse_groups(root),

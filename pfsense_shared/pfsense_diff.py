@@ -89,6 +89,7 @@ class ConfigDiff(BaseModel):
     gres: SectionDiff = SectionDiff()
     ppps: SectionDiff = SectionDiff()
     qinqs: SectionDiff = SectionDiff()
+    laggs: SectionDiff = SectionDiff()
     wol: SectionDiff = SectionDiff()
     gateways: SectionDiff = SectionDiff()
     gateway_groups: SectionDiff = SectionDiff()
@@ -98,6 +99,8 @@ class ConfigDiff(BaseModel):
     firewall_rules: SectionDiff = SectionDiff()
     nat_rules: SectionDiff = SectionDiff()
     aliases: SectionDiff = SectionDiff()
+    dyndns_entries: SectionDiff = SectionDiff()
+    notifications: SectionDiff = SectionDiff()
     dhcp_servers: SectionDiff = SectionDiff()
     dhcp_relays: SectionDiff = SectionDiff()
     dns: SectionDiff = SectionDiff()
@@ -110,6 +113,11 @@ class ConfigDiff(BaseModel):
     lb_pools: SectionDiff = SectionDiff()
     lb_virtual_servers: SectionDiff = SectionDiff()
     captive_portal_zones: SectionDiff = SectionDiff()
+    igmpproxy_entries: SectionDiff = SectionDiff()
+    radvd_interfaces: SectionDiff = SectionDiff()
+    ups: SectionDiff = SectionDiff()
+    voucher_rolls: SectionDiff = SectionDiff()
+    ftpproxy: SectionDiff = SectionDiff()
     openvpn_servers: SectionDiff = SectionDiff()
     openvpn_clients: SectionDiff = SectionDiff()
     openvpn_cscs: SectionDiff = SectionDiff()
@@ -118,6 +126,7 @@ class ConfigDiff(BaseModel):
     ipsec_psks: SectionDiff = SectionDiff()
     certificate_authorities: SectionDiff = SectionDiff()
     certificates: SectionDiff = SectionDiff()
+    crls: SectionDiff = SectionDiff()
     installedpackages: SectionDiff = SectionDiff()
     users: SectionDiff = SectionDiff()
     groups: SectionDiff = SectionDiff()
@@ -145,6 +154,7 @@ def diff_configs(a: ParsedConfig, b: ParsedConfig) -> ConfigDiff:
         gres=_diff_list(a.gres, b.gres, key="name", label_fn=_label_tunnel),
         ppps=_diff_list(a.ppps, b.ppps, key="ptpid", label_fn=_label_ppp),
         qinqs=_diff_list(a.qinqs, b.qinqs, key="key", label_fn=_label_named),
+        laggs=_diff_list(a.laggs, b.laggs, key="laggif", label_fn=_label_lagg),
         wol=_diff_list(a.wol, b.wol, key="mac", label_fn=_label_wol),
         gateways=_diff_list(a.gateways, b.gateways, key="name", label_fn=_label_named),
         gateway_groups=_diff_list(
@@ -172,6 +182,12 @@ def diff_configs(a: ParsedConfig, b: ParsedConfig) -> ConfigDiff:
             order_sensitive=True,
         ),
         aliases=_diff_list(a.aliases, b.aliases, key="name", label_fn=_label_named),
+        dyndns_entries=_diff_list(
+            a.dyndns_entries, b.dyndns_entries, key="key", label_fn=_label_dyndns
+        ),
+        notifications=_diff_optional_model(
+            a.notifications, b.notifications, "notifications"
+        ),
         dhcp_servers=_diff_list(
             a.dhcp_servers, b.dhcp_servers, key="interface", label_fn=_label_dhcp
         ),
@@ -206,6 +222,26 @@ def diff_configs(a: ParsedConfig, b: ParsedConfig) -> ConfigDiff:
             key="zone",
             label_fn=_label_portal,
         ),
+        igmpproxy_entries=_diff_list(
+            a.igmpproxy_entries,
+            b.igmpproxy_entries,
+            key="key",
+            label_fn=_label_igmp,
+        ),
+        radvd_interfaces=_diff_list(
+            a.radvd_interfaces,
+            b.radvd_interfaces,
+            key="interface",
+            label_fn=_label_radvd,
+        ),
+        ups=_diff_optional_model(a.ups, b.ups, "ups"),
+        voucher_rolls=_diff_list(
+            a.voucher_rolls,
+            b.voucher_rolls,
+            key="number",
+            label_fn=_label_voucher,
+        ),
+        ftpproxy=_diff_optional_model(a.ftpproxy, b.ftpproxy, "ftpproxy"),
         openvpn_servers=_diff_list(
             a.openvpn_servers,
             b.openvpn_servers,
@@ -251,6 +287,12 @@ def diff_configs(a: ParsedConfig, b: ParsedConfig) -> ConfigDiff:
         certificates=_diff_list(
             a.certificates,
             b.certificates,
+            key="refid",
+            label_fn=_label_pki,
+        ),
+        crls=_diff_list(
+            a.crls,
+            b.crls,
             key="refid",
             label_fn=_label_pki,
         ),
@@ -336,6 +378,36 @@ def _label_ppp(m: dict[str, Any]) -> str:
     kind = m.get("type") or "?"
     ifname = m.get("if_") or m.get("ptpid") or "?"
     return f"[{kind}] {ifname}"
+
+
+def _label_lagg(m: dict[str, Any]) -> str:
+    name = m.get("laggif") or "?"
+    members = m.get("members") or []
+    proto = m.get("proto") or "?"
+    member_str = ",".join(members) if members else "no members"
+    return f"{name} ({proto}) — {member_str}"
+
+
+def _label_dyndns(m: dict[str, Any]) -> str:
+    provider = m.get("type") or "?"
+    host = m.get("host") or m.get("domainname") or "?"
+    return f"[{provider}] {host}"
+
+
+def _label_igmp(m: dict[str, Any]) -> str:
+    typ = m.get("type") or "?"
+    iface = m.get("ifname") or "?"
+    return f"{typ} on {iface}"
+
+
+def _label_radvd(m: dict[str, Any]) -> str:
+    return f"radvd on {m.get('interface') or '?'}"
+
+
+def _label_voucher(m: dict[str, Any]) -> str:
+    num = m.get("number") or "?"
+    minutes = m.get("minutes") or "?"
+    return f"roll #{num} ({minutes} min)"
 
 
 def _label_wol(m: dict[str, Any]) -> str:

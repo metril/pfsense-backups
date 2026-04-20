@@ -13,6 +13,7 @@ import {
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
+import { Tabs } from "@/components/ui/Tabs";
 import { useToast } from "@/components/ui/Toast";
 import { useBackups, useInstances, useUpdateBackup } from "@/api/queries";
 import { api, triggerDownload } from "@/api/client";
@@ -247,14 +248,15 @@ export function BackupViewPage() {
         </div>
       </div>
 
-      <div className="mt-3 flex items-center gap-1 border-b border-border">
-        <TabButton active={tab === "structured"} onClick={() => setTab("structured")}>
-          Structured
-        </TabButton>
-        <TabButton active={tab === "raw"} onClick={() => setTab("raw")}>
-          Raw XML
-        </TabButton>
-      </div>
+      <Tabs
+        className="mt-3"
+        value={tab}
+        onChange={(id) => setTab(id as ViewTab)}
+        items={[
+          { id: "structured", label: "Structured" },
+          { id: "raw", label: "Raw XML" },
+        ]}
+      />
 
       <div className="mt-0 flex-1 overflow-hidden rounded-b border border-t-0 border-border">
         <Suspense
@@ -268,31 +270,5 @@ export function BackupViewPage() {
         </Suspense>
       </div>
     </div>
-  );
-}
-
-function TabButton({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={
-        "border-b-2 px-3 py-1.5 text-sm " +
-        (active
-          ? "border-accent text-accent"
-          : "border-transparent text-muted-fg hover:text-fg")
-      }
-    >
-      {children}
-    </button>
   );
 }

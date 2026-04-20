@@ -15,6 +15,9 @@ from pfsense_shared.pfsense_redact import redact
 
 from ._helpers import bool_flag, children, text
 
+# ---------- parsers -------------------------------------------------------
+# (section models + legacy service parsers above; niche services at bottom)
+
 
 class NtpdConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -163,6 +166,78 @@ class CaptivePortalZone(BaseModel):
     redirurl: str | None = None
     # RADIUS secret is always redacted.
     radius_secret: str | None = None
+
+
+class IgmpProxyEntry(BaseModel):
+    """One ``<igmpproxy><item>`` — either an ``upstream`` or ``downstream`` side."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Stable key: ``type|ifname`` (only one upstream is legal but downstream
+    # entries are scoped per-interface, so the pair is unique).
+    key: str
+    type: str | None = None  # "upstream" | "downstream"
+    ifname: str | None = None
+    descr: str | None = None
+    threshold: str | None = None
+    # Scope filter entries (CIDR list) — pfSense stores them comma-separated.
+    networks: list[str] = []
+
+
+class RadvdInterfaceConfig(BaseModel):
+    """pfSense's ``<radvd>`` has one block per interface. Each carries
+    the advertised-prefix / managed-flag set that determines IPv6 SLAAC
+    behaviour for that link."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Stable key: interface name (lan, opt1, …). pfSense stores each
+    # interface as a direct child element whose tag IS the interface.
+    interface: str
+    ramode: str | None = None  # "disabled" | "router" | "unmanaged" | ...
+    rapriority: str | None = None
+    ramininterval: str | None = None
+    ramaxinterval: str | None = None
+    ralifetime: str | None = None
+    radomainsearchlist: str | None = None
+    radns: list[str] = []
+
+
+class UpsConfig(BaseModel):
+    """NUT / apcupsd style UPS config. Uncommon in SMB, common in DC."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enable: bool = False
+    driver: str | None = None  # apcsmart, usbhid-ups, etc.
+    port: str | None = None
+    cable: str | None = None
+    upsname: str | None = None
+    # Credentials for a remote NUT monitor — redacted.
+    remoteuser: str | None = None
+    remotepassword: str | None = None
+
+
+class VoucherRoll(BaseModel):
+    """Captive-portal voucher roll (batch of time-limited pre-generated codes)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Stable key: the roll id.
+    number: str
+    minutes: str | None = None  # minutes of access per code
+    count: str | None = None  # codes remaining in this roll
+    descr: str | None = None
+
+
+class FtpProxyConfig(BaseModel):
+    """Legacy FTP ALG / helper config. Mostly historical."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enable: bool = False
+    ports: str | None = None
+    interface: str | None = None
 
 
 # ---------- parsers -------------------------------------------------------
@@ -401,3 +476,93 @@ def parse_captive_portal(root: Element) -> list[CaptivePortalZone]:
             )
         )
     return out
+
+
+def parse_igmpproxy(root: Element) -> list[IgmpProxyEntry]:
+    el = root.find("igmpproxy")
+    if el is None:
+        return []
+    out: list[IgmpProxyEntry] = []
+    for item in children(el, "item"):
+        typ = text(item, "type")
+        ifname = text(item, "ifname")
+        networks_raw = text(item, "network") or text(item, "networks") or ""
+        out.append(
+            IgmpProxyEntry(
+                key=f"{typ or '?'}|{ifname or '?'}",
+                type=typ,
+                ifname=ifname,
+                descr=text(item, "descr"),
+                threshold=text(item, "threshold"),
+                networks=[n.strip() for n in networks_raw.split(",") if n.strip()],
+            )
+        )
+    return out
+
+
+def parse_radvd(root: Element) -> list[RadvdInterfaceConfig]:
+    el = root.find("radvd")
+    if el is None:
+        return []
+    out: list[RadvdInterfaceConfig] = []
+    for iface in list(el):
+        dns_raw = text(iface, "radns") or ""
+        out.append(
+            RadvdInterfaceConfig(
+                interface=iface.tag,
+                ramode=text(iface, "ramode"),
+                rapriority=text(iface, "rapriority"),
+                ramininterval=text(iface, "ramininterval"),
+                ramaxinterval=text(iface, "ramaxinterval"),
+                ralifetime=text(iface, "ralifetime"),
+                radomainsearchlist=text(iface, "radomainsearchlist"),
+                radns=[s.strip() for s in dns_raw.split() if s.strip()],
+            )
+        )
+    return out
+
+
+def parse_ups(root: Element) -> UpsConfig | None:
+    el = root.find("ups")
+    if el is None:
+        return None
+    return UpsConfig(
+        enable=bool_flag(el, "enable"),
+        driver=text(el, "driver"),
+        port=text(el, "port"),
+        cable=text(el, "cable"),
+        upsname=text(el, "upsname"),
+        remoteuser=text(el, "remoteuser"),
+        remotepassword=redact("password", text(el, "remotepassword")),
+    )
+
+
+def parse_vouchers(root: Element) -> list[VoucherRoll]:
+    el = root.find("voucher")
+    if el is None:
+        return []
+    out: list[VoucherRoll] = []
+    for roll in children(el, "roll"):
+        num = text(roll, "number")
+        if not num:
+            continue
+        out.append(
+            VoucherRoll(
+                number=num,
+                minutes=text(roll, "minutes"),
+                count=text(roll, "count"),
+                descr=text(roll, "descr"),
+            )
+        )
+    return out
+
+
+def parse_ftpproxy(root: Element) -> FtpProxyConfig | None:
+    el = root.find("ftpproxy")
+    if el is None:
+        return None
+    return FtpProxyConfig(
+        enable=bool_flag(el, "enable"),
+        ports=text(el, "ports"),
+        interface=text(el, "interface"),
+    )

@@ -1,6 +1,7 @@
 import { Suspense, lazy, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
+import { Tabs } from "@/components/ui/Tabs";
 import { api } from "@/api/client";
 
 const MonacoDiff = lazy(() => import("@/components/MonacoDiff"));
@@ -59,17 +60,15 @@ export function BackupDiffPage() {
         </div>
       </div>
 
-      <div className="mt-3 flex items-center gap-1 border-b border-border">
-        <TabButton
-          active={tab === "structured"}
-          onClick={() => setTab("structured")}
-        >
-          Structured
-        </TabButton>
-        <TabButton active={tab === "raw"} onClick={() => setTab("raw")}>
-          Raw XML
-        </TabButton>
-      </div>
+      <Tabs
+        className="mt-3"
+        value={tab}
+        onChange={(id) => setTab(id as DiffTab)}
+        items={[
+          { id: "structured", label: "Structured" },
+          { id: "raw", label: "Raw XML" },
+        ]}
+      />
 
       <div className="flex-1 overflow-hidden rounded-b border border-t-0 border-border">
         <Suspense
@@ -88,31 +87,5 @@ export function BackupDiffPage() {
         </Suspense>
       </div>
     </div>
-  );
-}
-
-function TabButton({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={
-        "border-b-2 px-3 py-1.5 text-sm " +
-        (active
-          ? "border-accent text-accent"
-          : "border-transparent text-muted-fg hover:text-fg")
-      }
-    >
-      {children}
-    </button>
   );
 }
