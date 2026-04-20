@@ -27,22 +27,26 @@
   --group-packages: 320 70% 60%;    /* magenta — installed packages */
 }
 
-/* Flash highlight used for cross-ref jumps (v0.12.1 wires the animation;
-   the keyframe lives here so styling lives in one place). */
+/* Flash highlight used for cross-ref jumps. The keyframe animates the
+   row's background so the eye catches the destination after an Xref
+   click or a QuickJump palette activation. */
 @keyframes flash {
-  0%   { background-color: hsl(var(--accent) / 0.25); }
+  0%   { background-color: hsl(var(--accent) / 0.35); }
   60%  { background-color: hsl(var(--accent) / 0.25); }
   100% { background-color: transparent; }
 }
 
-.flash-target {
+.flash-target,
+.xref-flash {
   animation: flash 1.5s ease-out;
 }
 
-/* Sticky-ToC uses scroll-margin-top so anchored jumps don't hide the
-   target under the header. */
-.scroll-anchor {
-  scroll-margin-top: 4rem;
+/* Sticky-ToC + xref anchors use scroll-margin-top so anchored jumps
+   don't hide the target under the fixed header. 5rem covers the app
+   topbar plus breathing room. */
+.scroll-anchor,
+[id^="xref-"] {
+  scroll-margin-top: 5rem;
 }
 
 html, body, #root {

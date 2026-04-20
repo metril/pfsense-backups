@@ -3,6 +3,10 @@ import { Lock } from "lucide-react";
 import { Alert } from "@/components/ui/Alert";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
+import { Xref } from "@/components/ui/Xref";
+import { XrefProvider } from "@/components/xref/XrefContext";
+import { QuickJump } from "@/components/xref/QuickJump";
+import { itemId } from "@/lib/xref";
 import { useParsedBackup } from "@/api/queries";
 import {
   interfaceChipClasses,
@@ -100,7 +104,9 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
   if (!data) return null;
 
   return (
+    <XrefProvider data={data}>
     <div className="h-full overflow-auto p-4">
+      <QuickJump />
       <div className="mx-auto max-w-[1400px]">
         <TableOfContents cfg={data} />
         <div className="mt-4 space-y-3">
@@ -418,6 +424,7 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
         </div>
       </div>
     </div>
+    </XrefProvider>
   );
 }
 
@@ -667,6 +674,7 @@ function Table({
   headers,
   rows,
   rowKeys,
+  rowIds,
 }: {
   headers: string[];
   rows: React.ReactNode[][];
@@ -674,6 +682,10 @@ function Table({
    *  fine for non-reordering tables. Firewall / NAT tables pass
    *  rule trackers so reordering diffs don't confuse React. */
   rowKeys?: (string | number)[];
+  /** Per-row DOM ``id``s. Used to make table rows xref targets so
+   *  ``<Xref>`` chips can scroll into them. Typically produced by
+   *  ``itemId(kind, key)`` from ``@/lib/xref``. */
+  rowIds?: (string | undefined)[];
 }) {
   return (
     <div className="overflow-x-auto">
@@ -691,6 +703,7 @@ function Table({
           {rows.map((row, i) => (
             <tr
               key={rowKeys?.[i] ?? i}
+              id={rowIds?.[i]}
               className="border-b border-border/50 last:border-0"
             >
               {row.map((cell, j) => (
@@ -719,9 +732,18 @@ function SystemPanel({ s }: { s: SystemInfo }) {
         ["Time servers", s.timeservers.join(", ") || "—"],
         [
           "Web GUI",
-          s.webgui
-            ? `${s.webgui.protocol ?? "?"} :${s.webgui.port ?? "?"}`
-            : "—",
+          s.webgui ? (
+            <span className="inline-flex items-center gap-2">
+              <span>
+                {s.webgui.protocol ?? "?"} :{s.webgui.port ?? "?"}
+              </span>
+              {s.webgui.ssl_certref && (
+                <Xref kind="cert" k={s.webgui.ssl_certref} label="Cert" />
+              )}
+            </span>
+          ) : (
+            "—"
+          ),
         ],
         ["SSH", s.enablesshd ? `enabled on :${s.sshport ?? "22"}` : "disabled"],
       ]}
@@ -733,6 +755,8 @@ function InterfacesTable({ rows }: { rows: Interface[] }) {
   return (
     <Table
       headers={["Name", "Device", "Enabled", "IPv4", "IPv6", "Description"]}
+      rowKeys={rows.map((r) => r.key)}
+      rowIds={rows.map((r) => itemId("interface", r.key))}
       rows={rows.map((r) => [
         <InterfaceChip key="k" name={r.key} />,
         <span key="i" className="font-mono text-xs">
@@ -752,6 +776,7 @@ function GatewaysTable({ rows }: { rows: Gateway[] }) {
     <Table
       headers={["Name", "Interface", "Gateway", "Monitor", "Default", "Descr"]}
       rowKeys={rows.map((r) => r.name)}
+      rowIds={rows.map((r) => itemId("gateway", r.name))}
       rows={rows.map((r) => [
         r.name,
         <InterfaceChip key="i" name={r.interface} />,
@@ -771,11 +796,16 @@ function GatewayGroupsTable({ rows }: { rows: GatewayGroup[] }) {
     <Table
       headers={["Name", "Trigger", "Members", "Description"]}
       rowKeys={rows.map((r) => r.name)}
+      rowIds={rows.map((r) => itemId("gateway_group", r.name))}
       rows={rows.map((r) => [
         r.name,
         r.trigger ?? "—",
-        <span key="m" className="font-mono text-xs">
-          {r.members.length ? r.members.join(", ") : "—"}
+        <span key="m" className="inline-flex flex-wrap gap-1">
+          {r.members.length
+            ? r.members.map((m) => (
+                <Xref key={m} kind="gateway" k={m} />
+              ))
+            : "—"}
         </span>,
         r.descr ?? "—",
       ])}
@@ -789,7 +819,7 @@ function StaticRoutesTable({ rows }: { rows: StaticRoute[] }) {
       headers={["Network", "Gateway", "Disabled", "Description"]}
       rows={rows.map((r) => [
         r.network ?? "—",
-        r.gateway ?? "—",
+        <Xref key="g" kind="gateway" k={r.gateway} />,
         r.disabled ? "yes" : "",
         r.descr ?? "—",
       ])}
@@ -807,12 +837,10 @@ function FirewallTable({ rows }: { rows: FirewallRule[] }) {
         "Proto",
         "Source",
         "Destination",
+        "Gateway",
+        "Sched",
         "Description",
       ]}
-      // r.key is ``tracker:{id}`` when the rule has a tracker, else a
-      // content hash — unique per-rule in both branches. Using it
-      // directly preserves React identity across reorders (which was
-      // the whole point of rowKeys; a positional suffix would defeat it).
       rowKeys={rows.map((r) => r.key)}
       rows={rows.map((r, i) => [
         <span key="n" className="font-mono text-xs text-muted-fg">
@@ -829,6 +857,8 @@ function FirewallTable({ rows }: { rows: FirewallRule[] }) {
         <span key="dst" className="font-mono text-xs">
           {endpointStr(r.destination)}
         </span>,
+        <Xref key="gw" kind="gateway" k={r.gateway} />,
+        <Xref key="sch" kind="schedule" k={r.schedule} />,
         <span key="d" className="flex items-center gap-1">
           {r.descr ?? "—"}
           {r.disabled && <Badge tone="muted">disabled</Badge>}
@@ -905,6 +935,8 @@ function AliasesTable({ rows }: { rows: Alias[] }) {
   return (
     <Table
       headers={["Name", "Type", "Entries", "Description"]}
+      rowKeys={rows.map((r) => r.name)}
+      rowIds={rows.map((r) => itemId("alias", r.name))}
       rows={rows.map((r) => [
         r.name,
         r.type ?? "—",
@@ -1026,12 +1058,23 @@ function DnsPanel({ d }: { d: DnsConfig }) {
 function UsersTable({ rows }: { rows: User[] }) {
   return (
     <Table
-      headers={["Name", "UID", "Scope", "Groups", "Password", "Expires"]}
+      headers={["Name", "UID", "Scope", "Groups", "Certs", "Password", "Expires"]}
+      rowKeys={rows.map((u) => u.name)}
+      rowIds={rows.map((u) => itemId("user", u.name))}
       rows={rows.map((u) => [
         u.name,
         u.uid ?? "—",
         u.scope ?? "—",
-        u.groups.join(", ") || "—",
+        <span key="g" className="inline-flex flex-wrap gap-1">
+          {u.groups.length
+            ? u.groups.map((g) => <Xref key={g} kind="group" k={g} />)
+            : "—"}
+        </span>,
+        <span key="c" className="inline-flex flex-wrap gap-1">
+          {u.certrefs.length
+            ? u.certrefs.map((c) => <Xref key={c} kind="cert" k={c} />)
+            : "—"}
+        </span>,
         <RV v={u.bcrypt_hash} key="p" />,
         u.expires ?? "—",
       ])}
@@ -1043,11 +1086,17 @@ function GroupsTable({ rows }: { rows: Group[] }) {
   return (
     <Table
       headers={["Name", "GID", "Scope", "Members", "Privileges"]}
+      rowKeys={rows.map((g) => g.name)}
+      rowIds={rows.map((g) => itemId("group", g.name))}
       rows={rows.map((g) => [
         g.name,
         g.gid ?? "—",
         g.scope ?? "—",
-        g.members.join(", ") || "—",
+        <span key="m" className="inline-flex flex-wrap gap-1">
+          {g.members.length
+            ? g.members.map((m) => <Xref key={m} kind="user" k={m} />)
+            : "—"}
+        </span>,
         <span key="p" className="font-mono text-xs">
           {g.privs.join(", ") || "—"}
         </span>,
@@ -1060,6 +1109,8 @@ function AuthServersTable({ rows }: { rows: AuthServer[] }) {
   return (
     <Table
       headers={["Name", "Type", "Host", "Port", "Bind / Secret"]}
+      rowKeys={rows.map((a) => a.name)}
+      rowIds={rows.map((a) => itemId("authserver", a.name))}
       rows={rows.map((a) => [
         a.name,
         a.type ?? "—",
@@ -1361,6 +1412,8 @@ function SchedulesTable({ rows }: { rows: Schedule[] }) {
   return (
     <Table
       headers={["Name", "Description", "Time ranges"]}
+      rowKeys={rows.map((s) => s.name)}
+      rowIds={rows.map((s) => itemId("schedule", s.name))}
       rows={rows.map((s) => [
         s.name,
         s.descr ?? "—",
@@ -1419,6 +1472,8 @@ function LoadBalancerPanel({
           <div className="mb-1 text-xs uppercase text-muted-fg">Pools</div>
           <Table
             headers={["Name", "Behaviour", "Port", "Monitor", "Members", "Description"]}
+            rowKeys={pools.map((p) => p.name)}
+            rowIds={pools.map((p) => itemId("lb_pool", p.name))}
             rows={pools.map((p) => [
               p.name,
               p.behaviour ?? "—",
@@ -1439,12 +1494,13 @@ function LoadBalancerPanel({
           </div>
           <Table
             headers={["Name", "Address", "Port", "Mode", "Pool", "Description"]}
+            rowKeys={vservers.map((v) => v.name)}
             rows={vservers.map((v) => [
               v.name,
               v.ipaddr ?? "—",
               v.port ?? "—",
               v.mode ?? "—",
-              v.poolname ?? "—",
+              <Xref key="p" kind="lb_pool" k={v.poolname} />,
               v.descr ?? "—",
             ])}
           />
@@ -1462,7 +1518,13 @@ function CaptivePortalTable({ rows }: { rows: CaptivePortalZone[] }) {
         z.zone,
         z.zoneid ?? "—",
         z.enable ? "yes" : "no",
-        z.interfaces.join(", ") || "—",
+        <span key="i" className="inline-flex flex-wrap gap-1">
+          {z.interfaces.length
+            ? z.interfaces.map((x) => (
+                <InterfaceChip key={x} name={x} />
+              ))
+            : "—"}
+        </span>,
         z.auth_method ?? "—",
         <RV v={z.radius_secret} key="rs" />,
         z.redirurl ?? "—",
@@ -1478,17 +1540,34 @@ function OpenVpnServersTable({ rows }: { rows: OpenVpnServer[] }) {
         "#",
         "Description",
         "Mode",
+        "Iface",
         "Proto / port",
         "Tunnel",
+        "CA / Cert",
+        "Auth",
         "Cipher",
         "TLS",
       ]}
+      rowKeys={rows.map((s) => s.vpnid)}
+      rowIds={rows.map((s) => itemId("openvpn_server", s.vpnid))}
       rows={rows.map((s) => [
         s.vpnid,
         s.description ?? "—",
         s.mode ?? "—",
+        <InterfaceChip key="if" name={s.interface} />,
         `${s.protocol ?? "?"} :${s.local_port ?? "?"}`,
         s.tunnel_network ?? s.tunnel_networkv6 ?? "—",
+        <span key="pki" className="inline-flex flex-wrap gap-1">
+          <Xref kind="ca" k={s.caref} label="CA" />
+          <Xref kind="cert" k={s.certref} label="Cert" />
+        </span>,
+        <span key="am" className="inline-flex flex-wrap gap-1">
+          {s.authmode.length
+            ? s.authmode.map((n) => (
+                <Xref key={n} kind="authserver" k={n} />
+              ))
+            : "—"}
+        </span>,
         s.crypto ?? "—",
         s.tls === "***redacted***" ? <Redacted /> : "—",
       ])}
@@ -1499,15 +1578,22 @@ function OpenVpnServersTable({ rows }: { rows: OpenVpnServer[] }) {
 function OpenVpnClientsTable({ rows }: { rows: OpenVpnClient[] }) {
   return (
     <Table
-      headers={["#", "Description", "Mode", "Server", "Tunnel", "Cipher", "TLS"]}
+      headers={["#", "Description", "Mode", "Iface", "Server", "Tunnel", "CA / Cert", "Cipher", "TLS"]}
+      rowKeys={rows.map((c) => c.vpnid)}
+      rowIds={rows.map((c) => itemId("openvpn_client", c.vpnid))}
       rows={rows.map((c) => [
         c.vpnid,
         c.description ?? "—",
         c.mode ?? "—",
+        <InterfaceChip key="if" name={c.interface} />,
         c.server_addr
           ? `${c.server_addr}:${c.server_port ?? "?"}`
           : "—",
         c.tunnel_network ?? "—",
+        <span key="pki" className="inline-flex flex-wrap gap-1">
+          <Xref kind="ca" k={c.caref} label="CA" />
+          <Xref kind="cert" k={c.certref} label="Cert" />
+        </span>,
         c.crypto ?? "—",
         c.tls === "***redacted***" ? <Redacted /> : "—",
       ])}
@@ -1542,15 +1628,19 @@ function IpsecPhase1Table({ rows }: { rows: IpsecPhase1[] }) {
       headers={[
         "IKE id",
         "Type",
+        "Iface",
         "Remote gw",
         "Auth",
         "PSK",
         "Encryption set",
         "Description",
       ]}
+      rowKeys={rows.map((p) => p.ikeid)}
+      rowIds={rows.map((p) => itemId("ipsec_phase1", p.ikeid))}
       rows={rows.map((p) => [
         p.ikeid,
         p.iketype ?? "—",
+        <InterfaceChip key="if" name={p.interface} />,
         p.remote_gateway ?? "—",
         p.authentication_method ?? "—",
         p.pre_shared_key === "***redacted***" ? <Redacted /> : "—",
@@ -1575,9 +1665,10 @@ function IpsecPhase2Table({ rows }: { rows: IpsecPhase2[] }) {
         "Encryption set",
         "Description",
       ]}
+      rowKeys={rows.map((p) => p.uniqid)}
       rows={rows.map((p) => [
         p.uniqid,
-        p.ikeid ?? "—",
+        <Xref key="ike" kind="ipsec_phase1" k={p.ikeid} />,
         p.mode ?? "—",
         p.local_address
           ? `${p.local_address}${p.local_netbits ? "/" + p.local_netbits : ""}`
@@ -1611,6 +1702,8 @@ function CATable({ rows }: { rows: CertificateAuthority[] }) {
   return (
     <Table
       headers={["CN / refid", "Description", "Issuer", "Expires", "Private key"]}
+      rowKeys={rows.map((c) => c.refid)}
+      rowIds={rows.map((c) => itemId("ca", c.refid))}
       rows={rows.map((c) => [
         <CertIdentity key="i" refid={c.refid} meta={c.metadata} />,
         c.descr ?? "—",
@@ -1628,15 +1721,19 @@ function CertsTable({ rows }: { rows: Certificate[] }) {
       headers={[
         "CN / refid",
         "Description",
+        "Issued by",
         "Type",
         "SANs",
         "Issuer",
         "Expires",
         "Private key",
       ]}
+      rowKeys={rows.map((c) => c.refid)}
+      rowIds={rows.map((c) => itemId("cert", c.refid))}
       rows={rows.map((c) => [
         <CertIdentity key="i" refid={c.refid} meta={c.metadata} />,
         c.descr ?? "—",
+        <Xref key="ca" kind="ca" k={c.caref} />,
         c.type ?? "—",
         <SansCell key="s" meta={c.metadata} />,
         c.metadata?.issuer_cn ?? "—",
@@ -1822,11 +1919,12 @@ function HaProxyPanel({ p }: { p: HaProxyConfig }) {
           </div>
           <Table
             headers={["Name", "Type", "Listen", "Default backend", "SSL", "Status"]}
+            rowKeys={p.frontends.map((f) => f.name)}
             rows={p.frontends.map((f) => [
               f.name,
               f.type ?? "—",
               f.addresses.join(", ") || f.extaddr || "—",
-              f.default_backend ?? "—",
+              <Xref key="db" kind="haproxy_backend" k={f.default_backend} />,
               f.ssl ? "yes" : "no",
               f.status ?? "—",
             ])}
@@ -1840,6 +1938,8 @@ function HaProxyPanel({ p }: { p: HaProxyConfig }) {
           </div>
           <Table
             headers={["Name", "Balance", "Check", "Servers"]}
+            rowKeys={p.backends.map((b) => b.name)}
+            rowIds={p.backends.map((b) => itemId("haproxy_backend", b.name))}
             rows={p.backends.map((b) => [
               b.name,
               b.balance ?? "—",
@@ -2034,18 +2134,32 @@ export const InterfaceChip = memo(function InterfaceChip({
   className?: string;
 }) {
   if (!name) return <span className="text-muted-fg">—</span>;
+  // When an xref index is in scope AND the interface is actually
+  // defined, render as a navigable Xref chip. ``Xref`` degrades to
+  // a muted-border plain chip when the target is missing, so the
+  // render-call sites (dozens of tables) stay untouched. Visual:
+  // we pass the hashed group-color classes as the chip color so
+  // the stable "LAN is always green" mapping survives.
   const c = interfaceChipClasses(name);
   return (
-    <span
-      className={cn(
-        "inline-flex items-center rounded border px-1.5 py-0.5 text-[11px] font-medium bg-bg",
-        c.fg,
-        c.border,
-        className,
-      )}
-    >
-      {interfaceLabel(name)}
-    </span>
+    <Xref
+      kind="interface"
+      k={name}
+      label={interfaceLabel(name)}
+      className={cn(c.fg, c.border, className)}
+      fallback={
+        <span
+          className={cn(
+            "inline-flex items-center rounded border px-1.5 py-0.5 text-[11px] font-medium bg-bg",
+            c.fg,
+            c.border,
+            className,
+          )}
+        >
+          {interfaceLabel(name)}
+        </span>
+      }
+    />
   );
 });
 
@@ -2301,12 +2415,12 @@ function CrlTable({ rows }: { rows: CertificateRevocationList[] }) {
   return (
     <Table
       headers={["Description", "Method", "CA ref", "Revoked certs"]}
+      rowKeys={rows.map((c) => c.refid)}
+      rowIds={rows.map((c) => itemId("crl", c.refid))}
       rows={rows.map((c) => [
         c.descr ?? "—",
         c.method ?? "—",
-        <span key="ca" className="font-mono text-xs">
-          {c.caref ?? "—"}
-        </span>,
+        <Xref key="ca" kind="ca" k={c.caref} />,
         <Badge
           key="rc"
           tone={c.revoked_cert_refids.length ? "danger" : "muted"}
