@@ -320,6 +320,24 @@ export function allTargets(index: XrefIndex): XrefTarget[] {
   return out;
 }
 
+/** Reverse-lookup by DOM id. Used by the xref back-navigation stack
+ *  to resolve a human-readable label for an origin row when the user
+ *  clicks a chip inside it. Returns ``null`` for anchor ids that
+ *  aren't proper xref targets (leaf rows emitted via ``rowAnchorId``,
+ *  e.g. firewall rules / NATs — their labels have to be derived from
+ *  the DOM instead). */
+export function findTargetByAnchorId(
+  index: XrefIndex,
+  anchorId: string,
+): XrefTarget | null {
+  for (const m of Object.values(index.byKind)) {
+    for (const t of m.values()) {
+      if (t.anchorId === anchorId) return t;
+    }
+  }
+  return null;
+}
+
 /** Scroll to an anchor id and play the flash animation. Used by
  *  ``Xref`` click handlers and the QuickJump palette alike. */
 export function scrollAndFlash(anchorId: string): void {

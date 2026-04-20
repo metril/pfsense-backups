@@ -7,11 +7,14 @@ import {
   useXrefEntry,
   type XrefSide,
 } from "@/components/xref/XrefContext";
+import { useXrefHistory } from "@/components/xref/XrefHistory";
 import {
   expandThenScrollToHash,
+  findTargetByAnchorId,
   resolve,
   xrefHref,
   type RefKind,
+  type XrefIndex,
 } from "@/lib/xref";
 
 /**
@@ -29,6 +32,37 @@ import {
  * before the index is ready), renders the raw label as plain text —
  * operators still see the value, they just don't get click navigation.
  */
+
+/** Walk up from the clicked chip to find the id of the row / item
+ *  the chip sits inside — that's the "origin" we record on the back
+ *  stack so the operator can rewind. Skips any wrapping element that
+ *  isn't itself a proper xref anchor id (``xref-*``). */
+function findOriginAnchorId(from: HTMLElement): string | null {
+  let cur: HTMLElement | null = from.parentElement;
+  while (cur) {
+    if (cur.id && cur.id.startsWith("xref-")) return cur.id;
+    cur = cur.parentElement;
+  }
+  return null;
+}
+
+/** Derive a short human label for a back-stack entry. Uses the xref
+ *  index first (proper targets have a ``label`` field); falls back to
+ *  parsing the id for leaf rows like firewall rules / NAT rules that
+ *  are anchored via ``rowAnchorId("rule", tracker)``. */
+function labelForOrigin(
+  index: XrefIndex | null,
+  originId: string,
+): string {
+  if (index) {
+    const target = findTargetByAnchorId(index, originId);
+    if (target) return `${target.kind.replace(/_/g, " ")}: ${target.label}`;
+  }
+  // Leaf rows: ``xref-rule-{tracker}`` or ``xref-nat-{tracker}``.
+  const m = /^xref-([^-]+)-(.+)$/.exec(originId);
+  if (m) return `${m[1].replace(/_/g, " ")}: ${m[2]}`;
+  return "previous location";
+}
 function XrefInner({
   kind,
   k,
@@ -55,6 +89,7 @@ function XrefInner({
 }) {
   const entry = useXrefEntry(side);
   const index = entry?.index ?? null;
+  const history = useXrefHistory();
 
   if (!k) {
     return (
@@ -115,6 +150,19 @@ function XrefInner({
       return;
     }
     e.preventDefault();
+    // Capture the origin row BEFORE navigating — the chip we clicked
+    // is inside some row / item, and that's where the operator will
+    // want to return. ``history`` is ``null`` when no provider is
+    // mounted (diff view), so we silently skip push there.
+    if (history) {
+      const originId = findOriginAnchorId(e.currentTarget);
+      if (originId && originId !== target.anchorId) {
+        history.push({
+          anchorId: originId,
+          label: labelForOrigin(index, originId),
+        });
+      }
+    }
     expandThenScrollToHash(xrefHref(kind, k));
   };
 

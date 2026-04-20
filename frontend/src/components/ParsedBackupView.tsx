@@ -28,6 +28,8 @@ import { FilterHiddenAnchorBanner } from "@/components/ui/FilterHiddenAnchorBann
 import { Xref, XrefList } from "@/components/ui/Xref";
 import { CardGroupProvider } from "@/components/CardGroupContext";
 import { XrefProvider } from "@/components/xref/XrefContext";
+import { XrefHistoryProvider } from "@/components/xref/XrefHistory";
+import { XrefBackPill } from "@/components/xref/XrefBackPill";
 import { DeepLinkBridge } from "@/components/xref/DeepLinkBridge";
 import { QuickJump } from "@/components/xref/QuickJump";
 import { itemId, rowAnchorId } from "@/lib/xref";
@@ -198,9 +200,11 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
     // rule pointing at alias ``RFC1918`` while the user has filtered on
     // ``"LAN"``). Using the narrowed ``data`` would produce dead chips.
     <XrefProvider data={rawData!}>
+    <XrefHistoryProvider>
     <FilterProvider query={filterQuery}>
     <CardGroupProvider scope={`view:${backupId}`}>
     <DeepLinkBridge includeHashchange />
+    <XrefBackPill />
     <ViewerLayout
       cfg={data}
       filterQuery={filterQuery}
@@ -615,6 +619,7 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
     </ViewerLayout>
     </CardGroupProvider>
     </FilterProvider>
+    </XrefHistoryProvider>
     </XrefProvider>
   );
 }
