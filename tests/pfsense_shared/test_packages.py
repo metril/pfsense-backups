@@ -133,6 +133,54 @@ def test_pfblockerng_feeds_and_secrets() -> None:
     assert "LEAKY_MAXMIND_KEY" not in cfg.model_dump_json()
 
 
+def test_pfblockerng_feed_url_oinkcode_is_scrubbed() -> None:
+    """Paid feeds (ET Pro, Snort VRT) embed a subscriber oinkcode directly
+    in the feed URL. That credential must not survive into parsed JSON."""
+    cfg = _parse(
+        """
+        <pfsense>
+          <installedpackages>
+            <pfblockernglistsv4>
+              <config>
+                <aliasname>ETPro</aliasname>
+                <action>Alias Deny</action>
+                <row>
+                  <state>Enabled</state>
+                  <url>https://rules.emergingthreats.net/0123456789abcdef0123456789abcdef01234567/suricata-6.0.0/emerging-all.rules</url>
+                  <format>auto</format>
+                </row>
+              </config>
+            </pfblockernglistsv4>
+            <pfblockernglistsv6>
+              <config>
+                <aliasname>SnortVRT</aliasname>
+                <action>Alias Deny</action>
+                <row>
+                  <state>Enabled</state>
+                  <url>https://www.snort.org/rules/snortrules-snapshot-2983.tar.gz?oinkcode=deadbeefcafef00ddeadbeefcafef00ddeadbeef</url>
+                </row>
+              </config>
+            </pfblockernglistsv6>
+          </installedpackages>
+        </pfsense>
+        """
+    )
+    p = cfg.installedpackages
+    assert p is not None
+    assert p.pfblockerng is not None
+    urls = [f.url for f in p.pfblockerng.feeds]
+    assert len(urls) == 2
+    # Path-segment credential gets a readable placeholder.
+    assert "/***oinkcode***/" in (urls[0] or "")
+    assert "0123456789abcdef" not in (urls[0] or "")
+    # Query-string credential is redacted.
+    assert "oinkcode=***redacted***" in (urls[1] or "")
+    assert "deadbeefcafef00d" not in (urls[1] or "")
+    blob = cfg.model_dump_json()
+    assert "0123456789abcdef" not in blob
+    assert "deadbeefcafef00d" not in blob
+
+
 def test_haproxy_frontend_backend_server_password_redacted() -> None:
     cfg = _parse(PACKAGES_XML)
     h = cfg.installedpackages.haproxy  # type: ignore[union-attr]

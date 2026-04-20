@@ -380,28 +380,30 @@ function ReorderedGroup({ rows }: { rows: ReorderEvent[] }) {
 
 function FieldChanges({ changes }: { changes: FieldChange[] }) {
   return (
-    <table className="w-full text-xs">
-      <thead>
-        <tr className="text-muted-fg">
-          <th className="py-0.5 text-left font-normal">Field</th>
-          <th className="py-0.5 text-left font-normal">Before</th>
-          <th className="py-0.5 text-left font-normal">After</th>
-        </tr>
-      </thead>
-      <tbody>
-        {changes.map((c) => (
-          <tr key={c.field} className="border-t border-border/30">
-            <td className="py-0.5 pr-2 font-mono">{c.field}</td>
-            <td className="py-0.5 pr-2 font-mono text-danger">
-              {formatValue(c.before)}
-            </td>
-            <td className="py-0.5 font-mono text-ok">
-              {formatValue(c.after)}
-            </td>
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="text-muted-fg">
+            <th className="py-0.5 text-left font-normal">Field</th>
+            <th className="py-0.5 text-left font-normal">Before</th>
+            <th className="py-0.5 text-left font-normal">After</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {changes.map((c) => (
+            <tr key={c.field} className="border-t border-border/30">
+              <td className="py-0.5 pr-2 font-mono">{c.field}</td>
+              <td className="py-0.5 pr-2 font-mono text-danger">
+                {formatValue(c.before)}
+              </td>
+              <td className="py-0.5 font-mono text-ok">
+                {formatValue(c.after)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -432,15 +434,17 @@ function ItemJson({ item }: { item: Record<string, unknown> }) {
     .slice(0, 12);
   if (entries.length === 0) return null;
   return (
-    <table className="w-full text-xs">
-      <tbody>
-        {entries.map(([k, v]) => (
-          <tr key={k} className="border-t border-border/30">
-            <td className="py-0.5 pr-2 font-mono text-muted-fg">{k}</td>
-            <td className="py-0.5 font-mono">{formatValue(v)}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs">
+        <tbody>
+          {entries.map(([k, v]) => (
+            <tr key={k} className="border-t border-border/30">
+              <td className="py-0.5 pr-2 font-mono text-muted-fg">{k}</td>
+              <td className="py-0.5 font-mono">{formatValue(v)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }

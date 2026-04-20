@@ -9,11 +9,32 @@ via the raw-XML fallback tab.
 
 from __future__ import annotations
 
+import re
 from xml.etree.ElementTree import Element
 
 from pydantic import BaseModel, ConfigDict
 
 from pfsense_shared.pfsense_sections._helpers import bool_flag, children, text
+
+# Feeds from paid subscribers (ET Pro, Snort VRT) embed the operator's
+# credential directly in the URL path. The standard shape is:
+#   https://rules.emergingthreats.net/<40-hex-char-oinkcode>/…
+#   https://www.snort.org/rules/snortrules-snapshot-XXXX.tar.gz?oinkcode=…
+# Redact both forms so the credential never lands in parsed JSON.
+_OINKCODE_PATH_RE = re.compile(r"/([0-9a-fA-F]{30,64})/")
+_OINKCODE_QUERY_RE = re.compile(r"([?&]oinkcode=)[^&]+", re.IGNORECASE)
+
+
+def _scrub_feed_url(url: str | None) -> str | None:
+    """Strip subscriber credentials from a feed URL while keeping the
+    rest of the URL readable in diffs. The placeholder is stable so
+    diffing two backups still shows "same feed" when only the path
+    credential rotates."""
+    if not url:
+        return url
+    scrubbed = _OINKCODE_PATH_RE.sub("/***oinkcode***/", url)
+    scrubbed = _OINKCODE_QUERY_RE.sub(r"\1***redacted***", scrubbed)
+    return scrubbed
 
 
 class PfBlockerNgFeed(BaseModel):
@@ -74,7 +95,7 @@ def _collect_feeds(el: Element | None, container_tag: str, row_tag: str) -> list
     for lst in children(el, container_tag):
         header = text(lst, "aliasname")
         for row in children(lst, row_tag):
-            url = text(row, "url")
+            url = _scrub_feed_url(text(row, "url"))
             if not url:
                 continue
             out.append(
