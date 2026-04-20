@@ -610,13 +610,14 @@ function ViewerLayout({
   const isWide = useMediaQuery("(min-width: 1400px)");
   // IntersectionObserver only runs when the sidebar is rendered —
   // no point paying for it in narrow mode where nothing consumes
-  // the active id. The ``version`` arg rebuilds the observer when
-  // the rendered section count changes (filter apply/clear), so
-  // newly-mounted sections get observed and the highlight doesn't
-  // go stale.
+  // the active id. Passing ``filterQuery`` as the version rebuilds
+  // the observer whenever the filter changes (not just when the
+  // visible count changes), so two filters that happen to leave
+  // the same number of sections visible still refresh the observed
+  // set correctly.
   const activeId = useActiveSection(
     isWide ? "section-" : null,
-    sectionCounter?.visible ?? 0,
+    filterQuery,
   );
 
   if (isWide) {
@@ -1098,8 +1099,20 @@ function TableOfContents({
 }
 
 function sectionId(title: string) {
+  // Normalise em / en dashes to a plain hyphen BEFORE collapsing
+  // whitespace — otherwise ``"IPsec — phase 1"`` becomes
+  // ``section-ipsec-—-phase-1`` with a literal U+2014 in the DOM id,
+  // which breaks any caller that tries to construct the same id
+  // from a known-string table (e.g. ``SCOPE_TO_SECTION_ID`` in
+  // xref.ts for the deep-link-into-collapsed-card fallback).
   return (
-    "section-" + title.toLowerCase().replace(/\s+/g, "-").replace(/[()]/g, "")
+    "section-" +
+    title
+      .toLowerCase()
+      .replace(/[—–]/g, "-")
+      .replace(/\s+/g, "-")
+      .replace(/[()]/g, "")
+      .replace(/-{2,}/g, "-")
   );
 }
 

@@ -17,15 +17,22 @@ import { useEffect, useState } from "react";
  * Pass ``null`` to disable (e.g. on narrow viewports where the sticky
  * sidebar isn't rendered — no need to pay for the observer).
  *
- * ``version`` is a hint to rebuild the observer — bump it from the
- * caller whenever the set of rendered sections changes (filter apply,
- * filter clear, a fresh config arriving). Without this, sections that
- * mount AFTER the observer was set up are invisible to it, so the
- * sidebar highlight goes stale after a filter change.
+ * ``version`` is a hint to rebuild the observer — pass any value
+ * whose identity changes when the set of rendered sections changes
+ * (filter apply, filter clear, a fresh config arriving). Without
+ * this, sections that mount AFTER the observer was set up are
+ * invisible to it, so the sidebar highlight goes stale after a
+ * filter change.
+ *
+ * Accepts ``string | number`` so callers can pass the raw filter
+ * query. A naive visible-count proxy was previously used here, but
+ * that collides when two different filters happen to leave the same
+ * number of sections visible (different sections, same count) and
+ * the observer wouldn't rebuild.
  */
 export function useActiveSection(
   prefix: string | null,
-  version: number = 0,
+  version: string | number = 0,
 ): string | null {
   const [activeId, setActiveId] = useState<string | null>(null);
 

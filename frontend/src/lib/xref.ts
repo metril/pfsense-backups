@@ -372,7 +372,7 @@ const SCOPE_TO_SECTION_ID: Record<string, string> = {
   authserver: "section-external-auth-servers",
   openvpn_server: "section-openvpn-servers",
   openvpn_client: "section-openvpn-clients",
-  ipsec_phase1: "section-ipsec--phase-1",
+  ipsec_phase1: "section-ipsec-phase-1",
   haproxy_backend: "section-installed-packages",
   lb_pool: "section-load-balancer",
   user: "section-users",

@@ -559,13 +559,10 @@ function DiffLayout({
   children: ReactNode;
 }) {
   const isWide = useMediaQuery("(min-width: 1400px)");
-  // Version the observer on ``sectionCounter.visible`` so the
-  // IntersectionObserver is rebuilt when the filter changes the
-  // set of rendered diff section cards.
-  const activeId = useActiveSection(
-    isWide ? "diff-" : null,
-    sectionCounter?.visible ?? 0,
-  );
+  // Pass ``filterQuery`` (not a count proxy) as the rebuild key so
+  // two filters leaving the same number of diff sections visible
+  // still refresh the observed element set.
+  const activeId = useActiveSection(isWide ? "diff-" : null, filterQuery);
 
   if (isWide) {
     return (
