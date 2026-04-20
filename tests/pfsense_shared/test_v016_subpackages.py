@@ -331,6 +331,53 @@ def test_frr_ospfd_interfaces_structured_with_redaction():
     assert "LEAKY_OSPF6_KEY" not in dumped
 
 
+def test_frr_ospfd_interfaces_ospf6authkey_alias_redacts():
+    """OSPFv3 builds emit the IPv6 auth key as ``<ospf6authkey>``
+    rather than ``<md5_password>``. v0.16.1 added the alias to the
+    parser's fallback chain; this test exercises that path end-to-end
+    to prove the key still redacts when only ``ospf6authkey`` is
+    present in the XML."""
+    xml = """
+    <pfsense>
+      <installedpackages>
+        <frr><enable>on</enable></frr>
+        <frrospfdinterfaces>
+          <item>
+            <interface>lan</interface>
+            <ospf6authkey>LEAKY_OSPF6_AUTHKEY</ospf6authkey>
+          </item>
+        </frrospfdinterfaces>
+      </installedpackages>
+    </pfsense>
+    """
+    cfg = _parse(xml)
+    frr = cfg.installedpackages.frr
+    assert frr is not None
+    assert len(frr.ospfd_interfaces) == 1
+    assert frr.ospfd_interfaces[0].md5_password == REDACTED
+    assert "LEAKY_OSPF6_AUTHKEY" not in cfg.model_dump_json()
+
+
+def test_frr_bgp6d_sibling_tag_presence_only():
+    """pfSense-FRR builds can emit ``<frrbgp6d>`` next to ``<frrbgp>``.
+    v0.20.0 claims the tag (no parsing — BGP is dual-stack via
+    address-families) so it doesn't leak to Other packages."""
+    xml = """
+    <pfsense>
+      <installedpackages>
+        <frr><enable>on</enable></frr>
+        <frrbgp6d/>
+      </installedpackages>
+    </pfsense>
+    """
+    cfg = _parse(xml)
+    frr = cfg.installedpackages.frr
+    assert frr is not None
+    assert frr.bgp6_present is True
+    unknown_tags = {u.tag for u in cfg.installedpackages.unknown}
+    assert "frrbgp6d" not in unknown_tags
+
+
 def test_squid_subtags_alone_still_produce_config():
     xml = """
     <pfsense>
@@ -344,3 +391,182 @@ def test_squid_subtags_alone_still_produce_config():
     assert pkgs is not None
     assert pkgs.squid is not None
     assert pkgs.squid.cache_present is True
+
+
+# ---------- v0.20.0: pfBlockerNG GeoIP continent tags -----------------------
+
+
+def test_pfblockerng_geoip_continents_consumed_and_surfaced():
+    """GeoIP continent blocklists each get their own top-level element
+    under ``<installedpackages>``. v0.19.0 and earlier left these
+    unclaimed, so any operator with GeoIP configured saw eight-plus
+    leaks into the "Other packages" fallback. v0.20.0 claims them all
+    and surfaces the set via ``geoip_configured`` + ``geoip_continents``."""
+    xml = """
+    <pfsense>
+      <installedpackages>
+        <pfblockerngafrica/>
+        <pfblockerngeurope/>
+        <pfblockerngnorthamerica/>
+        <pfblockerngoceania/>
+        <pfblockerngproxyandsatellite/>
+      </installedpackages>
+    </pfsense>
+    """
+    cfg = _parse(xml)
+    pkgs = cfg.installedpackages
+    assert pkgs is not None
+    pbn = pkgs.pfblockerng
+    assert pbn is not None
+    assert pbn.geoip_configured is True
+    assert "Africa" in pbn.geoip_continents
+    assert "Europe" in pbn.geoip_continents
+    assert "North America" in pbn.geoip_continents
+    assert "Oceania" in pbn.geoip_continents
+    assert "Proxy & satellite" in pbn.geoip_continents
+    # None of the GeoIP tags should leak to Other packages.
+    unknown_tags = {u.tag for u in pkgs.unknown}
+    for tag in (
+        "pfblockerngafrica",
+        "pfblockerngeurope",
+        "pfblockerngnorthamerica",
+        "pfblockerngoceania",
+        "pfblockerngproxyandsatellite",
+    ):
+        assert tag not in unknown_tags, f"{tag} leaked to Other packages"
+
+
+def test_pfblockerng_geoip_ocean_alias_dedupes_to_oceania():
+    """Older pfBlockerNG builds spelled the continent ``ocean``; newer
+    builds use ``oceania``. Both tags must be consumed and both must
+    dedupe to a single "Oceania" label so upgraded configs don't show
+    the continent twice."""
+    xml = """
+    <pfsense>
+      <installedpackages>
+        <pfblockerngocean/>
+        <pfblockerngoceania/>
+      </installedpackages>
+    </pfsense>
+    """
+    cfg = _parse(xml)
+    pbn = cfg.installedpackages.pfblockerng
+    assert pbn.geoip_continents.count("Oceania") == 1
+
+
+# ---------- v0.20.0: Squid NTLM + Telegraf redaction ----------
+
+
+def test_squidauth_ntlm_credentials_redacted():
+    """v0.19.0 and earlier ignored the NTLM machine-account password
+    stored under ``<squidauth><nt_pass>`` — an operator-supplied
+    domain-join credential as sensitive as any other password. v0.20.0
+    adds ``nt_pass`` to ``_EXACT`` and pipes the field through
+    redact()."""
+    xml = """
+    <pfsense>
+      <installedpackages>
+        <squidauth>
+          <auth_method>ntlm</auth_method>
+          <nt_user>squid$</nt_user>
+          <nt_pass>LEAKY_NT_MACHINE_PASSWORD</nt_pass>
+        </squidauth>
+      </installedpackages>
+    </pfsense>
+    """
+    cfg = _parse(xml)
+    auth = cfg.installedpackages.squid.auth
+    assert auth is not None
+    assert auth.nt_user == "squid$"
+    assert auth.nt_pass == REDACTED
+    assert "LEAKY_NT_MACHINE_PASSWORD" not in cfg.model_dump_json()
+
+
+def test_telegraf_username_redacted_and_url_basic_auth_scrubbed():
+    """v0.19.0 and earlier dropped a ``<username>`` field into the
+    parsed JSON unredacted while carefully redacting its paired
+    ``<password>`` / ``<token>``. They are a credential pair — leaking
+    one still lets someone phish or enumerate the other. v0.20.0
+    redacts the username and scrubs any embedded ``user:pass@`` auth
+    segment from ``<url>`` (common for InfluxDB v1)."""
+    xml = """
+    <pfsense>
+      <installedpackages>
+        <telegraf>
+          <enable>on</enable>
+          <url>http://LEAKY_USER:LEAKY_PASS@influx.example.com:8086/db</url>
+          <username>LEAKY_INFLUX_USER</username>
+          <password>LEAKY_INFLUX_PASS</password>
+        </telegraf>
+      </installedpackages>
+    </pfsense>
+    """
+    cfg = _parse(xml)
+    tg = cfg.installedpackages.telegraf
+    assert tg is not None
+    assert tg.username == REDACTED
+    assert tg.password == REDACTED
+    # URL keeps host/path/port for diff readability; ``user:pass@``
+    # segment is replaced with the standard marker.
+    assert tg.url is not None
+    assert "influx.example.com:8086" in tg.url
+    assert "LEAKY_USER" not in tg.url
+    assert "LEAKY_PASS" not in tg.url
+    dumped = cfg.model_dump_json()
+    assert "LEAKY_INFLUX_USER" not in dumped
+    assert "LEAKY_INFLUX_PASS" not in dumped
+    assert "LEAKY_USER" not in dumped
+    assert "LEAKY_PASS" not in dumped
+
+
+# ---------- v0.20.0: Suricata oinkmaster regression ----------
+
+
+def test_suricata_community_rules_do_not_imply_oinkmaster_configured():
+    """v0.17.0 OR'd ``<snortcommunityrules>`` into the oinkmaster
+    signal, so enabling the free community ruleset falsely claimed a
+    paid subscription key was set. v0.20.0 narrows the signal to the
+    oinkcode itself."""
+    xml = """
+    <pfsense>
+      <installedpackages>
+        <suricata>
+          <snortcommunityrules>on</snortcommunityrules>
+        </suricata>
+      </installedpackages>
+    </pfsense>
+    """
+    cfg = _parse(xml)
+    sr = cfg.installedpackages.suricata
+    assert sr is not None
+    assert sr.oinkmaster_configured is False
+
+
+# ---------- v0.20.0: shellcmd cmdtype="disabled" ----------
+
+
+def test_shellcmd_cmdtype_disabled_sets_disabled_flag():
+    """The pfSense shellcmd package treats ``cmdtype="disabled"`` as
+    its own disable switch, parallel to ``<disabled>on</disabled>``.
+    v0.17.0 surfaced a contradictory row (``type: disabled`` paired
+    with ``disabled: no``); v0.20.0 normalizes the boolean and drops
+    the pseudo-type."""
+    xml = """
+    <pfsense>
+      <installedpackages>
+        <shellcmdsettings>
+          <config>
+            <cmd>/sbin/pfctl -F all</cmd>
+            <cmdtype>disabled</cmdtype>
+          </config>
+        </shellcmdsettings>
+      </installedpackages>
+    </pfsense>
+    """
+    cfg = _parse(xml)
+    sc = cfg.installedpackages.shellcmd
+    assert sc is not None
+    assert len(sc.entries) == 1
+    entry = sc.entries[0]
+    assert entry.disabled is True
+    assert entry.cmdtype is None

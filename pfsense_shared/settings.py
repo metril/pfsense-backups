@@ -61,6 +61,26 @@ class WebSettings(CommonSettings):
     rate_limit_login: str = Field(default="10/minute")
     rate_limit_ws: str = Field(default="30/minute")
 
+    # v0.20.0 — restrict which upstream IPs may spoof ``X-Forwarded-*``
+    # headers. Empty (default) means "only loopback" so a client hitting
+    # the container directly can't forge ``X-Forwarded-Proto: https`` to
+    # bypass the session cookie's Secure flag. Set to the reverse-proxy
+    # address when deployed behind Traefik / nginx on another host.
+    # Comma-separated; ``"*"`` trusts every upstream (retained as an
+    # explicit opt-in rather than the historical default).
+    trusted_proxies: str = Field(
+        default="127.0.0.1,::1",
+        alias="TRUSTED_PROXIES",
+    )
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def trusted_proxies_list(self) -> list[str] | str:
+        raw = self.trusted_proxies.strip()
+        if raw == "*":
+            return "*"
+        return [h.strip() for h in raw.split(",") if h.strip()]
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def oidc_allowed_emails(self) -> list[str]:

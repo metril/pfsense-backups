@@ -53,12 +53,29 @@ def parse(ip: Element) -> ShellCmdSettings | None:
         cmd = text(row, "cmd") or text(row, "shellcmd")
         if not cmd:
             continue
+        raw_type = text(row, "cmdtype") or text(row, "type")
+        # pfSense's shellcmd package treats ``cmdtype="disabled"`` as
+        # its own disable switch — parallel to (and distinct from) a
+        # ``<disabled>on</disabled>`` child element. v0.17.0 read
+        # cmdtype verbatim and surfaced ``disabled=False`` even when
+        # the package had disabled the command via cmdtype, producing
+        # a contradictory "type: disabled, disabled: no" row in the
+        # viewer. Normalize: when cmdtype is ``"disabled"``, flip the
+        # boolean and drop the type (there's no actual run phase to
+        # name for a disabled entry).
+        disabled = bool_flag(row, "disabled")
+        cmdtype: str | None
+        if raw_type == "disabled":
+            disabled = True
+            cmdtype = None
+        else:
+            cmdtype = raw_type
         entries.append(
             ShellCmdEntry(
                 cmd=cmd,
-                cmdtype=text(row, "cmdtype") or text(row, "type"),
+                cmdtype=cmdtype,
                 descr=text(row, "descr") or text(row, "description"),
-                disabled=bool_flag(row, "disabled"),
+                disabled=disabled,
             )
         )
     return ShellCmdSettings(entries=entries)

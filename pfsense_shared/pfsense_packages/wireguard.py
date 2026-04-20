@@ -42,6 +42,11 @@ class WireGuardTunnel(BaseModel):
     mtu: str | None = None
     # Addresses are CIDR-style list in the raw XML; preserved as-is.
     addresses: list[str] = []
+    # Comma- or space-separated DNS server list assigned to this
+    # tunnel. v0.20.0 — previously silently dropped, but operators
+    # using pfSense WireGuard as a client to commercial VPN providers
+    # rely on DNS pinning here to avoid leaks.
+    dns: str | None = None
     # Firewall's own public key — publishable; peers need it.
     public_key: str | None = None
     # Firewall's own private key — redacted.
@@ -121,6 +126,7 @@ def _parse_tunnels(wg_el: Element) -> list[WireGuardTunnel]:
                 listen_port=text(t, "listenport") or text(t, "listen_port"),
                 mtu=text(t, "mtu"),
                 addresses=addresses,
+                dns=text(t, "dns"),
                 public_key=text(t, "publickey") or text(t, "public_key"),
                 # Redact the private key via the tag name that lives
                 # in ``_EXACT``; pass whichever the XML used.

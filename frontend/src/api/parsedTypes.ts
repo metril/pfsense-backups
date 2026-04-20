@@ -673,6 +673,8 @@ export interface PfBlockerNgConfig {
   reputation_present: boolean;
   dnsbl_safesearch_present: boolean;
   global_present: boolean;
+  geoip_configured: boolean;
+  geoip_continents: string[];
 }
 
 export interface HaProxyFrontend {
@@ -824,6 +826,8 @@ export interface SquidAuthConfig {
   radius_server: string | null;
   radius_port: string | null;
   radius_secret: string | null;
+  nt_user: string | null;
+  nt_pass: string | null;
 }
 
 export interface SquidBundle {
@@ -911,15 +915,8 @@ export interface FrrOspfConfig {
   interfaces: FrrOspfInterface[];
 }
 
-export interface FrrOspfdInterface {
-  interface: string;
-  area: string | null;
-  cost: string | null;
-  priority: string | null;
-  hello_interval: string | null;
-  dead_interval: string | null;
-  md5_password: string | null;
-}
+// OSPFv3 (IPv6) rows carry the same field set as OSPFv2.
+export type FrrOspfdInterface = FrrOspfInterface;
 
 export interface FrrConfig {
   enabled: boolean;
@@ -930,6 +927,7 @@ export interface FrrConfig {
   ospfd_interfaces_present: boolean;
   global_acls_present: boolean;
   global_prefixes_present: boolean;
+  bgp6_present: boolean;
   ospfd_interfaces: FrrOspfdInterface[];
 }
 
@@ -970,6 +968,7 @@ export interface WireGuardTunnel {
   listen_port: string | null;
   mtu: string | null;
   addresses: string[];
+  dns: string | null;
   public_key: string | null;
   private_key: string | null;
 }
@@ -992,11 +991,12 @@ export interface WireGuardConfig {
 }
 
 export interface SnortInterface {
+  // Fields mirror ``SuricataInterface`` so panels can share cells.
   uuid: string;
   interface: string | null;
   descr: string | null;
   enable: boolean;
-  blockoffenders: boolean;
+  blockoffenders7: boolean;
   ips_mode: string | null;
   categories: string[];
 }
@@ -1022,11 +1022,28 @@ export interface MiniUpnpdConfig {
 export interface AvahiConfig {
   enable: boolean;
   reflector: boolean;
-  ipv4_only: boolean;
-  ipv6_only: boolean;
+  ipv4_enabled: boolean;
+  ipv6_enabled: boolean;
+  wide_area: boolean;
+  publish_workstation: boolean;
+  publish_addresses: boolean;
+  reflect_ipv: string | null;
   interfaces: string | null;
   allow_deny_interfaces: string | null;
   cache_entries_max: string | null;
+  browse_domains: string | null;
+}
+
+export interface OpenvpnClientExportServer {
+  key: string;
+  vpnid: string | null;
+  useaddr: string | null;
+  verifyservercn: string | null;
+  blockoutsidedns: boolean;
+  usetoken: boolean;
+  usepkcs11: boolean;
+  bindmode: string | null;
+  silent_install: boolean;
 }
 
 export interface OpenvpnClientExportConfig {
@@ -1038,6 +1055,7 @@ export interface OpenvpnClientExportConfig {
   ovpnexportcountry: string | null;
   ovpnexportstate: string | null;
   ovpnexportcity: string | null;
+  servers: OpenvpnClientExportServer[];
 }
 
 export interface ShellCmdEntry {

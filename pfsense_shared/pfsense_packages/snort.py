@@ -31,7 +31,11 @@ class SnortInterface(BaseModel):
     interface: str | None = None
     descr: str | None = None
     enable: bool = False
-    blockoffenders: bool = False
+    # Matches ``SuricataInterface.blockoffenders7`` so the UI can
+    # render Snort + Suricata interfaces through the same shape. The
+    # XML tag is literally ``<blockoffenders7>`` (a historical
+    # pfSense quirk — the "7" is a leftover version suffix).
+    blockoffenders7: bool = False
     ips_mode: str | None = None
     # Snort stores its enabled rulesets the same way Suricata does —
     # either as a ``||``-separated ``<rulesets>`` string or as
@@ -85,7 +89,7 @@ def parse(ip: Element) -> SnortConfig | None:
                         interface=text(item, "interface"),
                         descr=text(item, "descr"),
                         enable=bool_flag(item, "enable"),
-                        blockoffenders=bool_flag(item, "blockoffenders7")
+                        blockoffenders7=bool_flag(item, "blockoffenders7")
                         or bool_flag(item, "blockoffenders"),
                         ips_mode=text(item, "ips_mode"),
                         categories=_category_list(item),

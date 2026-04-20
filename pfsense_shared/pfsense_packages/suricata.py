@@ -110,18 +110,34 @@ def parse(ip: Element) -> SuricataConfig | None:
             if not name:
                 continue
             entries: list[SuricataPasslistEntry] = []
-            row_el = item.find("row")
-            if row_el is not None:
-                for row in children(row_el, "item") or children(item, "row"):
-                    addr = text(row, "ipaddress") or text(row, "address")
-                    if addr:
-                        entries.append(
-                            SuricataPasslistEntry(
-                                key=f"{addr}|{text(row, 'descr') or ''}",
-                                address=addr,
-                                descr=text(row, "descr"),
-                            )
+            # Two observed storage shapes for passlist rows:
+            #   1. ``<row><item>…</item>…</row>`` — the wrapper holds
+            #      multiple rows; iterate its children.
+            #   2. ``<row>…</row>`` repeated directly under the
+            #      passlist item — each ``<row>`` *is* one entry.
+            # v0.17.0 tried to express this as
+            # ``children(row_el, "item") or children(item, "row")`` but
+            # the fallback never fired when the wrapper existed but was
+            # empty — ``children(item, "row")`` would return the empty
+            # wrapper element itself (from the same ``find`` that
+            # produced ``row_el``), which walked as if it were an entry
+            # row and produced zero addresses. Be explicit instead.
+            rows: list[Element] = []
+            row_wrapper = item.find("row")
+            if row_wrapper is not None:
+                rows = children(row_wrapper, "item")
+            if not rows:
+                rows = children(item, "row")
+            for row in rows:
+                addr = text(row, "ipaddress") or text(row, "address")
+                if addr:
+                    entries.append(
+                        SuricataPasslistEntry(
+                            key=f"{addr}|{text(row, 'descr') or ''}",
+                            address=addr,
+                            descr=text(row, "descr"),
                         )
+                    )
             passlists.append(
                 SuricataPasslist(
                     name=name,
@@ -134,9 +150,13 @@ def parse(ip: Element) -> SuricataConfig | None:
     if root is not None:
         # The Emerging Threats / Snort-VRT oink code is a credential;
         # report "configured" vs not instead of surfacing the value.
-        oinkmaster_configured = bool(
-            (text(root, "oinkcode") or text(root, "snortcommunityrules") or "").strip()
-        )
+        # v0.20.0 — previously OR'd in ``<snortcommunityrules>``, but
+        # that's a yes/no toggle for the free community ruleset, not
+        # a credential. Firing ``oinkmaster_configured=True`` whenever
+        # community rules were enabled made the viewer claim a
+        # subscription key was set even when none existed. Restrict
+        # the signal to the oinkcode itself.
+        oinkmaster_configured = bool((text(root, "oinkcode") or "").strip())
 
     return SuricataConfig(
         enable_stats=bool_flag(root, "enable_stats_collection")

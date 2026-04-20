@@ -150,7 +150,17 @@ def create_app(settings: WebSettings | None = None, static_dir: Path | None = No
         same_site="lax",
         max_age=14 * 24 * 3600,
     )
-    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+    # v0.20.0 — ``trusted_hosts="*"`` let any upstream spoof
+    # ``X-Forwarded-Proto`` / ``X-Forwarded-For``. The former can flip
+    # the scheme Starlette sees to ``https`` and satisfy the Secure
+    # cookie check even on a plaintext request; the latter corrupts
+    # rate-limiting and audit-log client IPs. Default to loopback-only
+    # (``TRUSTED_PROXIES=127.0.0.1,::1``); deploy topologies behind a
+    # proxy on a different host override via env.
+    app.add_middleware(
+        ProxyHeadersMiddleware,
+        trusted_hosts=settings.trusted_proxies_list,
+    )
 
     app.include_router(auth_router.router)
     app.include_router(health_router.router)

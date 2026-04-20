@@ -103,6 +103,32 @@ def test_wireguard_bare_tag_still_produces_config():
     assert pkgs.wireguard.peers == []
 
 
+def test_wireguard_tunnel_dns_is_surfaced():
+    """pfSense WireGuard tunnels configured as commercial VPN clients
+    typically pin DNS to the provider's resolvers (e.g. Mullvad DNS
+    via WireGuard). v0.19.0 silently dropped the ``<dns>`` element;
+    v0.20.0 surfaces it so diffs flag accidental DNS-leak windows."""
+    xml = """
+    <pfsense>
+      <installedpackages>
+        <wireguard>
+          <tunnels>
+            <item>
+              <name>wg0</name>
+              <enabled>yes</enabled>
+              <dns>10.64.0.1, fd00:1::1</dns>
+              <publickey>PUB</publickey>
+            </item>
+          </tunnels>
+        </wireguard>
+      </installedpackages>
+    </pfsense>
+    """
+    cfg = _parse(xml)
+    t = cfg.installedpackages.wireguard.tunnels[0]
+    assert t.dns == "10.64.0.1, fd00:1::1"
+
+
 def test_wireguard_tunnel_addresses_block_form_preserves_mask():
     """pfSense 2.5+ emits tunnel addresses as ``<addresses><row>`` with
     ``<address>`` + ``<mask>`` split across children. v0.17.1 fixed a
@@ -191,7 +217,7 @@ def test_snort_structure_and_oinkcode_redaction():
     wan = sn.interfaces[0]
     assert wan.interface == "wan"
     assert wan.enable is True
-    assert wan.blockoffenders is True
+    assert wan.blockoffenders7 is True
     assert wan.ips_mode == "ips_mode_inline"
     assert "emerging-exploit.rules" in wan.categories
     assert "emerging-dos.rules" in wan.categories
@@ -247,7 +273,13 @@ def test_avahi_structure():
         <avahi>
           <enable>on</enable>
           <enable_reflector>on</enable_reflector>
+          <enable_ipv4>on</enable_ipv4>
+          <enable_ipv6>on</enable_ipv6>
+          <enable_wide_area>on</enable_wide_area>
+          <publish_workstation>on</publish_workstation>
+          <reflect_ipv>ipv4,ipv6</reflect_ipv>
           <interfaces>lan,dmz</interfaces>
+          <browsedomains>local</browsedomains>
         </avahi>
       </installedpackages>
     </pfsense>
@@ -259,7 +291,36 @@ def test_avahi_structure():
     assert av is not None
     assert av.enable is True
     assert av.reflector is True
+    # v0.20.0 — real Avahi XML uses ``enable_ipv4`` / ``enable_ipv6`` (not
+    # ``ipv4_only`` / ``ipv6_only``). The rename aligns the Python field
+    # semantics with the on-the-wire tag name.
+    assert av.ipv4_enabled is True
+    assert av.ipv6_enabled is True
+    assert av.wide_area is True
+    assert av.publish_workstation is True
+    assert av.reflect_ipv == "ipv4,ipv6"
     assert av.interfaces == "lan,dmz"
+    assert av.browse_domains == "local"
+
+
+def test_avahi_legacy_ipv4_only_ipv6_only_aliases_still_parse():
+    """Legacy field names kept as fallback so older fixtures /
+    downstream forks that emit ``<ipv4_only>`` or ``<ipv6_only>``
+    still surface in the parsed view."""
+    xml = """
+    <pfsense>
+      <installedpackages>
+        <avahi>
+          <ipv4_only>on</ipv4_only>
+          <ipv6_only>on</ipv6_only>
+        </avahi>
+      </installedpackages>
+    </pfsense>
+    """
+    cfg = _parse(xml)
+    av = cfg.installedpackages.avahi
+    assert av.ipv4_enabled is True
+    assert av.ipv6_enabled is True
 
 
 # ---------- OpenVPN Client Export -------------------------------------------
@@ -289,6 +350,54 @@ def test_openvpn_client_export_structure():
     assert ovx.use_random_local_port is True
     assert ovx.hostname == "vpn.example.com"
     assert ovx.ovpnexportcountry == "US"
+    assert ovx.servers == []
+
+
+def test_openvpn_client_export_server_overrides():
+    """v0.19.0 silently dropped ``<serverconfig><item>`` per-server
+    overrides — operators who tweaked a server's ``verifyservercn``
+    or ``blockoutsidedns`` saw no diff in the structured view. v0.20.0
+    surfaces them."""
+    xml = """
+    <pfsense>
+      <installedpackages>
+        <vpn_openvpn_export>
+          <defaults>
+            <hostname>vpn.example.com</hostname>
+          </defaults>
+          <serverconfig>
+            <item>
+              <vpnid>1</vpnid>
+              <useaddr>serveraddr</useaddr>
+              <verifyservercn>auto</verifyservercn>
+              <blockoutsidedns>on</blockoutsidedns>
+              <usetoken>on</usetoken>
+              <bindmode>none</bindmode>
+            </item>
+            <item>
+              <vpnid>2</vpnid>
+              <verifyservercn>no</verifyservercn>
+              <silent_install>on</silent_install>
+            </item>
+          </serverconfig>
+        </vpn_openvpn_export>
+      </installedpackages>
+    </pfsense>
+    """
+    cfg = _parse(xml)
+    ovx = cfg.installedpackages.openvpn_client_export
+    assert ovx is not None
+    assert len(ovx.servers) == 2
+    first, second = ovx.servers
+    assert first.vpnid == "1"
+    assert first.useaddr == "serveraddr"
+    assert first.verifyservercn == "auto"
+    assert first.blockoutsidedns is True
+    assert first.usetoken is True
+    assert first.bindmode == "none"
+    assert second.vpnid == "2"
+    assert second.verifyservercn == "no"
+    assert second.silent_install is True
 
 
 # ---------- Shellcmd --------------------------------------------------------

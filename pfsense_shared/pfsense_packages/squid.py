@@ -91,6 +91,12 @@ class SquidAuthConfig(BaseModel):
     radius_server: str | None = None
     radius_port: str | None = None
     radius_secret: str | None = None  # redacted
+    # NTLM domain-join credentials. Some Squid builds store the
+    # Windows machine-account password as ``<nt_pass>`` here — it's
+    # distinct from ``<ntlm_admin_password>`` in the main ``<squid>``
+    # block. Redacted via the ``nt_pass`` entry in ``_EXACT``.
+    nt_user: str | None = None
+    nt_pass: str | None = None  # redacted
 
 
 class SquidBundle(BaseModel):
@@ -237,6 +243,8 @@ def _parse_squidauth(el: Element | None) -> SquidAuthConfig | None:
         radius_server=text(item, "radius_server"),
         radius_port=text(item, "radius_port"),
         radius_secret=redact("radius_secret", text(item, "radius_secret")),
+        nt_user=text(item, "nt_user"),
+        nt_pass=redact("nt_pass", text(item, "nt_pass")),
     )
 
 

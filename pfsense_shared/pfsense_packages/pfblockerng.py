@@ -86,10 +86,39 @@ class PfBlockerNgConfig(BaseModel):
     # sub-tab and Global config page aren't ignored.
     dnsbl_safesearch_present: bool = False
     global_present: bool = False
+    # v0.20.0 — GeoIP continent blocklists. pfBlockerNG stores each
+    # continent's rule group under its own top-level tag. Almost every
+    # pfBlockerNG install with GeoIP enabled will have several of
+    # these populated, so leaving them unclaimed produces a "20+
+    # unknown" leak into Other packages. We expose a single
+    # ``geoip_configured`` boolean (true when any continent tag is
+    # present) plus ``geoip_continents`` listing the ones configured.
+    geoip_configured: bool = False
+    geoip_continents: list[str] = []
 
 
 # Tags this parser consumes out of <installedpackages>. Any tag in this
 # set will not appear in the UI's "Other packages" fallback.
+# v0.20.0 — GeoIP continent blocklist sub-tags. Each continent gets its
+# own top-level element under ``<installedpackages>`` when the operator
+# configures a GeoIP rule group. We claim them all into ``geoip_continents``
+# rather than invent a typed model per continent.
+_GEOIP_CONTINENT_TAGS: tuple[tuple[str, str], ...] = (
+    ("pfblockerngafrica", "Africa"),
+    ("pfblockerngantarctica", "Antarctica"),
+    ("pfblockerngasia", "Asia"),
+    ("pfblockerngeurope", "Europe"),
+    ("pfblockerngnorthamerica", "North America"),
+    ("pfblockerngoceania", "Oceania"),
+    # Some builds spell it "ocean" — kept for compatibility.
+    ("pfblockerngocean", "Oceania"),
+    ("pfblockerngsouthamerica", "South America"),
+    ("pfblockerngproxyandsatellite", "Proxy & satellite"),
+    ("pfblockerngtopv4", "Top-V4"),
+    ("pfblockerngtopv6", "Top-V6"),
+)
+
+
 CONSUMED_TAGS = frozenset(
     {
         "pfblockerng",
@@ -106,6 +135,7 @@ CONSUMED_TAGS = frozenset(
         "pfblockerngsafesearch",
         "pfblockerngreputation",
     }
+    | {tag for tag, _ in _GEOIP_CONTINENT_TAGS}
 )
 
 
@@ -147,6 +177,16 @@ def parse(ip: Element) -> PfBlockerNgConfig | None:
     dnsbl_safesearch = ip.find("pfblockerngdnsblsafesearch")
     pbn_global = ip.find("pfblockerngglobal")
 
+    # v0.20.0 — GeoIP continents. De-dupe labels (``ocean`` and
+    # ``oceania`` map to the same display name) while preserving the
+    # detection order so the viewer renders continents alphabetically
+    # as listed in ``_GEOIP_CONTINENT_TAGS``.
+    geoip_continents: list[str] = []
+    for tag, label in _GEOIP_CONTINENT_TAGS:
+        if ip.find(tag) is not None and label not in geoip_continents:
+            geoip_continents.append(label)
+    geoip_configured = bool(geoip_continents)
+
     if all(
         x is None
         for x in (
@@ -163,7 +203,7 @@ def parse(ip: Element) -> PfBlockerNgConfig | None:
             dnsbl_safesearch,
             pbn_global,
         )
-    ):
+    ) and not geoip_configured:
         return None
 
     feeds: list[PfBlockerNgFeed] = []
@@ -203,4 +243,6 @@ def parse(ip: Element) -> PfBlockerNgConfig | None:
         reputation_present=reputation is not None,
         dnsbl_safesearch_present=dnsbl_safesearch is not None,
         global_present=pbn_global is not None,
+        geoip_configured=geoip_configured,
+        geoip_continents=geoip_continents,
     )

@@ -44,6 +44,14 @@ export function useActiveSection(
     if (typeof window === "undefined" || !("IntersectionObserver" in window))
       return;
 
+    // Reset on every rebuild. Previously, when a filter hid every
+    // section (targets.length === 0) the effect returned early without
+    // clearing the stale id, leaving the sidebar highlighting a
+    // section that no longer existed in the DOM. Clearing up front
+    // keeps the sidebar honest until the observer produces the next
+    // real intersection.
+    setActiveId(null);
+
     const targets = Array.from(
       document.querySelectorAll<HTMLElement>(`[id^="${prefix}"]`),
     );

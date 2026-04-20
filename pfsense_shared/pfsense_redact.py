@@ -62,6 +62,15 @@ _EXACT: Final[frozenset[str]] = frozenset(
         "user_password",
         "proxy_auth_password",
         "influxdb_token",
+        # Telegraf → InfluxDB username. Not a password by itself, but
+        # the operator's login identity on the metrics backend — enough
+        # to phish a password out of or to check membership in breach
+        # corpora. Redacted alongside its paired password/token.
+        "influxdb_username",
+        # Squid NTLM auth — ``<nt_pass>`` stores the domain-join
+        # password for Windows auth. Does not match the ``_password``
+        # suffix because the field name isn't literally ``nt_password``.
+        "nt_pass",
         "frr_password",
         "bgp_password",
         "ospf_password",

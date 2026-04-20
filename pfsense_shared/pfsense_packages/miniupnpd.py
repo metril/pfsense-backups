@@ -41,9 +41,12 @@ def parse(ip: Element) -> MiniUpnpdConfig | None:
     if el is None:
         return None
     permit_rules: list[str] = []
-    # Some builds store up to 8 numbered permit slots; newer builds
-    # use a repeated ``<permit>`` element. Handle both.
-    for slot in range(1, 9):
+    # Numbered permit slots. The GUI exposes up to 10; older defaults
+    # ship 4. v0.20.0 widened the range from 8 → 10 to avoid silently
+    # dropping the last two slots on operators who manually added
+    # them. Newer builds also write a repeated ``<permit>`` element —
+    # handle both shapes.
+    for slot in range(1, 11):
         rule = text(el, f"permit{slot}")
         if rule:
             permit_rules.append(rule)

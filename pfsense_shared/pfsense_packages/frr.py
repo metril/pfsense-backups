@@ -58,23 +58,11 @@ class FrrOspfConfig(BaseModel):
     interfaces: list[FrrOspfInterface] = []
 
 
-class FrrOspfdInterface(BaseModel):
-    """Single row of ``<frrospfdinterfaces>`` — OSPFv3 (IPv6) per-
-    interface configuration. Mirrors ``FrrOspfInterface`` for IPv4;
-    any MD5 / BGP-AO key fields are redacted via the existing
-    ``ospf_password`` redaction tag."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    interface: str
-    area: str | None = None
-    cost: str | None = None
-    priority: str | None = None
-    hello_interval: str | None = None
-    dead_interval: str | None = None
-    # Redacted when the interface uses MD5 auth (rare for OSPFv3 —
-    # IPsec AH is more typical — but some builds surface a key here).
-    md5_password: str | None = None
+# OSPFv3 (IPv6) interface rows have the same fields as OSPFv2 — area,
+# cost, priority, hello/dead timers, optional MD5 auth. v0.20.0 folded
+# the two into a single model; the alias keeps the old type name
+# available for any consumer that still imports it by that name.
+FrrOspfdInterface = FrrOspfInterface
 
 
 class FrrConfig(BaseModel):
@@ -93,6 +81,10 @@ class FrrConfig(BaseModel):
     ospfd_interfaces_present: bool = False
     global_acls_present: bool = False
     global_prefixes_present: bool = False
+    # v0.20.0 — sibling IPv6-BGP daemon tag (presence only; BGP on FRR
+    # is dual-stack via address-families, so there is nothing to parse
+    # separately).
+    bgp6_present: bool = False
     # v0.16.1: structured OSPFv3 interface rows so any MD5 auth keys
     # pass through the redaction engine instead of being silently
     # dropped. Empty list when no interface rows exist OR when the
@@ -114,6 +106,13 @@ CONSUMED_TAGS = frozenset(
         "frrospfdinterfaces",
         "frrglobalacls",
         "frrglobalprefixes",
+        # v0.20.0 — some pfSense-FRR builds emit a sibling IPv6-BGP tag
+        # next to ``frrbgp``. Left as presence-only (surfaced via
+        # ``bgp6_present``) because FRR BGP is dual-stack via address-
+        # families on the same daemon; there's nothing meaningful to
+        # parse separately, but claiming the tag keeps it out of
+        # "Other packages".
+        "frrbgp6d",
     }
 )
 
@@ -252,6 +251,7 @@ def parse(ip: Element) -> FrrConfig | None:
     ospfd_ifaces = _parse_ospfd_interfaces(ospfd_ifaces_el)
     global_acls = ip.find("frrglobalacls")
     global_prefixes = ip.find("frrglobalprefixes")
+    bgp6 = ip.find("frrbgp6d")
     if all(
         x is None
         for x in (
@@ -263,6 +263,7 @@ def parse(ip: Element) -> FrrConfig | None:
             ospfd_ifaces_el,
             global_acls,
             global_prefixes,
+            bgp6,
         )
     ):
         return None
@@ -278,5 +279,6 @@ def parse(ip: Element) -> FrrConfig | None:
         ospfd_interfaces_present=ospfd_ifaces_el is not None,
         global_acls_present=global_acls is not None,
         global_prefixes_present=global_prefixes is not None,
+        bgp6_present=bgp6 is not None,
         ospfd_interfaces=ospfd_ifaces,
     )

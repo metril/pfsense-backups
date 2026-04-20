@@ -1,4 +1,5 @@
-import { memo, useCallback, useMemo, type ReactNode } from "react";
+import { memo, useCallback, useMemo, useState, type ReactNode } from "react";
+import { Check, Copy } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { Alert } from "@/components/ui/Alert";
 import { Badge } from "@/components/ui/Badge";
@@ -184,7 +185,11 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
   if (!data) return null;
 
   return (
-    <XrefProvider data={data}>
+    // Xref index builds from the UNFILTERED config so chips resolve even
+    // when the referenced row is currently filtered out (e.g. a firewall
+    // rule pointing at alias ``RFC1918`` while the user has filtered on
+    // ``"LAN"``). Using the narrowed ``data`` would produce dead chips.
+    <XrefProvider data={rawData!}>
     <FilterProvider query={filterQuery}>
     <CardGroupProvider scope={`view:${backupId}`}>
     <DeepLinkBridge includeHashchange />
@@ -611,10 +616,11 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
  *  that, falls back to the v0.14 horizontal chip strip + full-width
  *  content. The 1700px crossover is the point at which sidebar-
  *  mode content (viewport − 15rem sidebar − 1.5rem gap − 2rem
- *  padding) first equals narrow-mode content (capped at 1368px) —
- *  keep the breakpoint in sync with the sidebar-width change in the
- *  grid template below. Layout only — no section-rendering logic
- *  lives here. */
+ *  padding = V − 296) first equals narrow-mode content (capped at
+ *  1400px via ``max-w-[1400px]`` below). V − 296 ≥ 1400 → V ≥ 1696,
+ *  rounded up to 1700. If the sidebar width or the narrow cap ever
+ *  moves, the breakpoint has to move with them. Layout only — no
+ *  section-rendering logic lives here. */
 function ViewerLayout({
   cfg,
   filterQuery,
@@ -805,6 +811,7 @@ function countVisibleSections(
   showArr(cfg.dhcp_relays);
   showArr(cfg.dyndns_entries);
   showArr(cfg.igmpproxy_entries);
+  showArr(cfg.radvd_interfaces);
   showSingle("Notifications", cfg.notifications);
   showSingle("UPS monitoring", cfg.ups);
   showArr(cfg.voucher_rolls);
@@ -1368,13 +1375,33 @@ function EndpointCell({ e }: { e: Endpoint }) {
   const bang = e.not_ ? (
     <span className="font-mono text-xs font-semibold text-warn">!</span>
   ) : null;
+  // Resolution order for ``e.address``: alias → interface → interface
+  // group → plain text. v0.18.0 only tried alias, so a rule whose
+  // source was literally ``"lan"`` or ``"opt3"`` (a bare interface
+  // reference, which pfSense does allow) degraded to raw text with
+  // no click-through. Chain the fallbacks so the chip always wins
+  // when the token matches something in the xref index.
   const host: ReactNode = e.network ? (
     <span className="font-mono text-xs">{e.network}</span>
   ) : e.address ? (
     <Xref
       kind="alias"
       k={e.address}
-      fallback={<span className="font-mono text-xs">{e.address}</span>}
+      fallback={
+        <Xref
+          kind="interface"
+          k={e.address}
+          fallback={
+            <Xref
+              kind="interface_group"
+              k={e.address}
+              fallback={
+                <span className="font-mono text-xs">{e.address}</span>
+              }
+            />
+          }
+        />
+      }
     />
   ) : (
     <span className="font-mono text-xs">?</span>
@@ -2366,6 +2393,16 @@ function PfBlockerNgPanel({ p }: { p: PfBlockerNgConfig }) {
                 React.ReactNode,
               ][])
             : []),
+          ...(p.geoip_configured
+            ? ([
+                [
+                  "GeoIP continents",
+                  p.geoip_continents.length > 0
+                    ? p.geoip_continents.join(", ")
+                    : "configured",
+                ],
+              ] as [string, React.ReactNode][])
+            : []),
         ]}
       />
       {p.feeds.length > 0 && (
@@ -2543,6 +2580,40 @@ function AcmePanel({ p }: { p: AcmeConfig }) {
   );
 }
 
+/** Short-form WireGuard public key with click-to-copy. The keys are
+ *  44 chars of base64 so the raw string overflows most table cells.
+ *  Before v0.20.0 we rendered ``{key.slice(0,12)}…`` inside a span
+ *  with ``truncate`` + a ``title`` attribute — the full value only
+ *  surfaced on hover (no keyboard path) and couldn't be copied
+ *  without a DOM inspector. Operators routinely cross-reference
+ *  keys between tunnels and peers, so expose a real copy button. */
+function CopyableKey({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      className="inline-flex items-center gap-1 rounded font-mono text-xs text-muted-fg transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+      title={copied ? "Copied!" : `${value} — click to copy`}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (!navigator.clipboard) return;
+        void navigator.clipboard.writeText(value).then(() => {
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 1200);
+        });
+      }}
+    >
+      <span>{value.slice(0, 12)}…</span>
+      {copied ? (
+        <Check aria-hidden="true" className="h-3 w-3 text-success" />
+      ) : (
+        <Copy aria-hidden="true" className="h-3 w-3" />
+      )}
+      <span className="sr-only">Copy public key</span>
+    </button>
+  );
+}
+
 function WireGuardPanel({ p }: { p: WireGuardConfig }) {
   return (
     <PackageCard title="WireGuard">
@@ -2561,6 +2632,7 @@ function WireGuardPanel({ p }: { p: WireGuardConfig }) {
               "Name",
               "Enabled",
               "Addresses",
+              "DNS",
               "Listen port",
               "Public key",
               "Private key",
@@ -2579,15 +2651,16 @@ function WireGuardPanel({ p }: { p: WireGuardConfig }) {
               ) : (
                 "—"
               ),
+              t.dns ? (
+                <span key="dns" className="font-mono text-xs">
+                  {t.dns}
+                </span>
+              ) : (
+                "—"
+              ),
               t.listen_port ?? "—",
               t.public_key ? (
-                <span
-                  key="pub"
-                  className="truncate font-mono text-xs text-muted-fg"
-                  title={t.public_key}
-                >
-                  {t.public_key.slice(0, 12)}…
-                </span>
+                <CopyableKey key="pub" value={t.public_key} />
               ) : (
                 "—"
               ),
@@ -2627,13 +2700,7 @@ function WireGuardPanel({ p }: { p: WireGuardConfig }) {
                 "—"
               ),
               pe.public_key ? (
-                <span
-                  key="pub"
-                  className="truncate font-mono text-xs text-muted-fg"
-                  title={pe.public_key}
-                >
-                  {pe.public_key.slice(0, 12)}…
-                </span>
+                <CopyableKey key="pub" value={pe.public_key} />
               ) : (
                 "—"
               ),
@@ -2688,7 +2755,7 @@ function SnortPanel({ p }: { p: SnortConfig }) {
               <StatusPill key="e" enabled={i.enable} />,
               <StatusPill
                 key="bo"
-                enabled={i.blockoffenders}
+                enabled={i.blockoffenders7}
                 labels={{ on: "yes", off: "no" }}
               />,
               i.ips_mode ?? "—",
@@ -2743,10 +2810,50 @@ function AvahiPanel({ p }: { p: AvahiConfig }) {
         items={[
           ["Enabled", <StatusPill key="e" enabled={p.enable} />],
           ["Reflector", <StatusPill key="r" enabled={p.reflector} />],
-          ["IPv4 only", p.ipv4_only ? "yes" : ""],
-          ["IPv6 only", p.ipv6_only ? "yes" : ""],
+          [
+            "IPv4",
+            <StatusPill
+              key="v4"
+              enabled={p.ipv4_enabled}
+              labels={{ on: "yes", off: "no" }}
+            />,
+          ],
+          [
+            "IPv6",
+            <StatusPill
+              key="v6"
+              enabled={p.ipv6_enabled}
+              labels={{ on: "yes", off: "no" }}
+            />,
+          ],
+          ["Reflect IP", p.reflect_ipv ?? "—"],
+          [
+            "Wide-area",
+            <StatusPill
+              key="wa"
+              enabled={p.wide_area}
+              labels={{ on: "yes", off: "no" }}
+            />,
+          ],
+          [
+            "Publish workstation",
+            <StatusPill
+              key="pw"
+              enabled={p.publish_workstation}
+              labels={{ on: "yes", off: "no" }}
+            />,
+          ],
+          [
+            "Publish addresses",
+            <StatusPill
+              key="pa"
+              enabled={p.publish_addresses}
+              labels={{ on: "yes", off: "no" }}
+            />,
+          ],
           ["Interfaces", p.interfaces ?? "—"],
           ["Deny interfaces", p.allow_deny_interfaces ?? "—"],
+          ["Browse domains", p.browse_domains ?? "—"],
           ["Cache max entries", p.cache_entries_max ?? "—"],
         ]}
       />
@@ -2778,6 +2885,59 @@ function OpenvpnClientExportPanel({
           ["Cert subject (city)", p.ovpnexportcity ?? "—"],
         ]}
       />
+      {p.servers.length > 0 && (
+        <div className="mt-2">
+          <div className="mb-1 text-xs uppercase text-muted-fg">
+            Per-server overrides ({p.servers.length})
+          </div>
+          <Table
+            headers={[
+              "VPN id",
+              "Host address",
+              "Verify CN",
+              "Block outside DNS",
+              "Token",
+              "PKCS#11",
+              "Bind mode",
+              "Silent install",
+            ]}
+            rowKeys={p.servers.map((s) => s.key)}
+            rows={p.servers.map((s) => [
+              <Xref
+                key="v"
+                kind="openvpn_server"
+                k={s.vpnid}
+                fallback={
+                  <span className="font-mono text-xs">{s.vpnid ?? s.key}</span>
+                }
+              />,
+              s.useaddr ?? "—",
+              s.verifyservercn ?? "—",
+              <StatusPill
+                key="bd"
+                enabled={s.blockoutsidedns}
+                labels={{ on: "yes", off: "no" }}
+              />,
+              <StatusPill
+                key="tk"
+                enabled={s.usetoken}
+                labels={{ on: "yes", off: "no" }}
+              />,
+              <StatusPill
+                key="pk"
+                enabled={s.usepkcs11}
+                labels={{ on: "yes", off: "no" }}
+              />,
+              s.bindmode ?? "—",
+              <StatusPill
+                key="si"
+                enabled={s.silent_install}
+                labels={{ on: "yes", off: "no" }}
+              />,
+            ])}
+          />
+        </div>
+      )}
     </PackageCard>
   );
 }
@@ -3273,6 +3433,11 @@ function SquidPanel({ p }: { p: SquidBundle }) {
                 "RADIUS secret",
                 p.auth.radius_secret === "***redacted***" ? <Redacted /> : "—",
               ],
+              ["NTLM user", p.auth.nt_user ?? "—"],
+              [
+                "NTLM password",
+                p.auth.nt_pass === "***redacted***" ? <Redacted /> : "—",
+              ],
             ]}
           />
         </div>
@@ -3449,7 +3614,8 @@ function FrrPanel({ p }: { p: FrrConfig }) {
         p.ospfd_areas_present ||
         p.ospfd_interfaces_present ||
         p.global_acls_present ||
-        p.global_prefixes_present) && (
+        p.global_prefixes_present ||
+        p.bgp6_present) && (
         <div className="mt-2 flex flex-wrap gap-1 text-xs">
           <span className="text-muted-fg">
             IPv6 OSPF + global policy:
@@ -3463,6 +3629,7 @@ function FrrPanel({ p }: { p: FrrConfig }) {
           {p.global_prefixes_present && (
             <Badge tone="muted">prefix lists</Badge>
           )}
+          {p.bgp6_present && <Badge tone="muted">BGP6d</Badge>}
         </div>
       )}
     </PackageCard>
