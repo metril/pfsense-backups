@@ -329,6 +329,8 @@ def test_frr_ospfd_interfaces_structured_with_redaction():
     assert row.md5_password == REDACTED
     dumped = cfg.model_dump_json()
     assert "LEAKY_OSPF6_KEY" not in dumped
+
+
 def test_squid_subtags_alone_still_produce_config():
     xml = """
     <pfsense>
