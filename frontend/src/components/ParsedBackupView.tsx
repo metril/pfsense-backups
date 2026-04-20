@@ -1,9 +1,17 @@
 import { memo, useCallback, useMemo, type ReactNode } from "react";
-import { Lock } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { Alert } from "@/components/ui/Alert";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
+import {
+  ActionPill,
+  Dl,
+  PackageCard,
+  Redacted,
+  RV,
+  StatusPill,
+  Table,
+} from "@/components/view/primitives";
 import { ExpandCollapseAll } from "@/components/ui/ExpandCollapseAll";
 import { FilterBar } from "@/components/ui/FilterBar";
 import { FilterProvider } from "@/components/ui/FilterContext";
@@ -1126,85 +1134,6 @@ function sectionId(title: string) {
       .replace(/\s+/g, "-")
       .replace(/[()]/g, "")
       .replace(/-{2,}/g, "-")
-  );
-}
-
-function Dl({ items }: { items: [string, React.ReactNode][] }) {
-  return (
-    <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm">
-      {items.map(([k, v]) => (
-        <div key={k} className="contents">
-          <dt className="text-muted-fg">{k}</dt>
-          <dd className="font-mono">{v}</dd>
-        </div>
-      ))}
-    </dl>
-  );
-}
-
-function Redacted() {
-  return (
-    <span
-      title="Value redacted server-side — view raw XML tab if you truly need the plaintext"
-      className="inline-flex items-center gap-1 rounded border border-[hsl(var(--group-vpn))]/30 bg-[hsl(var(--group-vpn))]/10 px-1.5 py-0.5 font-mono text-[11px] text-[hsl(var(--group-vpn))]"
-    >
-      <Lock aria-hidden="true" className="h-3 w-3" /> redacted
-    </span>
-  );
-}
-
-/** Value is "***redacted***" from the server? → lock glyph. Else raw. */
-function RV({ v }: { v: string | null | undefined }) {
-  if (v === "***redacted***") return <Redacted />;
-  return <>{v || <span className="text-muted-fg">—</span>}</>;
-}
-
-function Table({
-  headers,
-  rows,
-  rowKeys,
-  rowIds,
-}: {
-  headers: string[];
-  rows: React.ReactNode[][];
-  /** Stable per-row keys. When omitted, falls back to index which is
-   *  fine for non-reordering tables. Firewall / NAT tables pass
-   *  rule trackers so reordering diffs don't confuse React. */
-  rowKeys?: (string | number)[];
-  /** Per-row DOM ``id``s. Used to make table rows xref targets so
-   *  ``<Xref>`` chips can scroll into them. Typically produced by
-   *  ``itemId(kind, key)`` from ``@/lib/xref``. */
-  rowIds?: (string | undefined)[];
-}) {
-  return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-left text-sm">
-        <thead>
-          <tr className="border-b border-border text-xs uppercase text-muted-fg">
-            {headers.map((h) => (
-              <th key={h} className="px-2 py-1 font-normal">
-                {h}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, i) => (
-            <tr
-              key={rowKeys?.[i] ?? i}
-              id={rowIds?.[i]}
-              className="border-b border-border/50 last:border-0"
-            >
-              {row.map((cell, j) => (
-                <td key={j} className="px-2 py-1 align-top">
-                  {cell}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
   );
 }
 
@@ -2405,21 +2334,6 @@ function PackagesPanel({ ip }: { ip: InstalledPackages }) {
   );
 }
 
-function PackageCard({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="rounded border border-border/70 bg-muted/20 p-2">
-      <div className="mb-1 text-sm font-medium">{title}</div>
-      {children}
-    </div>
-  );
-}
-
 function PfBlockerNgPanel({ p }: { p: PfBlockerNgConfig }) {
   const subFeatures = [
     p.topspammers_present && "Top spammers",
@@ -3011,37 +2925,6 @@ export const InterfaceChip = memo(function InterfaceChip({
 });
 
 /** Colored pill for firewall-rule action type. */
-function ActionPill({ type }: { type: string | null | undefined }) {
-  if (!type) return <span className="text-muted-fg">—</span>;
-  const t = type.toLowerCase();
-  let tone: "success" | "danger" | "warn" | "muted" = "muted";
-  if (t === "pass" || t === "allow") tone = "success";
-  else if (t === "block" || t === "reject") tone = "danger";
-  else if (t === "match") tone = "warn";
-  return (
-    <Badge tone={tone} className="uppercase">
-      {type}
-    </Badge>
-  );
-}
-
-/** "enabled" → green, "disabled" / false → muted gray. */
-function StatusPill({
-  enabled,
-  labels,
-}: {
-  enabled: boolean;
-  labels?: { on: string; off: string };
-}) {
-  const on = labels?.on ?? "enabled";
-  const off = labels?.off ?? "disabled";
-  return (
-    <Badge tone={enabled ? "success" : "muted"}>
-      {enabled ? on : off}
-    </Badge>
-  );
-}
-
 // ---------- v0.12.0: new section renderers --------------------------------
 
 function LaggsTable({ rows }: { rows: Lagg[] }) {
