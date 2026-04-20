@@ -2274,13 +2274,27 @@ export const InterfaceChip = memo(function InterfaceChip({
   className?: string;
 }) {
   if (!name) return <span className="text-muted-fg">—</span>;
-  // When an xref index is in scope AND the interface is actually
-  // defined, render as a navigable Xref chip. ``Xref`` degrades to
-  // a muted-border plain chip when the target is missing, so the
-  // render-call sites (dozens of tables) stay untouched. Visual:
-  // we pass the hashed group-color classes as the chip color so
-  // the stable "LAN is always green" mapping survives.
+  // When an xref index is in scope AND the name resolves as either a
+  // physical interface OR a named interface-group, render as a
+  // navigable chip. Firewall rules' ``<interface>`` field accepts
+  // either kind, so we try ``interface`` first and fall back to
+  // ``interface_group`` before degrading to a plain span. The hashed
+  // group-color classes are preserved in both linked cases so
+  // "LAN is always green" still holds regardless of which kind
+  // resolved.
   const c = interfaceChipClasses(name);
+  const plain = (
+    <span
+      className={cn(
+        "inline-flex items-center rounded border px-1.5 py-0.5 text-[11px] font-medium bg-bg",
+        c.fg,
+        c.border,
+        className,
+      )}
+    >
+      {interfaceLabel(name)}
+    </span>
+  );
   return (
     <Xref
       kind="interface"
@@ -2288,16 +2302,13 @@ export const InterfaceChip = memo(function InterfaceChip({
       label={interfaceLabel(name)}
       className={cn(c.fg, c.border, className)}
       fallback={
-        <span
-          className={cn(
-            "inline-flex items-center rounded border px-1.5 py-0.5 text-[11px] font-medium bg-bg",
-            c.fg,
-            c.border,
-            className,
-          )}
-        >
-          {interfaceLabel(name)}
-        </span>
+        <Xref
+          kind="interface_group"
+          k={name}
+          label={interfaceLabel(name)}
+          className={cn(c.fg, c.border, className)}
+          fallback={plain}
+        />
       }
     />
   );
