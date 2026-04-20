@@ -19,7 +19,6 @@ from alembic.config import Config as AlembicConfig
 from sqlalchemy import event, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.engine.interfaces import DBAPIConnection
-from sqlalchemy.pool import ConnectionPoolEntry
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -27,6 +26,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import ConnectionPoolEntry
 
 from alembic import command
 

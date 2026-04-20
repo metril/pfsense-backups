@@ -98,13 +98,20 @@ def _parse_tunnels(wg_el: Element) -> list[WireGuardTunnel]:
         if not name:
             continue
         # Address list sometimes lives inline (``<address>1.2.3.4/32</address>``)
-        # and sometimes as a block with repeated ``<row>`` children.
+        # and sometimes as a block with repeated ``<row>`` children that
+        # pair ``<address>`` + ``<mask>`` — the pfSense WireGuard package
+        # emits the block form on every build since v2.5. Handle both;
+        # the block form must join ``address`` + ``mask`` into a CIDR
+        # string or the mask silently drops from the rendered list.
         addresses = _split_cidr_list(text(t, "address"))
         addr_block = t.find("addresses")
         if addr_block is not None:
             for row in children(addr_block, "row"):
                 addr = text(row, "address")
-                if addr:
+                mask = text(row, "mask")
+                if addr and mask:
+                    addresses.append(f"{addr}/{mask}")
+                elif addr:
                     addresses.append(addr)
         out.append(
             WireGuardTunnel(

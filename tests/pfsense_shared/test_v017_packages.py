@@ -103,6 +103,46 @@ def test_wireguard_bare_tag_still_produces_config():
     assert pkgs.wireguard.peers == []
 
 
+def test_wireguard_tunnel_addresses_block_form_preserves_mask():
+    """pfSense 2.5+ emits tunnel addresses as ``<addresses><row>`` with
+    ``<address>`` + ``<mask>`` split across children. v0.17.1 fixed a
+    bug where the mask was silently dropped from the rendered list —
+    ``10.7.0.1/24`` became ``10.7.0.1``. The peer allowedips parser
+    handled this correctly; the tunnel parser did not."""
+    xml = """
+    <pfsense>
+      <installedpackages>
+        <wireguard>
+          <tunnels>
+            <item>
+              <name>wg1</name>
+              <enabled>yes</enabled>
+              <addresses>
+                <row>
+                  <address>10.7.0.1</address>
+                  <mask>24</mask>
+                </row>
+                <row>
+                  <address>fd00:7::1</address>
+                  <mask>64</mask>
+                </row>
+              </addresses>
+              <publickey>PUB</publickey>
+              <privatekey>LEAKY_PRIV</privatekey>
+            </item>
+          </tunnels>
+        </wireguard>
+      </installedpackages>
+    </pfsense>
+    """
+    cfg = _parse(xml)
+    t = cfg.installedpackages.wireguard.tunnels[0]
+    assert t.addresses == ["10.7.0.1/24", "fd00:7::1/64"]
+    # Regression guard — private key still redacts under the block form.
+    assert t.private_key == REDACTED
+    assert "LEAKY_PRIV" not in cfg.model_dump_json()
+
+
 # ---------- Snort / snortglobal ---------------------------------------------
 
 
