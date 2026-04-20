@@ -64,13 +64,20 @@ export function BackupDiffPage() {
         className="mt-3"
         value={tab}
         onChange={(id) => setTab(id as DiffTab)}
+        ariaLabel="Diff view"
+        idPrefix="backup-diff"
         items={[
-          { id: "structured", label: "Structured" },
-          { id: "raw", label: "Raw XML" },
+          { id: "structured", label: "Structured", panelId: "backup-diff-panel" },
+          { id: "raw", label: "Raw XML", panelId: "backup-diff-panel" },
         ]}
       />
 
-      <div className="flex-1 overflow-hidden rounded-b border border-t-0 border-border">
+      <div
+        id="backup-diff-panel"
+        role="tabpanel"
+        aria-labelledby={`backup-diff-tab-${tab}`}
+        className="flex-1 overflow-hidden rounded-b border border-t-0 border-border"
+      >
         <Suspense
           fallback={<div className="p-6 text-sm text-muted-fg">Loading…</div>}
         >

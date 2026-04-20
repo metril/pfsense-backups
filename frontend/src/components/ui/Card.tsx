@@ -55,9 +55,9 @@ export function Card({
         className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-muted/40"
       >
         {open ? (
-          <ChevronDown className="h-4 w-4 text-muted-fg" />
+          <ChevronDown aria-hidden="true" className="h-4 w-4 text-muted-fg" />
         ) : (
-          <ChevronRight className="h-4 w-4 text-muted-fg" />
+          <ChevronRight aria-hidden="true" className="h-4 w-4 text-muted-fg" />
         )}
         <span className={cn("text-[15px] font-semibold", gc.title)}>
           {title}

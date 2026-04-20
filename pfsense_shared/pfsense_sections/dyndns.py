@@ -38,9 +38,11 @@ class DyndnsEntry(BaseModel):
     verboselog: bool = False
     # Auth — redacted. pfSense stores them under <username> (often an
     # API account id) and <password> (the actual secret). Modern
-    # providers stash a bearer token in <password> as well.
+    # providers stash a bearer token in <password> as well; a few
+    # builds expose a separate <token> element.
     username: str | None = None
     password: str | None = None
+    token: str | None = None
 
 
 def parse(root: Element) -> list[DyndnsEntry]:
@@ -72,6 +74,7 @@ def parse(root: Element) -> list[DyndnsEntry]:
                 # <password>, which is.
                 username=text(d, "username"),
                 password=redact("password", text(d, "password")),
+                token=redact("token", text(d, "token")),
             )
         )
     return out

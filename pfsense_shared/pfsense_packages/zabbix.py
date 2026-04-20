@@ -61,7 +61,7 @@ def _parse_agent(el: Element | None) -> ZabbixAgentConfig | None:
         hostname=text(el, "hostname"),
         listenport=text(el, "listenport"),
         tls_psk_identity=text(el, "tlspskidentity"),
-        tls_psk=redact("zabbix_psk", text(el, "tlspsk") or text(el, "tls_psk")),
+        tls_psk=redact("tlspsk", text(el, "tlspsk") or text(el, "tls_psk")),
     )
 
 
@@ -74,7 +74,7 @@ def _parse_proxy(el: Element | None) -> ZabbixProxyConfig | None:
         hostname=text(el, "hostname"),
         listenport=text(el, "listenport"),
         tls_psk_identity=text(el, "tlspskidentity"),
-        tls_psk=redact("zabbix_psk", text(el, "tlspsk") or text(el, "tls_psk")),
+        tls_psk=redact("tlspsk", text(el, "tlspsk") or text(el, "tls_psk")),
     )
 
 

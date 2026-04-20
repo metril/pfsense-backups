@@ -20,7 +20,17 @@ export type SectionGroup =
  *  ParsedConfig / the TS key in ConfigDiff — they must match one-to-one
  *  or the color mapping silently disappears. */
 const GROUP_MEMBERS: Record<Exclude<SectionGroup, "neutral">, string[]> = {
-  system: ["system", "revision", "sysctl", "cron", "notifications"],
+  system: [
+    "system",
+    "revision",
+    "sysctl",
+    "cron",
+    "notifications",
+    // ``config_version`` is a scalar header but it belongs to the
+    // system group — operators reading the diff expect a pfSense
+    // config-version bump next to revision changes.
+    "config_version",
+  ],
   networking: [
     "interfaces",
     "vlans",

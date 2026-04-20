@@ -252,13 +252,20 @@ export function BackupViewPage() {
         className="mt-3"
         value={tab}
         onChange={(id) => setTab(id as ViewTab)}
+        ariaLabel="Backup view"
+        idPrefix="backup-view"
         items={[
-          { id: "structured", label: "Structured" },
-          { id: "raw", label: "Raw XML" },
+          { id: "structured", label: "Structured", panelId: "backup-view-panel" },
+          { id: "raw", label: "Raw XML", panelId: "backup-view-panel" },
         ]}
       />
 
-      <div className="mt-0 flex-1 overflow-hidden rounded-b border border-t-0 border-border">
+      <div
+        id="backup-view-panel"
+        role="tabpanel"
+        aria-labelledby={`backup-view-tab-${tab}`}
+        className="mt-0 flex-1 overflow-hidden rounded-b border border-t-0 border-border"
+      >
         <Suspense
           fallback={<div className="p-6 text-sm text-muted-fg">Loading view…</div>}
         >

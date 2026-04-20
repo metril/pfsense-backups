@@ -41,6 +41,7 @@ _EXACT: Final[frozenset[str]] = frozenset(
         "rwcommunity",
         "community",  # SNMPv1/v2c community
         "trap_community",
+        "trapstring",  # SNMP trap community string (pfSense's field name)
         "pskey",
         "psk",
         "auth_token",
@@ -66,6 +67,19 @@ _EXACT: Final[frozenset[str]] = frozenset(
         "bgp_password",
         "ospf_password",
         "secret",
+        # pfSense's NUT / apcupsd "remote monitor" password — the
+        # attribute name lacks the underscore that the generic
+        # ``*_password`` suffix would match, so it gets an exact entry.
+        "remotepassword",
+        # DynDNS API-token providers (Cloudflare 2.7+, etc.) sometimes
+        # store the bearer token under a standalone <token> element
+        # rather than <password>. Mark it here so defensive callers
+        # can't leak it.
+        "token",
+        # pfSense's Zabbix package stores the TLS pre-shared key under
+        # <tlspsk>; <tls_psk> is the normalised form some parsers use.
+        "tlspsk",
+        "tls_psk",
     }
 )
 

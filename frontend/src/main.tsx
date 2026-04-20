@@ -1,4 +1,4 @@
-import { StrictMode, useMemo } from "react";
+import { StrictMode, useEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import {
@@ -11,6 +11,9 @@ import App from "./App";
 import { ApiError } from "./api/client";
 import { ConfirmProvider } from "./components/ui/ConfirmDialog";
 import { ToastProvider, useToast } from "./components/ui/Toast";
+
+type ToastApi = ReturnType<typeof useToast>;
+import { TooltipProvider } from "./components/ui/Tooltip";
 import "./index.css";
 
 /**
@@ -35,36 +38,43 @@ function extractMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/** Bridge component that wires TanStack Query error callbacks to our toast stack. */
+// QueryClient is created exactly once at module load. Previously it lived
+// inside a useMemo([toast]) which re-ran whenever the ToastProvider's
+// context value shifted (e.g. on HMR or any Toast state change), wiping
+// the entire query cache mid-session. Using a mutable ref for the toast
+// handler keeps the QC identity stable forever.
+const toastRef: { current: ToastApi | null } = { current: null };
+
+const qc = new QueryClient({
+  queryCache: new QueryCache({
+    onError: (err, query) => {
+      // Background refetches that fail shouldn't spam the user — only
+      // toast when the query has no cached data (actively blocking UI).
+      if (!query.state.data) toastRef.current?.error(extractMessage(err));
+    },
+  }),
+  mutationCache: new MutationCache({
+    onError: (err, _vars, _ctx, mutation) => {
+      if (mutation.options.onError) return;
+      toastRef.current?.error(extractMessage(err));
+    },
+  }),
+  defaultOptions: {
+    queries: { refetchOnWindowFocus: false, retry: 1, staleTime: 15_000 },
+  },
+});
+
 function AppWithErrorBridge() {
   const toast = useToast();
-  // Query/mutation caches live for the life of the app; reinstantiating them
-  // inside the component would clear state on every re-render. So we create
-  // them exactly once and only attach the toast handlers.
-  const qc = useMemo(
-    () =>
-      new QueryClient({
-        queryCache: new QueryCache({
-          onError: (err, query) => {
-            // Background refetches that fail shouldn't spam the user. Show
-            // only when the query has NO cached data (the user is actively
-            // waiting on it).
-            if (!query.state.data) toast.error(extractMessage(err));
-          },
-        }),
-        mutationCache: new MutationCache({
-          onError: (err, _vars, _ctx, mutation) => {
-            // Let per-mutation onError override if the caller handled it.
-            if (mutation.options.onError) return;
-            toast.error(extractMessage(err));
-          },
-        }),
-        defaultOptions: {
-          queries: { refetchOnWindowFocus: false, retry: 1, staleTime: 15_000 },
-        },
-      }),
-    [toast],
-  );
+  // Keep the latest toast handler addressable without re-creating the QC.
+  const ref = useRef(toast);
+  ref.current = toast;
+  useEffect(() => {
+    toastRef.current = ref.current;
+    return () => {
+      if (toastRef.current === ref.current) toastRef.current = null;
+    };
+  }, []);
 
   return (
     <QueryClientProvider client={qc}>
@@ -77,10 +87,12 @@ function AppWithErrorBridge() {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <ToastProvider>
-      <ConfirmProvider>
-        <AppWithErrorBridge />
-      </ConfirmProvider>
-    </ToastProvider>
+    <TooltipProvider>
+      <ToastProvider>
+        <ConfirmProvider>
+          <AppWithErrorBridge />
+        </ConfirmProvider>
+      </ToastProvider>
+    </TooltipProvider>
   </StrictMode>,
 );

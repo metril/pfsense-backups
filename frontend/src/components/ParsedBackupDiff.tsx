@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { Lock } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
@@ -209,21 +210,32 @@ function DiffSectionCard({
   group: SectionGroup;
   section: SectionDiff;
 }) {
-  const headerExtra = (
-    <>
-      {section.added.length > 0 && (
-        <Badge tone="success">+{section.added.length}</Badge>
-      )}
-      {section.removed.length > 0 && (
-        <Badge tone="danger">−{section.removed.length}</Badge>
-      )}
-      {section.modified.length > 0 && (
-        <Badge tone="warn">~{section.modified.length}</Badge>
-      )}
-      {section.reordered.length > 0 && (
-        <Badge tone="muted">↕{section.reordered.length}</Badge>
-      )}
-    </>
+  // Memoized so Card doesn't see a fresh JSX element on every parent
+  // render. Deps are just the four delta counts — stable across
+  // unrelated state updates (tab switches, collapse toggles elsewhere).
+  const headerExtra = useMemo(
+    () => (
+      <>
+        {section.added.length > 0 && (
+          <Badge tone="success">+{section.added.length}</Badge>
+        )}
+        {section.removed.length > 0 && (
+          <Badge tone="danger">−{section.removed.length}</Badge>
+        )}
+        {section.modified.length > 0 && (
+          <Badge tone="warn">~{section.modified.length}</Badge>
+        )}
+        {section.reordered.length > 0 && (
+          <Badge tone="muted">↕{section.reordered.length}</Badge>
+        )}
+      </>
+    ),
+    [
+      section.added.length,
+      section.removed.length,
+      section.modified.length,
+      section.reordered.length,
+    ],
   );
   return (
     <Card
@@ -397,8 +409,8 @@ function formatValue(v: unknown): React.ReactNode {
   if (v === null || v === undefined) return <span className="text-muted-fg">—</span>;
   if (v === "***redacted***")
     return (
-      <span className="inline-flex items-center gap-1 text-muted-fg">
-        <Lock className="h-3 w-3" /> redacted
+      <span className="inline-flex items-center gap-1 rounded border border-[hsl(var(--group-vpn))]/30 bg-[hsl(var(--group-vpn))]/10 px-1.5 py-0.5 font-mono text-[11px] text-[hsl(var(--group-vpn))]">
+        <Lock aria-hidden="true" className="h-3 w-3" /> redacted
       </span>
     );
   if (Array.isArray(v)) return JSON.stringify(v);

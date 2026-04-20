@@ -73,12 +73,14 @@ CONSUMED_TAGS = frozenset(
 
 def _parse_bgp(ip: Element) -> FrrBgpConfig | None:
     bgp_el = ip.find("frrbgp")
-    if bgp_el is None:
-        bgp_el = ip.find("frrglobal")
-    if bgp_el is None:
+    neighbors_el = ip.find("frrbgpneighbors")
+    # frrglobal alone does NOT imply BGP is enabled — older FRR
+    # builds keep the daemon config under a daemon-specific tag.
+    # Falling back to frrglobal here would double-populate BGP + OSPF
+    # from the same element when only a global block exists.
+    if bgp_el is None and neighbors_el is None:
         return None
     neighbors: list[FrrBgpNeighbor] = []
-    neighbors_el = ip.find("frrbgpneighbors")
     if neighbors_el is not None:
         neighbor_rows = children(neighbors_el, "item")
         if not neighbor_rows:
@@ -104,6 +106,8 @@ def _parse_bgp(ip: Element) -> FrrBgpConfig | None:
                     ),
                 )
             )
+    if bgp_el is None:
+        return FrrBgpConfig(enabled=False, neighbors=neighbors)
     return FrrBgpConfig(
         enabled=bool_flag(bgp_el, "enable") or bool_flag(bgp_el, "enablebgp"),
         local_as=text(bgp_el, "local_as") or text(bgp_el, "asnum"),
@@ -114,12 +118,11 @@ def _parse_bgp(ip: Element) -> FrrBgpConfig | None:
 
 def _parse_ospf(ip: Element) -> FrrOspfConfig | None:
     ospf_el = ip.find("frrospf")
-    if ospf_el is None:
-        ospf_el = ip.find("frrglobal")
-    if ospf_el is None:
+    ifaces_el = ip.find("frrospfinterfaces")
+    # Same anti-fallback as BGP: frrglobal is neither.
+    if ospf_el is None and ifaces_el is None:
         return None
     interfaces: list[FrrOspfInterface] = []
-    ifaces_el = ip.find("frrospfinterfaces")
     if ifaces_el is not None:
         iface_rows = children(ifaces_el, "item")
         if not iface_rows:
@@ -144,6 +147,8 @@ def _parse_ospf(ip: Element) -> FrrOspfConfig | None:
                     ),
                 )
             )
+    if ospf_el is None:
+        return FrrOspfConfig(enabled=False, interfaces=interfaces)
     return FrrOspfConfig(
         enabled=bool_flag(ospf_el, "enable") or bool_flag(ospf_el, "enableospf"),
         router_id=text(ospf_el, "router_id") or text(ospf_el, "routerid"),
@@ -161,5 +166,5 @@ def parse(ip: Element) -> FrrConfig | None:
         return None
     enabled = False
     if global_el is not None:
-        enabled = bool_flag(global_el, "enable")
+        enabled = bool_flag(global_el, "enable") or bool_flag(global_el, "enablefrr")
     return FrrConfig(enabled=enabled, bgp=bgp, ospf=ospf)

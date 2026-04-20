@@ -30,16 +30,19 @@ export function Alert({
 }) {
   const t = TONE_CLASSES[tone];
   const Icon = t.icon;
+  // Errors and warnings need role="alert" (assertive live region) so
+  // screen readers interrupt; info/ok stay polite via role="status".
+  const role = tone === "danger" || tone === "warn" ? "alert" : "status";
   return (
     <div
-      role="status"
+      role={role}
       className={cn(
         "flex items-start gap-2 rounded border px-3 py-2 text-sm",
         t.border,
         className,
       )}
     >
-      <Icon className={cn("mt-0.5 h-4 w-4 shrink-0", t.text)} />
+      <Icon aria-hidden="true" className={cn("mt-0.5 h-4 w-4 shrink-0", t.text)} />
       <div className="flex-1">
         {title && <div className={cn("font-medium", t.text)}>{title}</div>}
         {children && <div className="text-fg/90">{children}</div>}

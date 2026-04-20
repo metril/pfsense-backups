@@ -276,7 +276,7 @@ def parse_snmpd(root: Element) -> SnmpdConfig | None:
         trapenable=bool_flag(el, "trapenable"),
         trapserver=text(el, "trapserver"),
         trapserverport=text(el, "trapserverport"),
-        trapstring=text(el, "trapstring"),
+        trapstring=redact("trapstring", text(el, "trapstring")),
         bindlan=bool_flag(el, "bindlan"),
         bindip=text(el, "bindip"),
     )
@@ -533,7 +533,7 @@ def parse_ups(root: Element) -> UpsConfig | None:
         cable=text(el, "cable"),
         upsname=text(el, "upsname"),
         remoteuser=text(el, "remoteuser"),
-        remotepassword=redact("password", text(el, "remotepassword")),
+        remotepassword=redact("remotepassword", text(el, "remotepassword")),
     )
 
 

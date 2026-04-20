@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { Lock } from "lucide-react";
 import { Alert } from "@/components/ui/Alert";
 import { Badge } from "@/components/ui/Badge";
@@ -34,6 +35,7 @@ import type {
   FrrConfig,
   FtpProxyConfig,
   Gateway,
+  GatewayGroup,
   Group,
   HaSync,
   IgmpProxyEntry,
@@ -176,6 +178,14 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
         {data.gateways.length > 0 && (
           <Section title="Gateways" count={data.gateways.length}>
             <GatewaysTable rows={data.gateways} />
+          </Section>
+        )}
+        {data.gateway_groups.length > 0 && (
+          <Section
+            title="Gateway groups"
+            count={data.gateway_groups.length}
+          >
+            <GatewayGroupsTable rows={data.gateway_groups} />
           </Section>
         )}
         {data.static_routes.length > 0 && (
@@ -434,6 +444,7 @@ const TITLE_TO_KEY: Record<string, string> = {
   LAGG: "laggs",
   "Wake-on-LAN": "wol",
   Gateways: "gateways",
+  "Gateway groups": "gateway_groups",
   "Static routes": "static_routes",
   "Virtual IPs / CARP": "virtual_ips",
   "HA / CARP sync": "hasync",
@@ -514,6 +525,8 @@ function TableOfContents({ cfg }: { cfg: ParsedConfig }) {
     entries.push(["Virtual IPs / CARP", cfg.virtual_ips.length]);
   if (cfg.hasync) entries.push(["HA / CARP sync", 1]);
   if (cfg.gateways.length) entries.push(["Gateways", cfg.gateways.length]);
+  if (cfg.gateway_groups.length)
+    entries.push(["Gateway groups", cfg.gateway_groups.length]);
   if (cfg.static_routes.length)
     entries.push(["Static routes", cfg.static_routes.length]);
   if (cfg.firewall_rules.length)
@@ -637,9 +650,9 @@ function Redacted() {
   return (
     <span
       title="Value redacted server-side — view raw XML tab if you truly need the plaintext"
-      className="inline-flex items-center gap-1 text-muted-fg"
+      className="inline-flex items-center gap-1 rounded border border-[hsl(var(--group-vpn))]/30 bg-[hsl(var(--group-vpn))]/10 px-1.5 py-0.5 font-mono text-[11px] text-[hsl(var(--group-vpn))]"
     >
-      <Lock className="h-3 w-3" /> redacted
+      <Lock aria-hidden="true" className="h-3 w-3" /> redacted
     </span>
   );
 }
@@ -653,9 +666,14 @@ function RV({ v }: { v: string | null | undefined }) {
 function Table({
   headers,
   rows,
+  rowKeys,
 }: {
   headers: string[];
   rows: React.ReactNode[][];
+  /** Stable per-row keys. When omitted, falls back to index which is
+   *  fine for non-reordering tables. Firewall / NAT tables pass
+   *  rule trackers so reordering diffs don't confuse React. */
+  rowKeys?: (string | number)[];
 }) {
   return (
     <div className="overflow-x-auto">
@@ -671,7 +689,10 @@ function Table({
         </thead>
         <tbody>
           {rows.map((row, i) => (
-            <tr key={i} className="border-b border-border/50 last:border-0">
+            <tr
+              key={rowKeys?.[i] ?? i}
+              className="border-b border-border/50 last:border-0"
+            >
               {row.map((cell, j) => (
                 <td key={j} className="px-2 py-1 align-top">
                   {cell}
@@ -730,6 +751,7 @@ function GatewaysTable({ rows }: { rows: Gateway[] }) {
   return (
     <Table
       headers={["Name", "Interface", "Gateway", "Monitor", "Default", "Descr"]}
+      rowKeys={rows.map((r) => r.name)}
       rows={rows.map((r) => [
         r.name,
         <InterfaceChip key="i" name={r.interface} />,
@@ -738,6 +760,23 @@ function GatewaysTable({ rows }: { rows: Gateway[] }) {
         </span>,
         r.monitor ?? "—",
         r.defaultgw ? <Badge tone="success">default</Badge> : "",
+        r.descr ?? "—",
+      ])}
+    />
+  );
+}
+
+function GatewayGroupsTable({ rows }: { rows: GatewayGroup[] }) {
+  return (
+    <Table
+      headers={["Name", "Trigger", "Members", "Description"]}
+      rowKeys={rows.map((r) => r.name)}
+      rows={rows.map((r) => [
+        r.name,
+        r.trigger ?? "—",
+        <span key="m" className="font-mono text-xs">
+          {r.members.length ? r.members.join(", ") : "—"}
+        </span>,
         r.descr ?? "—",
       ])}
     />
@@ -770,6 +809,7 @@ function FirewallTable({ rows }: { rows: FirewallRule[] }) {
         "Destination",
         "Description",
       ]}
+      rowKeys={rows.map((r) => r.tracker ?? r.key)}
       rows={rows.map((r, i) => [
         <span key="n" className="font-mono text-xs text-muted-fg">
           {i + 1}
@@ -808,6 +848,7 @@ function NatTable({ rows }: { rows: NatRule[] }) {
         "Local port",
         "Description",
       ]}
+      rowKeys={rows.map((r) => r.key)}
       rows={rows.map((r) => [
         <Badge
           key="k"
@@ -1274,6 +1315,7 @@ function SnmpdPanel({ s }: { s: SnmpdConfig }) {
             ? `${s.trapserver ?? "?"}:${s.trapserverport ?? "?"}`
             : "disabled",
         ],
+        ["Trap community", <RV v={s.trapstring} key="ts" />],
       ]}
     />
   );
@@ -1418,7 +1460,7 @@ function CaptivePortalTable({ rows }: { rows: CaptivePortalZone[] }) {
         z.enable ? "yes" : "no",
         z.interfaces.join(", ") || "—",
         z.auth_method ?? "—",
-        z.radius_secret === "***redacted***" ? <Redacted /> : "—",
+        <RV v={z.radius_secret} key="rs" />,
         z.redirurl ?? "—",
       ])}
     />
@@ -1968,8 +2010,19 @@ function UnrecognizedList({ rows }: { rows: RawSection[] }) {
 
 /** Colored interface-key chip. Same key always gets the same color
  *  (hashed via ``interfaceChipClasses``) so operators can spot
- *  "this rule is on LAN" from across the table without reading text. */
-export function InterfaceChip({
+ *  "this rule is on LAN" from across the table without reading text.
+ *
+ *  Uses a border-only treatment (no background fill) so the chip's
+ *  color vocabulary doesn't collide with action semantics — a green
+ *  "pass" badge sitting next to a green-striped LAN interface chip
+ *  would be ambiguous in a firewall-rule row. Border-only keeps
+ *  identity recognition but downgrades visual weight below the
+ *  action pill.
+ *
+ *  Memoized because it's rendered hundreds of times per firewall
+ *  view and interfaceChipClasses runs a djb2 hash per render.
+ */
+export const InterfaceChip = memo(function InterfaceChip({
   name,
   className,
 }: {
@@ -1981,8 +2034,7 @@ export function InterfaceChip({
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded border px-1.5 py-0.5 text-[11px] font-medium",
-        c.bg,
+        "inline-flex items-center rounded border px-1.5 py-0.5 text-[11px] font-medium bg-bg",
         c.fg,
         c.border,
         className,
@@ -1991,7 +2043,7 @@ export function InterfaceChip({
       {interfaceLabel(name)}
     </span>
   );
-}
+});
 
 /** Colored pill for firewall-rule action type. */
 function ActionPill({ type }: { type: string | null | undefined }) {
