@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pfsense_shared.models import Backup, Instance, Job
+from pfsense_shared.pfsense_anchor_values import resolve_anchor_value
 from pfsense_shared.pfsense_crypto import (
     PfSenseCryptoError,
     decrypt_pfsense_backup,
@@ -673,3 +674,128 @@ async def diff_pair(
             "content": b_content,
         },
     }
+
+
+# --------------------------------------------------------------------- #
+# v0.24.0 — per-anchor blame: history of a single row / field across
+# every successful backup of an instance.
+# --------------------------------------------------------------------- #
+
+
+class AnchorHistoryChange(BaseModel):
+    """One entry on the blame timeline for a single anchor.
+
+    ``is_change`` is True when this backup's value differs from the
+    previous backup's value — both the appearance (None → non-None)
+    and the disappearance (non-None → None) of the anchor count as
+    changes. The blame drawer emphasises change entries while still
+    listing unchanged backups so the operator can see the gap
+    between changes.
+    """
+
+    backup_id: int
+    started_at: str
+    value: Any
+    is_change: bool
+
+
+class AnchorHistoryResponse(BaseModel):
+    anchor: str
+    instance_id: int
+    entries: list[AnchorHistoryChange]
+
+
+@router.get(
+    "/instance/{instance_id}/anchor-history",
+    response_model=AnchorHistoryResponse,
+)
+async def instance_anchor_history(
+    instance_id: int,
+    anchor: str,
+    db: DbSession,
+    user: CurrentUser,
+    crypto: CryptoDep,
+) -> AnchorHistoryResponse:
+    """Per-anchor blame timeline for a pfSense instance.
+
+    Walks every successful backup for the instance in chronological
+    order, decrypts + parses each, resolves ``anchor`` to the value
+    it points at in that backup, and records transitions. Used by
+    the v0.24.0 blame drawer in the history page.
+
+    Cost: decrypts + parses every backup on each request. Backups
+    for a single instance are typically dozens to a few hundred;
+    parsing is a few-hundred-ms per config. Result is deterministic
+    and idempotent; frontend caches aggressively via TanStack Query.
+
+    Audited as ``view_decrypted`` once per request (not once per
+    encrypted backup) — operators reviewing blame data see only one
+    audit entry per drill-in.
+    """
+    # Load instance + its successful backups in ascending order.
+    inst_row = (
+        await db.execute(select(Instance).where(Instance.id == instance_id))
+    ).scalar_one_or_none()
+    if inst_row is None:
+        raise HTTPException(status_code=404, detail="instance not found")
+
+    rows = (
+        await db.execute(
+            select(Backup)
+            .where(Backup.instance_id == instance_id)
+            .where(Backup.success.is_(True))
+            .order_by(Backup.started_at.asc())
+        )
+    ).scalars().all()
+
+    from pathlib import Path as _Path
+
+    from pfsense_shared.paths import BACKUPS_DIR as _BACKUPS_DIR
+
+    any_encrypted = False
+
+    def _gather() -> list[AnchorHistoryChange]:
+        nonlocal any_encrypted
+        out: list[AnchorHistoryChange] = []
+        previous_value: Any = _MISSING
+        for row in rows:
+            path = _Path(row.path) if _Path(row.path).is_absolute() else _BACKUPS_DIR / row.path
+            if row.encrypted:
+                any_encrypted = True
+                raw_bytes: bytes | str = _decrypt_row_content(row, path, crypto)
+            else:
+                raw_bytes = read_content(path)
+            parsed = parse_pfsense_xml(raw_bytes)
+            value = resolve_anchor_value(parsed, anchor)
+            is_change = previous_value is _MISSING or value != previous_value
+            out.append(
+                AnchorHistoryChange(
+                    backup_id=row.id,
+                    started_at=row.started_at.isoformat(),
+                    value=value,
+                    is_change=is_change,
+                )
+            )
+            previous_value = value
+        return out
+
+    entries = await asyncio.to_thread(_gather)
+
+    if any_encrypted:
+        audit.record(
+            db, actor_email=user["email"], action="view_decrypted",
+            resource="anchor_history", resource_id=instance_id,
+            details={"anchor": anchor, "backups": len(entries)},
+        )
+        await db.commit()
+
+    return AnchorHistoryResponse(
+        anchor=anchor,
+        instance_id=instance_id,
+        entries=entries,
+    )
+
+
+# Sentinel so the "first iteration is always a change" pattern works
+# even when the value happens to be ``None``.
+_MISSING = object()

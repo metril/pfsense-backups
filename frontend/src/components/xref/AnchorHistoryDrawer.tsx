@@ -1,0 +1,206 @@
+import { useEffect, useMemo, useRef } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { Clock, ExternalLink, X } from "lucide-react";
+import { Badge } from "@/components/ui/Badge";
+import { Button } from "@/components/ui/Button";
+import {
+  useAnchorHistory,
+  type AnchorHistoryChange,
+} from "@/api/queries";
+
+/**
+ * Per-anchor blame drawer. Opens when the operator hits ``h`` on a
+ * focused row / field in the Structured view (or when the caller
+ * explicitly sets ``anchor``) and lists every successful backup of
+ * the enclosing instance with the anchor's value at that point in
+ * time. Change rows get the warn accent; unchanged runs collapse
+ * into "× runs with no change" summaries so the list stays scan-
+ * able on instances with hundreds of backups.
+ *
+ * The drawer is a controlled component — parent owns ``anchor`` +
+ * ``onClose`` state. Closed (``anchor === null``) renders nothing
+ * so we don't pay for the fetch when the drawer isn't in use.
+ */
+export function AnchorHistoryDrawer({
+  instanceId,
+  anchor,
+  label,
+  onClose,
+}: {
+  instanceId: number;
+  anchor: string | null;
+  /** Short human label for the header (``"alias: RFC1918"`` etc.).
+   *  Supplied by the caller since the drawer itself doesn't have
+   *  access to the xref index. */
+  label?: string;
+  onClose: () => void;
+}) {
+  const query = useAnchorHistory(instanceId, anchor);
+
+  // Auto-focus the close button on open for keyboard users, and
+  // Esc to dismiss.
+  const closeBtnRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    if (anchor) closeBtnRef.current?.focus();
+  }, [anchor]);
+  useEffect(() => {
+    if (!anchor) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+      }
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [anchor, onClose]);
+
+  // Collapse consecutive "no change" runs into summary pills so the
+  // drawer doesn't become a wall of identical rows on instances with
+  // weekly backups across a year.
+  const rendered = useMemo(() => collapse(query.data?.entries ?? []), [query.data]);
+
+  if (!anchor) return null;
+
+  return (
+    <div
+      role="dialog"
+      aria-label="Anchor history"
+      className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-border bg-bg shadow-2xl"
+    >
+      <div className="flex items-start justify-between gap-3 border-b border-border p-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-1 text-xs text-muted-fg">
+            <Clock className="h-3 w-3" />
+            <span>Blame timeline</span>
+          </div>
+          <h2 className="mt-1 truncate text-sm font-semibold">
+            {label ?? anchor}
+          </h2>
+          <p className="mt-0.5 truncate font-mono text-[10px] text-muted-fg">
+            {anchor}
+          </p>
+        </div>
+        <Button
+          ref={closeBtnRef}
+          variant="secondary"
+          size="sm"
+          onClick={onClose}
+          aria-label="Close"
+        >
+          <X className="h-4 w-4" />
+        </Button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-3 text-sm">
+        {query.isLoading && (
+          <div className="text-muted-fg">Walking every backup…</div>
+        )}
+        {query.isError && (
+          <div className="text-danger">{String(query.error)}</div>
+        )}
+        {query.data && rendered.length === 0 && (
+          <div className="text-muted-fg">
+            No successful backups to compare.
+          </div>
+        )}
+        <ol className="space-y-2">
+          {rendered.map((r) =>
+            r.kind === "run" ? (
+              <li
+                key={`run-${r.startIdx}`}
+                className="flex items-center gap-2 text-xs text-muted-fg"
+              >
+                <span className="h-px flex-1 bg-border" />
+                {r.count} run{r.count === 1 ? "" : "s"} with no change
+                <span className="h-px flex-1 bg-border" />
+              </li>
+            ) : (
+              <EntryRow key={r.entry.backup_id} entry={r.entry} />
+            ),
+          )}
+        </ol>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------- internals ---------------------------------
+
+function EntryRow({ entry }: { entry: AnchorHistoryChange }) {
+  const nav = useNavigate();
+  const when = new Date(entry.started_at);
+  return (
+    <li
+      className={
+        entry.is_change
+          ? "rounded border border-[hsl(var(--warn)/0.4)] bg-[hsl(var(--warn)/0.06)] p-2"
+          : "rounded border border-transparent p-2"
+      }
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-xs">
+          <span className="font-mono">{when.toLocaleString()}</span>
+          {entry.is_change && <Badge tone="warn">changed</Badge>}
+          {entry.value === null && <Badge tone="muted">missing</Badge>}
+        </div>
+        <Link
+          to={`/backups/${entry.backup_id}/view`}
+          onClick={(e) => {
+            e.preventDefault();
+            nav(`/backups/${entry.backup_id}/view`);
+          }}
+          className="inline-flex items-center gap-1 text-xs text-muted-fg hover:text-accent"
+          title="Open this backup"
+        >
+          <ExternalLink className="h-3 w-3" />
+          #{entry.backup_id}
+        </Link>
+      </div>
+      <div className="mt-1.5 whitespace-pre-wrap break-words font-mono text-[11px] text-muted-fg">
+        {formatValue(entry.value)}
+      </div>
+    </li>
+  );
+}
+
+function formatValue(value: AnchorHistoryChange["value"]): string {
+  if (value === null) return "—";
+  if (typeof value === "string") return value;
+  // Row-shaped object: pretty-print to two levels so the drawer stays
+  // readable without scrolling horizontally.
+  return JSON.stringify(value, null, 2);
+}
+
+type Rendered =
+  | { kind: "entry"; entry: AnchorHistoryChange }
+  | { kind: "run"; count: number; startIdx: number };
+
+/** Collapse consecutive ``is_change === false`` rows into a single
+ *  "N runs with no change" summary so operators aren't scrolling
+ *  through dozens of identical entries between two actual changes.
+ *  Always leaves the first entry visible (the baseline) and the
+ *  change entries themselves. */
+function collapse(entries: AnchorHistoryChange[]): Rendered[] {
+  const out: Rendered[] = [];
+  let runCount = 0;
+  let runStart = -1;
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    const isBaseline = i === 0;
+    if (!e.is_change && !isBaseline) {
+      if (runCount === 0) runStart = i;
+      runCount += 1;
+      continue;
+    }
+    if (runCount > 0) {
+      out.push({ kind: "run", count: runCount, startIdx: runStart });
+      runCount = 0;
+    }
+    out.push({ kind: "entry", entry: e });
+  }
+  if (runCount > 0) {
+    out.push({ kind: "run", count: runCount, startIdx: runStart });
+  }
+  return out;
+}

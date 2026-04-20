@@ -1,6 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, ChevronLeft, ChevronRight, Split } from "lucide-react";
+import { ArrowLeft, ChevronLeft, ChevronRight, Clock, Split } from "lucide-react";
 import { Alert } from "@/components/ui/Alert";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -10,6 +10,8 @@ import {
   useParsedDiffPair,
 } from "@/api/queries";
 import { collectChangedAnchors } from "@/lib/changedAnchors";
+import { useFocusedAnchor } from "@/lib/useFocusedAnchor";
+import { AnchorHistoryDrawer } from "@/components/xref/AnchorHistoryDrawer";
 
 const ParsedBackupView = lazy(() =>
   import("@/components/ParsedBackupView").then((m) => ({
@@ -149,6 +151,36 @@ export function InstanceHistoryPage() {
     },
     [],
   );
+
+  // ------- Blame drawer (v0.24.0) ----------------------------------
+  // ``useFocusedAnchor`` tracks the nearest visible row / field in
+  // the Structured view. Pressing ``h`` (outside inputs / modals)
+  // opens the AnchorHistoryDrawer for whatever is focused; ``Esc``
+  // closes it (handled inside the drawer).
+  const focusedAnchor = useFocusedAnchor(true);
+  const [blameAnchor, setBlameAnchor] = useState<string | null>(null);
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      if (target?.closest('[role="dialog"], [role="listbox"], [role="menu"]'))
+        return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === "h" && focusedAnchor) {
+        e.preventDefault();
+        setBlameAnchor(focusedAnchor);
+      }
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [focusedAnchor]);
 
   if (!Number.isFinite(id)) {
     return (
@@ -336,6 +368,32 @@ export function InstanceHistoryPage() {
           </Suspense>
         )}
       </div>
+
+      {/* Floating hint: tell the operator the 'h' shortcut exists
+          whenever we have a focused anchor and the drawer isn't
+          open. Low-key pill in the bottom-left. */}
+      {focusedAnchor && blameAnchor === null && (
+        <button
+          type="button"
+          onClick={() => setBlameAnchor(focusedAnchor)}
+          className="fixed bottom-4 left-4 z-30 inline-flex items-center gap-1.5 rounded-full border border-border bg-bg/95 px-3 py-1.5 text-xs font-medium text-muted-fg shadow-lg backdrop-blur transition-colors hover:bg-muted/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+          title={`Blame: ${focusedAnchor}`}
+        >
+          <Clock aria-hidden="true" className="h-3.5 w-3.5" />
+          <span>History of this field</span>
+          <kbd className="ml-1 rounded border border-border bg-muted px-1 text-[10px]">
+            h
+          </kbd>
+        </button>
+      )}
+
+      {/* Blame drawer — mounted here so it slides in over the
+          Structured view. Closed state renders nothing. */}
+      <AnchorHistoryDrawer
+        instanceId={id}
+        anchor={blameAnchor}
+        onClose={() => setBlameAnchor(null)}
+      />
     </div>
   );
 }

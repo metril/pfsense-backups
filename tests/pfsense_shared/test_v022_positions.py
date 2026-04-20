@@ -60,10 +60,13 @@ def test_firewall_rule_with_non_ident_tracker_sanitises_to_underscore():
     assert "xref-rule-fw_rule_42" in pos
 
 
-def test_nat_variants_share_scope():
-    """Port-forward / one-to-one / outbound NAT rules all land under
-    the ``xref-nat-{tracker}`` scope. Both shapes need positions so
-    the viewer can jump to either."""
+def test_nat_variants_are_not_indexed_yet():
+    """NAT rules are intentionally skipped by the positions builder
+    (v0.24.0 follow-up): the viewer anchors NAT rows with the
+    parser's synthesized ``key``, which lxml can't compute alone.
+    Make the gap explicit so a future change that DOES index NAT
+    deliberately updates this test rather than quietly regressing
+    the tab-switch sync with orphan tracker-keyed entries."""
     pos = _positions(
         """
         <pfsense>
@@ -71,20 +74,11 @@ def test_nat_variants_share_scope():
             <rule>
               <tracker>100</tracker>
             </rule>
-            <onetoone>
-              <tracker>200</tracker>
-            </onetoone>
-            <outbound>
-              <rule>
-                <tracker>300</tracker>
-              </rule>
-            </outbound>
           </nat>
         </pfsense>
         """
     )
-    for t in ("100", "200", "300"):
-        assert f"xref-nat-{t}" in pos
+    assert not any(k.startswith("xref-nat-") for k in pos)
 
 
 def test_kind_anchors_cover_every_refkind():

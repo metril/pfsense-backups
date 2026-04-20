@@ -84,15 +84,13 @@ _ROW_RULES: list[tuple[str, str, str]] = [
     # Note the scope is ``rule`` not ``xref-rule`` in the frontend
     # helper; the resulting id is ``xref-rule-{tracker}``.
     ("filter/rule", "rule", "tracker"),
-    # NAT rules — multiple shapes: port forwards live under
-    # ``<nat><rule>``, outbound under ``<nat><outbound><rule>``, and
-    # 1:1 under ``<nat><onetoone>``. All collapse into the ``nat``
-    # scope in the viewer with composite keys; we approximate with
-    # ``tracker`` where available and fall back to the interface-
-    # ordinal composite the parser uses.
-    ("nat/rule", "nat", "tracker"),
-    ("nat/onetoone", "nat", "tracker"),
-    ("nat/outbound/rule", "nat", "tracker"),
+    # NAT rules intentionally NOT emitted here: the frontend
+    # ``rowAnchorId("nat", r.key)`` uses the parser's synthesized
+    # ``key`` (``hash:…``), which lxml can't compute without also
+    # running the main ElementTree parser. Adding tracker-keyed
+    # entries would only produce orphans. A future release can
+    # restore NAT positions by piggy-backing on the Python parser's
+    # output alongside the lxml walk.
 ]
 
 # Anchor kind → XML container path → key attribute. Each entry yields

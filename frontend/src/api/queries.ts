@@ -267,6 +267,43 @@ export function useParsedBackup(id: number) {
   });
 }
 
+// ----- v0.24.0: per-anchor blame / history ----------
+
+export interface AnchorHistoryChange {
+  backup_id: number;
+  started_at: string;
+  /** Row-shaped anchors return an object (Record<string, unknown>),
+   *  singleton field anchors a stringified scalar, missing anchors
+   *  ``null``. Drawer renders each shape differently. */
+  value: Record<string, unknown> | string | null;
+  is_change: boolean;
+}
+
+export interface AnchorHistoryResponse {
+  anchor: string;
+  instance_id: number;
+  entries: AnchorHistoryChange[];
+}
+
+/** Walk every successful backup of the given instance and resolve
+ *  the named anchor on each, returning a change timeline. Enabled
+ *  only when both ``instanceId`` and ``anchor`` are supplied so the
+ *  query doesn't fire for a closed drawer. */
+export function useAnchorHistory(
+  instanceId: number | null | undefined,
+  anchor: string | null,
+) {
+  return useQuery({
+    queryKey: ["instance-anchor-history", instanceId, anchor],
+    queryFn: () =>
+      api.get<AnchorHistoryResponse>(
+        `/api/backups/instance/${instanceId}/anchor-history?anchor=${encodeURIComponent(anchor ?? "")}`,
+      ),
+    enabled: Boolean(instanceId) && Boolean(anchor),
+    staleTime: 5 * 60 * 1000, // blame rarely changes while drawer is open
+  });
+}
+
 export function useParsedDiffPair(a: number | null, b: number | null) {
   return useQuery({
     queryKey: ["backups", "diff", a, b, "parsed"],
