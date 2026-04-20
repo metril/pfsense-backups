@@ -32,10 +32,18 @@ def test_dyndns_provider_and_password_redaction() -> None:
               <password>LEAKY_DDNS_API_TOKEN</password>
               <enable/>
             </dyndns>
+            <dyndns>
+              <type>cloudflare-v4</type>
+              <interface>wan</interface>
+              <host>gw2</host>
+              <domainname>example.com</domainname>
+              <token>LEAKY_DDNS_BEARER_TOKEN</token>
+              <enable/>
+            </dyndns>
           </dyndnses>
         </pfsense>
     """)
-    assert len(cfg.dyndns_entries) == 1
+    assert len(cfg.dyndns_entries) == 2
     d = cfg.dyndns_entries[0]
     assert d.type == "cloudflare"
     assert d.host == "gw"
@@ -44,7 +52,15 @@ def test_dyndns_provider_and_password_redaction() -> None:
     assert d.username == "public_account_id"
     # Password redacted
     assert d.password == REDACTED
-    assert "LEAKY_DDNS_API_TOKEN" not in cfg.model_dump_json()
+    assert d.token is None  # no <token> element on entry 0
+    # Entry 1: modern bearer-token auth mode
+    d2 = cfg.dyndns_entries[1]
+    assert d2.type == "cloudflare-v4"
+    assert d2.password is None  # no <password> element
+    assert d2.token == REDACTED
+    blob = cfg.model_dump_json()
+    assert "LEAKY_DDNS_API_TOKEN" not in blob
+    assert "LEAKY_DDNS_BEARER_TOKEN" not in blob
 
 
 def test_notifications_smtp_pushover_and_slack_redacted() -> None:

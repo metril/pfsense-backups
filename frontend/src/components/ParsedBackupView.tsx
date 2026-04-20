@@ -809,9 +809,11 @@ function FirewallTable({ rows }: { rows: FirewallRule[] }) {
         "Destination",
         "Description",
       ]}
-      // Suffix with the row index to avoid duplicate-key warnings on
-      // migrated configs where multiple rules share a tracker.
-      rowKeys={rows.map((r, i) => `${r.tracker ?? r.key}#${i}`)}
+      // r.key is ``tracker:{id}`` when the rule has a tracker, else a
+      // content hash — unique per-rule in both branches. Using it
+      // directly preserves React identity across reorders (which was
+      // the whole point of rowKeys; a positional suffix would defeat it).
+      rowKeys={rows.map((r) => r.key)}
       rows={rows.map((r, i) => [
         <span key="n" className="font-mono text-xs text-muted-fg">
           {i + 1}
@@ -2113,6 +2115,7 @@ function DyndnsTable({ rows }: { rows: DyndnsEntry[] }) {
         "Token / PW",
         "Description",
       ]}
+      rowKeys={rows.map((d) => d.key)}
       rows={rows.map((d) => [
         <span key="p" className="font-mono text-xs">
           {d.type ?? "—"}
