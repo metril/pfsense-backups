@@ -519,6 +519,46 @@ def test_telegraf_username_redacted_and_url_basic_auth_scrubbed():
     assert "LEAKY_PASS" not in dumped
 
 
+def test_telegraf_url_scrub_handles_username_only_basic_auth():
+    """The URL scrub regex must also strip the degenerate ``user@``
+    form (basic-auth username with no password), not just
+    ``user:pass@``."""
+    xml = """
+    <pfsense>
+      <installedpackages>
+        <telegraf>
+          <enable>on</enable>
+          <url>http://LEAKY_BARE_USER@influx.example.com:8086/db</url>
+        </telegraf>
+      </installedpackages>
+    </pfsense>
+    """
+    cfg = _parse(xml)
+    tg = cfg.installedpackages.telegraf
+    assert tg is not None
+    assert tg.url is not None
+    assert "influx.example.com:8086" in tg.url
+    assert "LEAKY_BARE_USER" not in tg.url
+
+
+def test_telegraf_url_scrub_preserves_port_suffix_without_basic_auth():
+    """URLs without basic-auth (``http://host:8086/db``) must pass
+    through untouched — a too-greedy regex would swallow the port."""
+    xml = """
+    <pfsense>
+      <installedpackages>
+        <telegraf>
+          <enable>on</enable>
+          <url>http://influx.example.com:8086/db</url>
+        </telegraf>
+      </installedpackages>
+    </pfsense>
+    """
+    cfg = _parse(xml)
+    tg = cfg.installedpackages.telegraf
+    assert tg.url == "http://influx.example.com:8086/db"
+
+
 # ---------- v0.20.0: Suricata oinkmaster regression ----------
 
 

@@ -58,6 +58,17 @@ services:
       WORKER_PUSH_URL: tcp://worker:5555
       WORKER_SUB_URL: tcp://worker:5556
 
+      # v0.20.0 — ProxyHeadersMiddleware defaults to loopback-only so
+      # bare deployments aren't open to ``X-Forwarded-*`` spoofing from
+      # arbitrary upstreams. This compose topology runs the app behind
+      # Traefik on a Docker bridge network; the connecting address
+      # uvicorn sees is the bridge gateway (172.x), which is outside
+      # the default list. Trust anything on the bridge so
+      # ``request.client.host`` reflects the real client and audit
+      # logs stay useful. If you expose the container port directly
+      # (no proxy), tighten this back to ``127.0.0.1,::1``.
+      TRUSTED_PROXIES: "*"
+
     volumes:
       # Shared DB + Fernet key with the worker.
       - ./data:/app/data

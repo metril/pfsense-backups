@@ -1,4 +1,12 @@
-import { memo, useCallback, useMemo, useState, type ReactNode } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Check, Copy } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { Alert } from "@/components/ui/Alert";
@@ -2589,17 +2597,43 @@ function AcmePanel({ p }: { p: AcmeConfig }) {
  *  keys between tunnels and peers, so expose a real copy button. */
 function CopyableKey({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
+  // Track the reset timer so we can cancel it on unmount or re-copy
+  // — otherwise a rapid click sequence (or unmount mid-timeout)
+  // leaves a pending setCopied(false) pointed at a stale component.
+  const resetTimerRef = useRef<number | null>(null);
+  useEffect(() => {
+    return () => {
+      if (resetTimerRef.current !== null) {
+        window.clearTimeout(resetTimerRef.current);
+      }
+    };
+  }, []);
+  const hasClipboard =
+    typeof navigator !== "undefined" && Boolean(navigator.clipboard);
   return (
     <button
       type="button"
-      className="inline-flex items-center gap-1 rounded font-mono text-xs text-muted-fg transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
-      title={copied ? "Copied!" : `${value} — click to copy`}
+      disabled={!hasClipboard}
+      className="inline-flex items-center gap-1 rounded font-mono text-xs text-muted-fg transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 disabled:cursor-default disabled:hover:text-muted-fg"
+      title={
+        !hasClipboard
+          ? value
+          : copied
+            ? "Copied!"
+            : `${value} — click to copy`
+      }
       onClick={(e) => {
         e.stopPropagation();
         if (!navigator.clipboard) return;
         void navigator.clipboard.writeText(value).then(() => {
           setCopied(true);
-          window.setTimeout(() => setCopied(false), 1200);
+          if (resetTimerRef.current !== null) {
+            window.clearTimeout(resetTimerRef.current);
+          }
+          resetTimerRef.current = window.setTimeout(() => {
+            resetTimerRef.current = null;
+            setCopied(false);
+          }, 1200);
         });
       }}
     >

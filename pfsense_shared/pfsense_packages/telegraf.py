@@ -16,13 +16,16 @@ from pydantic import BaseModel, ConfigDict
 from pfsense_shared.pfsense_redact import REDACTED, redact
 from pfsense_shared.pfsense_sections._helpers import bool_flag, text
 
-# Strip ``user:pass@`` embedded creds from any URL. InfluxDB v1 accepts
+# Strip embedded basic-auth creds from any URL — both ``user:pass@``
+# and the rarer ``user@`` (username-only) forms. InfluxDB v1 accepts
 # ``http://user:pass@host:8086/db``, so the output URL can leak both
-# the username and password even when they're also stored in their own
-# fields. Replace the credential segment with the standard marker so
-# diffs still show "URL changed" without leaking the creds.
+# the username and password even when they're also stored in their
+# own fields. The character class excludes ``:`` so the scheme-port
+# suffix (``:8086``) isn't greedily consumed. Replace the credential
+# segment with the standard marker so diffs still show "URL changed"
+# without leaking the creds.
 _URL_BASIC_AUTH_RE: re.Pattern[str] = re.compile(
-    r"(://)[^/@\s:]+:[^/@\s]+@",
+    r"(://)[^/@\s:]+(?::[^/@\s]*)?@",
 )
 
 
