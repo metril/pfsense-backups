@@ -1360,13 +1360,12 @@ function IpsecPskTable({ rows }: { rows: IpsecPskEntry[] }) {
 function CATable({ rows }: { rows: CertificateAuthority[] }) {
   return (
     <Table
-      headers={["Ref id", "Description", "Serial", "Private key"]}
+      headers={["CN / refid", "Description", "Issuer", "Expires", "Private key"]}
       rows={rows.map((c) => [
-        <span key="r" className="font-mono text-xs">
-          {c.refid}
-        </span>,
+        <CertIdentity key="i" refid={c.refid} meta={c.metadata} />,
         c.descr ?? "—",
-        c.serial ?? "—",
+        c.metadata?.issuer_cn ?? "—",
+        <ExpiryCell key="e" meta={c.metadata} />,
         c.prv === "***redacted***" ? <Redacted /> : "—",
       ])}
     />
@@ -1376,18 +1375,96 @@ function CATable({ rows }: { rows: CertificateAuthority[] }) {
 function CertsTable({ rows }: { rows: Certificate[] }) {
   return (
     <Table
-      headers={["Ref id", "Description", "Type", "CA ref", "Private key"]}
+      headers={[
+        "CN / refid",
+        "Description",
+        "Type",
+        "SANs",
+        "Issuer",
+        "Expires",
+        "Private key",
+      ]}
       rows={rows.map((c) => [
-        <span key="r" className="font-mono text-xs">
-          {c.refid}
-        </span>,
+        <CertIdentity key="i" refid={c.refid} meta={c.metadata} />,
         c.descr ?? "—",
         c.type ?? "—",
-        c.caref ?? "—",
+        <SansCell key="s" meta={c.metadata} />,
+        c.metadata?.issuer_cn ?? "—",
+        <ExpiryCell key="e" meta={c.metadata} />,
         c.prv === "***redacted***" ? <Redacted /> : "—",
       ])}
     />
   );
+}
+
+function CertIdentity({
+  refid,
+  meta,
+}: {
+  refid: string;
+  meta: { subject_cn: string | null } | null;
+}) {
+  if (meta?.subject_cn) {
+    return (
+      <div className="leading-tight">
+        <div>{meta.subject_cn}</div>
+        <div className="font-mono text-xs text-muted-fg">{refid}</div>
+      </div>
+    );
+  }
+  return (
+    <span className="font-mono text-xs">{refid}</span>
+  );
+}
+
+function SansCell({ meta }: { meta: { sans: string[] } | null }) {
+  if (!meta || meta.sans.length === 0) return <>—</>;
+  if (meta.sans.length <= 2) {
+    return <span className="text-xs">{meta.sans.join(", ")}</span>;
+  }
+  return (
+    <details>
+      <summary className="cursor-pointer text-xs">
+        {meta.sans.length} entries
+      </summary>
+      <div className="mt-1 text-xs">
+        {meta.sans.map((s) => (
+          <div key={s} className="font-mono">
+            {s}
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function ExpiryCell({
+  meta,
+}: {
+  meta: { not_after: string | null } | null;
+}) {
+  if (!meta?.not_after) return <>—</>;
+  const when = new Date(meta.not_after);
+  const now = new Date();
+  const diffDays = Math.floor(
+    (when.getTime() - now.getTime()) / (1000 * 60 * 60 * 24),
+  );
+  const isoDate = meta.not_after.slice(0, 10);
+  if (diffDays < 0) {
+    return (
+      <span className="text-danger" title={`expired on ${isoDate}`}>
+        expired ({isoDate})
+      </span>
+    );
+  }
+  if (diffDays < 30) {
+    return (
+      <span className="text-warn" title={`expires on ${isoDate}`}>
+        {isoDate} ({diffDays}d)
+      </span>
+    );
+  }
+  return <span title={`expires on ${isoDate}`}>{isoDate}</span>;
 }
 
 function packageCount(ip: InstalledPackages): number {

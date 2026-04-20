@@ -1,6 +1,6 @@
 [project]
 name = "pfsense-backups"
-version = "0.11.5"
+version = "0.11.6"
 description = "pfSense configuration backup + web dashboard."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -39,6 +39,7 @@ web = [
 ]
 dev = [
     "pytest>=8",
+    "pytest-asyncio>=0.23",
     "ruff>=0.4",
     "mypy>=1.10",
 ]
@@ -64,3 +65,9 @@ select = ["E", "F", "I", "B", "UP", "N"]
 python_version = "3.11"
 strict = true
 ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+# Run async test functions as asyncio coroutines without requiring a
+# decorator on every test. Individual test files can still override via
+# @pytest.mark.asyncio(scope=...) if they need a different scope.
+asyncio_mode = "auto"

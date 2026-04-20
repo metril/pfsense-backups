@@ -485,12 +485,25 @@ export interface IpsecPskEntry {
   pre_shared_key: string | null;
 }
 
+export interface CertMetadata {
+  subject_cn: string | null;
+  subject: string | null;
+  issuer_cn: string | null;
+  issuer: string | null;
+  serial_hex: string | null;
+  not_before: string | null;
+  not_after: string | null;
+  sans: string[];
+  fingerprint_sha256: string | null;
+}
+
 export interface CertificateAuthority {
   refid: string;
   descr: string | null;
   crt: string | null;
   prv: string | null;
   serial: string | null;
+  metadata: CertMetadata | null;
 }
 
 export interface Certificate {
@@ -500,6 +513,7 @@ export interface Certificate {
   type: string | null;
   crt: string | null;
   prv: string | null;
+  metadata: CertMetadata | null;
 }
 
 // ----- installedpackages -----
