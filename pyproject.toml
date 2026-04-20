@@ -1,6 +1,6 @@
 [project]
 name = "pfsense-backups"
-version = "0.21.2"
+version = "0.22.0"
 description = "pfSense configuration backup + web dashboard."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -15,6 +15,12 @@ dependencies = [
     "pyzmq>=25",
     "alembic>=1.13",
     "defusedxml>=0.7",
+    # lxml — used ONLY by pfsense_shared/pfsense_positions to track
+    # source-line numbers of XML elements (``.sourceline``). stdlib
+    # xml.etree doesn't expose that. We keep the main parser on
+    # xml.etree to avoid churn; lxml is a targeted add for the
+    # Structured↔Raw XML field-level sync feature.
+    "lxml>=5.0",
 ]
 
 [project.optional-dependencies]

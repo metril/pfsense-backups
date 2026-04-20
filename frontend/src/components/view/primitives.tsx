@@ -15,18 +15,31 @@ import { Lock } from "lucide-react";
 import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/Badge";
 
-/** Two-column definition list. ``items`` is an array of
- *  ``[label, value]`` tuples. Used by nearly every panel in the
- *  viewer for "field name → value" rows. */
-export function Dl({ items }: { items: [string, ReactNode][] }) {
+/** Two-column definition list. ``items`` is a tuple of
+ *  ``[label, value]`` or ``[label, value, fieldId]``. When a third
+ *  element is supplied it's applied as ``id`` on the ``<dt>`` so
+ *  the Structured ↔ Raw XML tab-switch sync (v0.22.0) can track
+ *  which row is in view via IntersectionObserver. Non-id-bearing
+ *  rows (Badge toolbars, meta rows without a field mapping) stay
+ *  anonymous. */
+export type DlRow =
+  | [string, ReactNode]
+  | [string, ReactNode, string | undefined];
+
+export function Dl({ items }: { items: DlRow[] }) {
   return (
     <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm">
-      {items.map(([k, v]) => (
-        <div key={k} className="contents">
-          <dt className="text-muted-fg">{k}</dt>
-          <dd className="font-mono">{v}</dd>
-        </div>
-      ))}
+      {items.map((row) => {
+        const [k, v, id] = row;
+        return (
+          <div key={k} className="contents">
+            <dt id={id} className="text-muted-fg">
+              {k}
+            </dt>
+            <dd className="font-mono">{v}</dd>
+          </div>
+        );
+      })}
     </dl>
   );
 }

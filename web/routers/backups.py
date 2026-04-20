@@ -24,6 +24,7 @@ from pfsense_shared.pfsense_crypto import (
 from pfsense_shared.pfsense_diff import ConfigDiff, diff_configs
 from pfsense_shared.pfsense_parser import ParsedConfig
 from pfsense_shared.pfsense_parser import parse as parse_pfsense_xml
+from pfsense_shared.pfsense_positions import build_positions
 from pfsense_shared.schemas import (
     BackupUpdate,
     ReencryptAllBackupsCommand,
@@ -537,10 +538,26 @@ async def _async_iter(it) -> AsyncIterator[bytes]:
         yield chunk
 
 
-@router.get("/{backup_id}/parsed", response_model=ParsedConfig)
+class ParsedBackupResponse(BaseModel):
+    """Bundled parse result returned by ``GET /api/backups/{id}/parsed``.
+
+    Carries the redacted ``ParsedConfig`` alongside a
+    ``positions`` map of anchorId → ``(start_line, end_line)`` so the
+    viewer can round-trip between the Structured tab and the Raw XML
+    tab without a second round trip. Keys in ``positions`` match the
+    DOM ids the frontend emits (``xref-{kind}-{key}``,
+    ``xref-{scope}-{key}``, ``field-{section}-{fieldname}``,
+    ``section-{section}``).
+    """
+
+    config: ParsedConfig
+    positions: dict[str, tuple[int, int]]
+
+
+@router.get("/{backup_id}/parsed", response_model=ParsedBackupResponse)
 async def get_parsed(
     backup_id: int, db: DbSession, user: CurrentUser, crypto: CryptoDep
-) -> ParsedConfig:
+) -> ParsedBackupResponse:
     """Structured, redaction-aware projection of the backup's config.xml.
 
     Encrypted rows get decrypted in memory (same path as ``/content``);
@@ -552,6 +569,12 @@ async def get_parsed(
     Audited as ``view_decrypted`` for encrypted rows — operators
     reviewing a parsed config are still reading the plaintext config
     via this endpoint.
+
+    v0.22.0 — response wraps the parsed config plus a positions map
+    (anchorId → source-line range) so the Structured/Raw XML tab
+    switch can jump to the same content without a second request.
+    The positions map is built with lxml on the same bytes we already
+    parse; adds ~O(tree size) time, no I/O.
     """
     row, path = await _load(db, backup_id)
     if row.encrypted:
@@ -564,7 +587,13 @@ async def get_parsed(
         await db.commit()
     else:
         content = await asyncio.to_thread(read_content, path)
-    return await asyncio.to_thread(parse_pfsense_xml, content)
+    if isinstance(content, str):
+        content_bytes = content.encode("utf-8")
+    else:
+        content_bytes = content
+    parsed = await asyncio.to_thread(parse_pfsense_xml, content_bytes)
+    positions = await asyncio.to_thread(build_positions, content_bytes)
+    return ParsedBackupResponse(config=parsed, positions=positions)
 
 
 @router.get("/diff/pair/parsed", response_model=ConfigDiff)

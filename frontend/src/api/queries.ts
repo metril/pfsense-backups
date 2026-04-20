@@ -238,14 +238,30 @@ export function useDeleteBackup() {
   });
 }
 
+/** Positions map returned alongside the parsed config. Keyed by
+ *  the same anchor ids the viewer emits (``xref-…``, ``field-…``,
+ *  ``section-…``); value is a 1-based ``[start_line, end_line]``
+ *  tuple pointing at the corresponding element in the raw XML.
+ *  Used by the Structured ↔ Raw XML tab-switch sync to reveal the
+ *  same content in Monaco. */
+export type XrefPositions = Record<string, [number, number]>;
+
+export interface ParsedBackupResponse {
+  config: ParsedConfig;
+  positions: XrefPositions;
+}
+
 /** Structured projection of a backup's config.xml (server-side parsed,
  *  redacted). Never includes secrets — the server replaces password
  *  hashes, PSKs, cert private keys, and RADIUS/LDAP secrets with a
- *  ***redacted*** placeholder. */
+ *  ***redacted*** placeholder.
+ *
+ *  v0.22.0 wrapped the response so the positions map ships in the
+ *  same payload — zero extra round trip for tab-switch sync. */
 export function useParsedBackup(id: number) {
   return useQuery({
     queryKey: ["backups", id, "parsed"],
-    queryFn: () => api.get<ParsedConfig>(`/api/backups/${id}/parsed`),
+    queryFn: () => api.get<ParsedBackupResponse>(`/api/backups/${id}/parsed`),
     // Parser output is static for a given backup — never refetch on focus.
     staleTime: Infinity,
   });

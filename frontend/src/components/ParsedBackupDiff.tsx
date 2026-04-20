@@ -13,6 +13,7 @@ import { CardGroupProvider } from "@/components/CardGroupContext";
 import { XrefProvider, type XrefSide } from "@/components/xref/XrefContext";
 import { DeepLinkBridge } from "@/components/xref/DeepLinkBridge";
 import { useParsedBackup, useParsedDiffPair } from "@/api/queries";
+import type { ParsedConfig } from "@/api/parsedTypes";
 import { cn } from "@/lib/cn";
 import {
   buildMatcher,
@@ -256,8 +257,12 @@ export function ParsedBackupDiff({
   // Parallel fetches for the two source configs — xref chips in
   // diff sections resolve against these. TanStack Query dedupes + caches
   // with staleTime: Infinity so a second visit is free.
-  const { data: oldCfg } = useParsedBackup(a);
-  const { data: newCfg } = useParsedBackup(b);
+  // v0.22.0 wrapped the parsed response as ``{config, positions}``;
+  // the diff view only needs the config (positions are viewer-only).
+  const { data: oldParsed } = useParsedBackup(a);
+  const { data: newParsed } = useParsedBackup(b);
+  const oldCfg = oldParsed?.config;
+  const newCfg = newParsed?.config;
 
   const [searchParams, setSearchParams] = useSearchParams();
   const filterQuery = searchParams.get("filter") ?? "";
@@ -381,8 +386,8 @@ function DualXrefProviders({
   b,
   children,
 }: {
-  oldCfg: ReturnType<typeof useParsedBackup>["data"];
-  newCfg: ReturnType<typeof useParsedBackup>["data"];
+  oldCfg: ParsedConfig | undefined;
+  newCfg: ParsedConfig | undefined;
   a: number;
   b: number;
   children: ReactNode;

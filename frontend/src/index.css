@@ -41,6 +41,17 @@
   animation: flash 1.5s ease-out;
 }
 
+/* Monaco line-highlight used by the Structured ↔ Raw XML tab-switch
+   sync. Painted via ``editor.deltaDecorations`` with the class below
+   applied as ``isWholeLine: true``; Monaco's own background still
+   shows through the translucent accent. Fade animates via the same
+   keyframe as ``.xref-flash`` for visual consistency across the two
+   navigation modes. */
+.monaco-xref-focus-line {
+  background-color: hsl(var(--accent) / 0.22);
+  animation: flash 1.5s ease-out;
+}
+
 /* Sticky-ToC + xref anchors use scroll-margin-top so anchored jumps
    don't hide the target under the fixed header. 5rem covers the app
    topbar plus breathing room. */

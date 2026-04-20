@@ -28,12 +28,21 @@ async def test_parsed_plain_backup_returns_structured_config(
     r = await client.get(f"/api/backups/{seed_plain_backup}/parsed")
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["config_version"] == "21.9"
-    assert body["system"]["hostname"] == "gw-test"
-    assert body["system"]["domain"] == "lan.example"
-    assert len(body["firewall_rules"]) == 1
-    assert body["firewall_rules"][0]["type"] == "pass"
-    assert body["firewall_rules"][0]["descr"] == "allow lan"
+    # v0.22.0 wrapped the response as {config, positions}.
+    cfg = body["config"]
+    assert cfg["config_version"] == "21.9"
+    assert cfg["system"]["hostname"] == "gw-test"
+    assert cfg["system"]["domain"] == "lan.example"
+    assert len(cfg["firewall_rules"]) == 1
+    assert cfg["firewall_rules"][0]["type"] == "pass"
+    assert cfg["firewall_rules"][0]["descr"] == "allow lan"
+    # Positions map carries at least the singleton + rule anchors
+    # the viewer's tab-switch sync relies on.
+    pos = body["positions"]
+    assert "section-system" in pos
+    assert "field-system-hostname" in pos
+    # Firewall rule tracker is "1" in the seeded fixture.
+    assert "xref-rule-1" in pos
 
 
 async def test_parsed_missing_backup_returns_404(client: AsyncClient) -> None:
@@ -47,7 +56,7 @@ async def test_parsed_gzipped_backup_is_decompressed(
     r = await client.get(f"/api/backups/{seed_compressed_plain_backup}/parsed")
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["system"]["hostname"] == "gw-test"
+    assert body["config"]["system"]["hostname"] == "gw-test"
 
 
 async def test_parsed_plain_backup_does_not_audit_as_decrypted(
@@ -74,7 +83,7 @@ async def test_parsed_encrypted_backup_decrypts_and_audits(
     r = await client.get(f"/api/backups/{backup_id}/parsed")
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["system"]["hostname"] == "gw-test"
+    assert body["config"]["system"]["hostname"] == "gw-test"
 
     count = await count_audit_entries(
         session_factory, action="view_decrypted", resource="backup"

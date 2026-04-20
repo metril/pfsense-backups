@@ -111,6 +111,20 @@ export function rowAnchorId(scope: "rule" | "nat", key: string): string {
   return `xref-${scope}-${safe}`;
 }
 
+/** Build a stable DOM id for a single field inside a singleton
+ *  panel (``<system><hostname>…``, ``<dnsmasq><enable>…``, …). Emitted
+ *  as ``id`` on the ``<dt>`` element of the rendered ``Dl`` row so
+ *  the Structured ↔ Raw XML tab-switch sync (v0.22.0) can track
+ *  which field the operator is reading. ``section`` must match the
+ *  key the backend uses in ``pfsense_shared/pfsense_positions.py``
+ *  (``system``, ``dns``, ``ntpd``, ``snmpd``, ``syslog``,
+ *  ``notifications``, ``ups``, ``ftpproxy``, ``hasync``, ``avahi``,
+ *  ``miniupnpd``, ``openvpn_client_export``, ``telegraf``). */
+export function fieldId(section: string, name: string): string {
+  const safe = name.replace(/[^A-Za-z0-9_-]/g, "_");
+  return `field-${section}-${safe}`;
+}
+
 function emptyByKind(): Record<RefKind, Map<string, XrefTarget>> {
   const kinds: RefKind[] = [
     "interface",

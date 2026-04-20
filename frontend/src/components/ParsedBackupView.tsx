@@ -32,7 +32,7 @@ import { XrefHistoryProvider } from "@/components/xref/XrefHistory";
 import { XrefBackPill } from "@/components/xref/XrefBackPill";
 import { DeepLinkBridge } from "@/components/xref/DeepLinkBridge";
 import { QuickJump } from "@/components/xref/QuickJump";
-import { itemId, rowAnchorId } from "@/lib/xref";
+import { fieldId, itemId, rowAnchorId } from "@/lib/xref";
 import {
   buildMatcher,
   rowHaystack,
@@ -141,7 +141,8 @@ import type {
  * so operators see exactly which fields are hidden.
  */
 export function ParsedBackupView({ backupId }: { backupId: number }) {
-  const { data: rawData, error, isLoading } = useParsedBackup(backupId);
+  const { data: parsedResponse, error, isLoading } = useParsedBackup(backupId);
+  const rawData = parsedResponse?.config;
   const [searchParams, setSearchParams] = useSearchParams();
   const filterQuery = searchParams.get("filter") ?? "";
   const setFilterQuery = useCallback(
@@ -662,7 +663,7 @@ function ViewerLayout({
 
   if (isWide) {
     return (
-      <div className="h-full overflow-auto p-4">
+      <div data-structured-root className="h-full overflow-auto p-4">
         <QuickJump />
         <div className="mx-auto grid max-w-[1920px] grid-cols-[15rem_1fr] gap-6">
           <aside className="sticky top-0 max-h-screen self-start overflow-y-auto pb-4">
@@ -687,7 +688,7 @@ function ViewerLayout({
   }
 
   return (
-    <div className="h-full overflow-auto p-4">
+    <div data-structured-root className="h-full overflow-auto p-4">
       <QuickJump />
       <div className="mx-auto max-w-[1400px]">
         <div className="mb-2 flex items-start justify-between gap-3">
@@ -1163,11 +1164,19 @@ function SystemPanel({ s }: { s: SystemInfo }) {
   return (
     <Dl
       items={[
-        ["Hostname", <RV v={s.hostname} key="h" />],
-        ["Domain", <RV v={s.domain} key="d" />],
-        ["Timezone", <RV v={s.timezone} key="tz" />],
-        ["DNS servers", s.dnsservers.join(", ") || "—"],
-        ["Time servers", s.timeservers.join(", ") || "—"],
+        ["Hostname", <RV v={s.hostname} key="h" />, fieldId("system", "hostname")],
+        ["Domain", <RV v={s.domain} key="d" />, fieldId("system", "domain")],
+        ["Timezone", <RV v={s.timezone} key="tz" />, fieldId("system", "timezone")],
+        [
+          "DNS servers",
+          s.dnsservers.join(", ") || "—",
+          fieldId("system", "dnsserver"),
+        ],
+        [
+          "Time servers",
+          s.timeservers.join(", ") || "—",
+          fieldId("system", "timeservers"),
+        ],
         [
           "Web GUI",
           s.webgui ? (
@@ -1182,8 +1191,13 @@ function SystemPanel({ s }: { s: SystemInfo }) {
           ) : (
             "—"
           ),
+          fieldId("system", "webgui"),
         ],
-        ["SSH", s.enablesshd ? `enabled on :${s.sshport ?? "22"}` : "disabled"],
+        [
+          "SSH",
+          s.enablesshd ? `enabled on :${s.sshport ?? "22"}` : "disabled",
+          fieldId("system", "enablesshd"),
+        ],
       ]}
     />
   );
@@ -1511,12 +1525,14 @@ function DnsPanel({ d }: { d: DnsConfig }) {
             d.unbound_enabled
               ? `enabled :${d.unbound_port ?? "53"}`
               : "disabled",
+            fieldId("unbound", "enable"),
           ],
           [
             "Forwarder (dnsmasq)",
             d.dnsmasq_enabled
               ? `enabled :${d.dnsmasq_port ?? "53"}`
               : "disabled",
+            fieldId("dns", "enable"),
           ],
         ]}
       />
@@ -1816,10 +1832,11 @@ function HaSyncPanel({ h }: { h: HaSync }) {
           h.pfsyncenabled
             ? `enabled on ${h.pfsyncinterface ?? "?"} (peer ${h.pfsyncpeerip ?? "?"})`
             : "disabled",
+          fieldId("hasync", "pfsyncenabled"),
         ],
-        ["XMLRPC peer", h.synchronizetoip ?? "—"],
-        ["Sync user", h.username ?? "—"],
-        ["Sync password", <RV v={h.password} key="p" />],
+        ["XMLRPC peer", h.synchronizetoip ?? "—", fieldId("hasync", "synchronizetoip")],
+        ["Sync user", h.username ?? "—", fieldId("hasync", "username")],
+        ["Sync password", <RV v={h.password} key="p" />, fieldId("hasync", "password")],
         ["Sections synced", synced.length ? synced.join(", ") : "—"],
       ]}
     />
@@ -1853,11 +1870,11 @@ function NtpdPanel({ n }: { n: NtpdConfig }) {
   return (
     <Dl
       items={[
-        ["Enabled", n.enable ? "yes" : "no"],
-        ["Interfaces", n.interfaces.join(", ") || "—"],
-        ["Time servers", n.timeservers.join(", ") || "—"],
-        ["Orphan mode", n.orphan ?? "—"],
-        ["Leap second policy", n.leapsec ?? "—"],
+        ["Enabled", n.enable ? "yes" : "no", fieldId("ntpd", "enable")],
+        ["Interfaces", n.interfaces.join(", ") || "—", fieldId("ntpd", "interface")],
+        ["Time servers", n.timeservers.join(", ") || "—", fieldId("ntpd", "timeservers")],
+        ["Orphan mode", n.orphan ?? "—", fieldId("ntpd", "orphan")],
+        ["Leap second policy", n.leapsec ?? "—", fieldId("ntpd", "leapsec")],
       ]}
     />
   );
@@ -1867,20 +1884,21 @@ function SnmpdPanel({ s }: { s: SnmpdConfig }) {
   return (
     <Dl
       items={[
-        ["Enabled", s.enable ? "yes" : "no"],
-        ["Location", s.syslocation ?? "—"],
-        ["Contact", s.syscontact ?? "—"],
-        ["Poll port", s.pollport ?? "—"],
-        ["Bind", s.bindlan ? "LAN" : s.bindip ?? "—"],
-        ["RO community", <RV v={s.rocommunity} key="ro" />],
-        ["RW community", <RV v={s.rwcommunity} key="rw" />],
+        ["Enabled", s.enable ? "yes" : "no", fieldId("snmpd", "enable")],
+        ["Location", s.syslocation ?? "—", fieldId("snmpd", "syslocation")],
+        ["Contact", s.syscontact ?? "—", fieldId("snmpd", "syscontact")],
+        ["Poll port", s.pollport ?? "—", fieldId("snmpd", "pollport")],
+        ["Bind", s.bindlan ? "LAN" : s.bindip ?? "—", fieldId("snmpd", "bindlan")],
+        ["RO community", <RV v={s.rocommunity} key="ro" />, fieldId("snmpd", "rocommunity")],
+        ["RW community", <RV v={s.rwcommunity} key="rw" />, fieldId("snmpd", "rwcommunity")],
         [
           "Traps",
           s.trapenable
             ? `${s.trapserver ?? "?"}:${s.trapserverport ?? "?"}`
             : "disabled",
+          fieldId("snmpd", "trapenable"),
         ],
-        ["Trap community", <RV v={s.trapstring} key="ts" />],
+        ["Trap community", <RV v={s.trapstring} key="ts" />, fieldId("snmpd", "trapstring")],
       ]}
     />
   );
@@ -1905,12 +1923,13 @@ function SyslogPanel({ s }: { s: SyslogConfig }) {
   return (
     <Dl
       items={[
-        ["Enabled", s.enable ? "yes" : "no"],
-        ["Reverse display", s.reverse ? "yes" : "no"],
-        ["Local buffer entries", s.nentries ?? "—"],
+        ["Enabled", s.enable ? "yes" : "no", fieldId("syslog", "enable")],
+        ["Reverse display", s.reverse ? "yes" : "no", fieldId("syslog", "reverse")],
+        ["Local buffer entries", s.nentries ?? "—", fieldId("syslog", "nentries")],
         [
           "Remote destinations",
           s.hosts.length > 0 ? s.hosts.map((h) => h.host).join(", ") : "—",
+          fieldId("syslog", "remoteserver"),
         ],
         ["Filters", filters.length ? filters.join(", ") : "—"],
       ]}
@@ -2815,13 +2834,13 @@ function MiniUpnpdPanel({ p }: { p: MiniUpnpdConfig }) {
     <PackageCard title="miniUPnPd (UPnP & NAT-PMP)">
       <Dl
         items={[
-          ["Enabled", <StatusPill key="e" enabled={p.enable} />],
-          ["UPnP", <StatusPill key="u" enabled={p.enable_upnp} />],
-          ["NAT-PMP", <StatusPill key="n" enabled={p.enable_natpmp} />],
-          ["Internal interfaces", p.iface_array ?? "—"],
-          ["External interface", p.ext_iface ?? "—"],
-          ["Download", p.download ? `${p.download} kbit/s` : "—"],
-          ["Upload", p.upload ? `${p.upload} kbit/s` : "—"],
+          ["Enabled", <StatusPill key="e" enabled={p.enable} />, fieldId("miniupnpd", "enable")],
+          ["UPnP", <StatusPill key="u" enabled={p.enable_upnp} />, fieldId("miniupnpd", "enable_upnp")],
+          ["NAT-PMP", <StatusPill key="n" enabled={p.enable_natpmp} />, fieldId("miniupnpd", "enable_natpmp")],
+          ["Internal interfaces", p.iface_array ?? "—", fieldId("miniupnpd", "iface_array")],
+          ["External interface", p.ext_iface ?? "—", fieldId("miniupnpd", "ext_iface")],
+          ["Download", p.download ? `${p.download} kbit/s` : "—", fieldId("miniupnpd", "download")],
+          ["Upload", p.upload ? `${p.upload} kbit/s` : "—", fieldId("miniupnpd", "upload")],
         ]}
       />
       {p.permit_rules.length > 0 && (
@@ -2847,8 +2866,8 @@ function AvahiPanel({ p }: { p: AvahiConfig }) {
     <PackageCard title="Avahi (mDNS reflector)">
       <Dl
         items={[
-          ["Enabled", <StatusPill key="e" enabled={p.enable} />],
-          ["Reflector", <StatusPill key="r" enabled={p.reflector} />],
+          ["Enabled", <StatusPill key="e" enabled={p.enable} />, fieldId("avahi", "enable")],
+          ["Reflector", <StatusPill key="r" enabled={p.reflector} />, fieldId("avahi", "enable_reflector")],
           [
             "IPv4",
             <StatusPill
@@ -2856,6 +2875,7 @@ function AvahiPanel({ p }: { p: AvahiConfig }) {
               enabled={p.ipv4_enabled}
               labels={{ on: "yes", off: "no" }}
             />,
+            fieldId("avahi", "enable_ipv4"),
           ],
           [
             "IPv6",
@@ -2864,8 +2884,9 @@ function AvahiPanel({ p }: { p: AvahiConfig }) {
               enabled={p.ipv6_enabled}
               labels={{ on: "yes", off: "no" }}
             />,
+            fieldId("avahi", "enable_ipv6"),
           ],
-          ["Reflect IP", p.reflect_ipv ?? "—"],
+          ["Reflect IP", p.reflect_ipv ?? "—", fieldId("avahi", "reflect_ipv")],
           [
             "Wide-area",
             <StatusPill
@@ -2873,6 +2894,7 @@ function AvahiPanel({ p }: { p: AvahiConfig }) {
               enabled={p.wide_area}
               labels={{ on: "yes", off: "no" }}
             />,
+            fieldId("avahi", "enable_wide_area"),
           ],
           [
             "Publish workstation",
@@ -2881,6 +2903,7 @@ function AvahiPanel({ p }: { p: AvahiConfig }) {
               enabled={p.publish_workstation}
               labels={{ on: "yes", off: "no" }}
             />,
+            fieldId("avahi", "publish_workstation"),
           ],
           [
             "Publish addresses",
@@ -2889,11 +2912,12 @@ function AvahiPanel({ p }: { p: AvahiConfig }) {
               enabled={p.publish_addresses}
               labels={{ on: "yes", off: "no" }}
             />,
+            fieldId("avahi", "publish_addresses"),
           ],
-          ["Interfaces", p.interfaces ?? "—"],
-          ["Deny interfaces", p.allow_deny_interfaces ?? "—"],
-          ["Browse domains", p.browse_domains ?? "—"],
-          ["Cache max entries", p.cache_entries_max ?? "—"],
+          ["Interfaces", p.interfaces ?? "—", fieldId("avahi", "interfaces")],
+          ["Deny interfaces", p.allow_deny_interfaces ?? "—", fieldId("avahi", "denyinterfaces")],
+          ["Browse domains", p.browse_domains ?? "—", fieldId("avahi", "browsedomains")],
+          ["Cache max entries", p.cache_entries_max ?? "—", fieldId("avahi", "cache_entries_max")],
         ]}
       />
     </PackageCard>
@@ -2912,16 +2936,18 @@ function OpenvpnClientExportPanel({
           [
             "Use random local port",
             <StatusPill key="r" enabled={p.use_random_local_port} />,
+            fieldId("openvpn_client_export", "use_random_local_port"),
           ],
           [
             "Silent install",
             <StatusPill key="s" enabled={p.silent_install} />,
+            fieldId("openvpn_client_export", "silent_install"),
           ],
-          ["Interface selection", p.interface_selection ?? "—"],
-          ["Hostname", p.hostname ?? "—"],
-          ["Cert subject (country)", p.ovpnexportcountry ?? "—"],
-          ["Cert subject (state)", p.ovpnexportstate ?? "—"],
-          ["Cert subject (city)", p.ovpnexportcity ?? "—"],
+          ["Interface selection", p.interface_selection ?? "—", fieldId("openvpn_client_export", "interface_selection")],
+          ["Hostname", p.hostname ?? "—", fieldId("openvpn_client_export", "hostname")],
+          ["Cert subject (country)", p.ovpnexportcountry ?? "—", fieldId("openvpn_client_export", "ovpnexportcountry")],
+          ["Cert subject (state)", p.ovpnexportstate ?? "—", fieldId("openvpn_client_export", "ovpnexportstate")],
+          ["Cert subject (city)", p.ovpnexportcity ?? "—", fieldId("openvpn_client_export", "ovpnexportcity")],
         ]}
       />
       {p.servers.length > 0 && (
@@ -3233,7 +3259,13 @@ function RadvdTable({ rows }: { rows: RadvdInterfaceConfig[] }) {
 }
 
 function NotificationsPanel({ n }: { n: NotificationConfig }) {
-  const channels: { label: string; enabled: boolean; detail: string; secret: boolean }[] = [];
+  const channels: {
+    label: string;
+    enabled: boolean;
+    detail: string;
+    secret: boolean;
+    tag: string;
+  }[] = [];
   if (n.smtp) {
     channels.push({
       label: "SMTP",
@@ -3242,6 +3274,7 @@ function NotificationsPanel({ n }: { n: NotificationConfig }) {
         ? `${n.smtp.ipaddress}:${n.smtp.port ?? "?"}${n.smtp.ssl ? " (TLS)" : ""}`
         : "not configured",
       secret: n.smtp.password === "***redacted***",
+      tag: "smtp",
     });
   }
   if (n.pushover) {
@@ -3252,6 +3285,7 @@ function NotificationsPanel({ n }: { n: NotificationConfig }) {
       secret:
         n.pushover.api_key === "***redacted***" ||
         n.pushover.user_key === "***redacted***",
+      tag: "pushover",
     });
   }
   if (n.slack) {
@@ -3260,6 +3294,7 @@ function NotificationsPanel({ n }: { n: NotificationConfig }) {
       enabled: n.slack.enabled,
       detail: "webhook",
       secret: n.slack.webhook_url === "***redacted***",
+      tag: "slack",
     });
   }
   if (n.telegram) {
@@ -3268,6 +3303,7 @@ function NotificationsPanel({ n }: { n: NotificationConfig }) {
       enabled: n.telegram.enabled,
       detail: `chat ${n.telegram.chat_id ?? "?"}`,
       secret: n.telegram.api_token === "***redacted***",
+      tag: "telegram",
     });
   }
   if (n.growl) {
@@ -3276,11 +3312,14 @@ function NotificationsPanel({ n }: { n: NotificationConfig }) {
       enabled: n.growl.enabled,
       detail: n.growl.ipaddress ?? "?",
       secret: n.growl.password === "***redacted***",
+      tag: "growl",
     });
   }
   return (
     <Table
       headers={["Channel", "Enabled", "Detail", "Credential"]}
+      rowKeys={channels.map((c) => c.tag)}
+      rowIds={channels.map((c) => fieldId("notifications", c.tag))}
       rows={channels.map((c) => [
         c.label,
         <StatusPill key="e" enabled={c.enabled} />,
@@ -3297,15 +3336,16 @@ function UpsPanel({ u }: { u: UpsConfig }) {
   return (
     <Dl
       items={[
-        ["Enabled", <StatusPill key="e" enabled={u.enable} />],
-        ["Driver", u.driver ?? "—"],
-        ["Port", u.port ?? "—"],
-        ["UPS name", u.upsname ?? "—"],
-        ["Cable", u.cable ?? "—"],
-        ["Remote user", u.remoteuser ?? "—"],
+        ["Enabled", <StatusPill key="e" enabled={u.enable} />, fieldId("ups", "enable")],
+        ["Driver", u.driver ?? "—", fieldId("ups", "driver")],
+        ["Port", u.port ?? "—", fieldId("ups", "port")],
+        ["UPS name", u.upsname ?? "—", fieldId("ups", "upsname")],
+        ["Cable", u.cable ?? "—", fieldId("ups", "cable")],
+        ["Remote user", u.remoteuser ?? "—", fieldId("ups", "remoteuser")],
         [
           "Remote password",
           u.remotepassword === "***redacted***" ? <Redacted /> : "—",
+          fieldId("ups", "remotepassword"),
         ],
       ]}
     />
@@ -3332,9 +3372,9 @@ function FtpProxyPanel({ f }: { f: FtpProxyConfig }) {
   return (
     <Dl
       items={[
-        ["Enabled", <StatusPill key="e" enabled={f.enable} />],
-        ["Ports", f.ports ?? "—"],
-        ["Interface", <InterfaceChip key="i" name={f.interface} />],
+        ["Enabled", <StatusPill key="e" enabled={f.enable} />, fieldId("ftpproxy", "enable")],
+        ["Ports", f.ports ?? "—", fieldId("ftpproxy", "ports")],
+        ["Interface", <InterfaceChip key="i" name={f.interface} />, fieldId("ftpproxy", "interface")],
       ]}
     />
   );
@@ -3542,17 +3582,18 @@ function TelegrafPanel({ p }: { p: TelegrafConfig }) {
     <PackageCard title="Telegraf">
       <Dl
         items={[
-          ["Enabled", <StatusPill key="e" enabled={p.enabled} />],
-          ["Interval", p.interval ?? "—"],
-          ["Output", p.output_plugin ?? "—"],
-          ["URL", p.url ?? "—"],
-          ["Database / bucket", p.bucket ?? p.database ?? "—"],
-          ["Organization", p.organization ?? "—"],
-          ["Username", <RV key="u" v={p.username} />],
+          ["Enabled", <StatusPill key="e" enabled={p.enabled} />, fieldId("telegraf", "enable")],
+          ["Interval", p.interval ?? "—", fieldId("telegraf", "interval")],
+          ["Output", p.output_plugin ?? "—", fieldId("telegraf", "output")],
+          ["URL", p.url ?? "—", fieldId("telegraf", "url")],
+          ["Database / bucket", p.bucket ?? p.database ?? "—", fieldId("telegraf", "bucket")],
+          ["Organization", p.organization ?? "—", fieldId("telegraf", "organization")],
+          ["Username", <RV key="u" v={p.username} />, fieldId("telegraf", "username")],
           [
             "Credential",
             p.token === "***redacted***" ? <Redacted /> :
               p.password === "***redacted***" ? <Redacted /> : "—",
+            fieldId("telegraf", "password"),
           ],
         ]}
       />
@@ -3805,6 +3846,7 @@ function DiagPanel({ s }: { s: DiagPreferences }) {
             enabled={s.ipv6nat}
             labels={{ on: "on", off: "off" }}
           />,
+          fieldId("diag", "ipv6nat"),
         ],
         [
           "Show-no-aliases (pfSense webGUI pref)",
@@ -3813,6 +3855,7 @@ function DiagPanel({ s }: { s: DiagPreferences }) {
             enabled={s.shownoaliases}
             labels={{ on: "on", off: "off" }}
           />,
+          fieldId("diag", "shownoaliases"),
         ],
         [
           "Show-all-passwords (pfSense webGUI pref)",
@@ -3821,6 +3864,7 @@ function DiagPanel({ s }: { s: DiagPreferences }) {
             enabled={s.showallpasswords}
             labels={{ on: "on", off: "off" }}
           />,
+          fieldId("diag", "showallpasswords"),
         ],
       ]}
     />

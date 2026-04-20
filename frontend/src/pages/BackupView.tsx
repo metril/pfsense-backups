@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   ArrowLeft,
@@ -15,8 +15,15 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Tabs } from "@/components/ui/Tabs";
 import { useToast } from "@/components/ui/Toast";
-import { useBackups, useInstances, useUpdateBackup } from "@/api/queries";
+import {
+  useBackups,
+  useInstances,
+  useParsedBackup,
+  useUpdateBackup,
+} from "@/api/queries";
 import { api, triggerDownload } from "@/api/client";
+import { useFocusedAnchor } from "@/lib/useFocusedAnchor";
+import { expandThenScrollToHash } from "@/lib/xref";
 
 const MonacoViewer = lazy(() => import("@/components/MonacoViewer"));
 const ParsedBackupView = lazy(() =>
@@ -63,6 +70,92 @@ export function BackupViewPage() {
   const [tagDraft, setTagDraft] = useState("");
   const [noteDraft, setNoteDraft] = useState("");
   const [tab, setTab] = useState<ViewTab>("structured");
+
+  // ---- Structured ↔ Raw XML tab-switch sync ----
+  //
+  // Track which anchor the operator is currently reading:
+  //   - On the Structured tab: the nearest visible xref-/field- row.
+  //   - On the Raw XML tab: the Monaco cursor's line, mapped back
+  //     through the positions map to the enclosing anchor.
+  //
+  // On tab switch, translate the current ``focusedAnchor`` to the
+  // other tab's coordinate system so the operator lands on the same
+  // content.
+  const { data: parsedResponse } = useParsedBackup(id);
+  const positions = parsedResponse?.positions;
+  const [focusedAnchor, setFocusedAnchor] = useState<string | null>(null);
+  const [rawFocusLine, setRawFocusLine] = useState<number | undefined>(undefined);
+
+  // Structured-view tracker: only observes while the Structured tab
+  // is mounted. Updates ``focusedAnchor`` whenever the nearest
+  // visible row changes. Disabled while Raw XML is active (that tab
+  // drives ``focusedAnchor`` via ``onCursorLineChange``).
+  const structuredAnchor = useFocusedAnchor(tab === "structured");
+  useEffect(() => {
+    if (tab === "structured" && structuredAnchor) {
+      setFocusedAnchor(structuredAnchor);
+    }
+  }, [tab, structuredAnchor]);
+
+  const anchorForLine = useCallback(
+    (line: number): string | null => {
+      if (!positions) return null;
+      // Find the most-specific (= smallest range) anchor whose range
+      // brackets the cursor line. Walking every entry is O(n) but
+      // n is "number of rows" (hundreds, not thousands) and this
+      // fires once per cursor move — negligible.
+      let best: string | null = null;
+      let bestSpan = Infinity;
+      for (const [id, range] of Object.entries(positions)) {
+        const [start, end] = range;
+        if (start <= line && line <= end) {
+          const span = end - start;
+          if (span < bestSpan) {
+            bestSpan = span;
+            best = id;
+          }
+        }
+      }
+      return best;
+    },
+    [positions],
+  );
+
+  const onMonacoCursorLine = useCallback(
+    (line: number) => {
+      const anchor = anchorForLine(line);
+      if (anchor) setFocusedAnchor(anchor);
+    },
+    [anchorForLine],
+  );
+
+  const switchTab = useCallback(
+    (next: ViewTab) => {
+      if (next === tab) return;
+      if (next === "raw") {
+        // Structured → Raw: look up the current anchor's line range
+        // and scroll Monaco to the start. Undefined clears the
+        // highlight so a fresh open (no anchor yet) stays neutral.
+        const range = focusedAnchor ? positions?.[focusedAnchor] : undefined;
+        setRawFocusLine(range ? range[0] : undefined);
+      } else {
+        // Raw → Structured: bump the hash so the deep-link bridge +
+        // scroll helpers land on the focused row. ``expandThenScroll
+        // ToHash`` runs after the tab's DOM mounts (the call is
+        // safe to make eagerly because the helper only touches
+        // existing anchor ids).
+        if (focusedAnchor) {
+          // Defer to the next frame so the Structured tree mounts
+          // before we try to locate the anchor.
+          requestAnimationFrame(() =>
+            expandThenScrollToHash(`#${focusedAnchor}`),
+          );
+        }
+      }
+      setTab(next);
+    },
+    [tab, focusedAnchor, positions],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -251,7 +344,7 @@ export function BackupViewPage() {
       <Tabs
         className="mt-3"
         value={tab}
-        onChange={(id) => setTab(id as ViewTab)}
+        onChange={(id) => switchTab(id as ViewTab)}
         ariaLabel="Backup view"
         idPrefix="backup-view"
         items={[
@@ -275,7 +368,11 @@ export function BackupViewPage() {
           {tab === "structured" ? (
             <ParsedBackupView backupId={detail.id} />
           ) : (
-            <MonacoViewer content={content} />
+            <MonacoViewer
+              content={content}
+              focusLine={rawFocusLine}
+              onCursorLineChange={onMonacoCursorLine}
+            />
           )}
         </Suspense>
       </div>
