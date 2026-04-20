@@ -412,6 +412,7 @@ export interface DyndnsEntry {
   verboselog: boolean;
   username: string | null;
   password: string | null;
+  token: string | null;
 }
 
 export interface SmtpNotifier {

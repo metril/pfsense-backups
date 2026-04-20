@@ -809,7 +809,9 @@ function FirewallTable({ rows }: { rows: FirewallRule[] }) {
         "Destination",
         "Description",
       ]}
-      rowKeys={rows.map((r) => r.tracker ?? r.key)}
+      // Suffix with the row index to avoid duplicate-key warnings on
+      // migrated configs where multiple rules share a tracker.
+      rowKeys={rows.map((r, i) => `${r.tracker ?? r.key}#${i}`)}
       rows={rows.map((r, i) => [
         <span key="n" className="font-mono text-xs text-muted-fg">
           {i + 1}
@@ -2118,7 +2120,13 @@ function DyndnsTable({ rows }: { rows: DyndnsEntry[] }) {
         d.host ?? d.domainname ?? "—",
         <InterfaceChip key="i" name={d.interface} />,
         <StatusPill key="e" enabled={d.enabled} />,
-        d.password === "***redacted***" ? <Redacted /> : "—",
+        // Either <password> or <token> may carry the secret depending
+        // on provider; show a single Redacted chip when either is set.
+        d.token === "***redacted***" || d.password === "***redacted***" ? (
+          <Redacted key="r" />
+        ) : (
+          "—"
+        ),
         d.descr ?? "—",
       ])}
     />

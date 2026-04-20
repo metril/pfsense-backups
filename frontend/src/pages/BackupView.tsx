@@ -255,16 +255,19 @@ export function BackupViewPage() {
         ariaLabel="Backup view"
         idPrefix="backup-view"
         items={[
-          { id: "structured", label: "Structured", panelId: "backup-view-panel" },
-          { id: "raw", label: "Raw XML", panelId: "backup-view-panel" },
+          // Single shared panel — we omit aria-controls on tabs so
+          // SRs don't announce a bogus 1:1 tab↔panel association.
+          { id: "structured", label: "Structured" },
+          { id: "raw", label: "Raw XML" },
         ]}
       />
 
       <div
         id="backup-view-panel"
         role="tabpanel"
+        tabIndex={0}
         aria-labelledby={`backup-view-tab-${tab}`}
-        className="mt-0 flex-1 overflow-hidden rounded-b border border-t-0 border-border"
+        className="mt-0 flex-1 overflow-hidden rounded-b border border-t-0 border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       >
         <Suspense
           fallback={<div className="p-6 text-sm text-muted-fg">Loading view…</div>}

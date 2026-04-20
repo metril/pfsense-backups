@@ -1,4 +1,4 @@
-import { StrictMode, useEffect, useRef } from "react";
+import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import {
@@ -66,15 +66,12 @@ const qc = new QueryClient({
 
 function AppWithErrorBridge() {
   const toast = useToast();
-  // Keep the latest toast handler addressable without re-creating the QC.
-  const ref = useRef(toast);
-  ref.current = toast;
-  useEffect(() => {
-    toastRef.current = ref.current;
-    return () => {
-      if (toastRef.current === ref.current) toastRef.current = null;
-    };
-  }, []);
+  // Latest handler always wins. Synchronous assignment (no effect)
+  // means the bridge is live on the very first render — if a query
+  // error fires before any effect runs, we still have a toast ref.
+  // React strict-mode double-renders are fine because each render
+  // overwrites the ref with the same ToastProvider's handler.
+  toastRef.current = toast;
 
   return (
     <QueryClientProvider client={qc}>

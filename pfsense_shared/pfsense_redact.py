@@ -62,7 +62,6 @@ _EXACT: Final[frozenset[str]] = frozenset(
         "user_password",
         "proxy_auth_password",
         "influxdb_token",
-        "zabbix_psk",
         "frr_password",
         "bgp_password",
         "ospf_password",
@@ -71,15 +70,17 @@ _EXACT: Final[frozenset[str]] = frozenset(
         # attribute name lacks the underscore that the generic
         # ``*_password`` suffix would match, so it gets an exact entry.
         "remotepassword",
-        # DynDNS API-token providers (Cloudflare 2.7+, etc.) sometimes
-        # store the bearer token under a standalone <token> element
-        # rather than <password>. Mark it here so defensive callers
-        # can't leak it.
-        "token",
         # pfSense's Zabbix package stores the TLS pre-shared key under
         # <tlspsk>; <tls_psk> is the normalised form some parsers use.
         "tlspsk",
         "tls_psk",
+        # NOTE: "token" intentionally NOT in _EXACT. Bare ``<token>``
+        # appears in benign contexts (e.g. third-party package revision
+        # counters), so we only redact explicit API-token fields via
+        # ``api_token`` / ``apitoken`` / ``auth_token`` / the
+        # ``*_authtoken`` suffix. DynDNS providers that emit a bare
+        # ``<token>`` element redact at the call site via
+        # ``redact("api_token", …)``.
     }
 )
 

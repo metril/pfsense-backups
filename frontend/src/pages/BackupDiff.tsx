@@ -67,16 +67,19 @@ export function BackupDiffPage() {
         ariaLabel="Diff view"
         idPrefix="backup-diff"
         items={[
-          { id: "structured", label: "Structured", panelId: "backup-diff-panel" },
-          { id: "raw", label: "Raw XML", panelId: "backup-diff-panel" },
+          // Single shared panel — we omit aria-controls on tabs so
+          // SRs don't announce a bogus 1:1 tab↔panel association.
+          { id: "structured", label: "Structured" },
+          { id: "raw", label: "Raw XML" },
         ]}
       />
 
       <div
         id="backup-diff-panel"
         role="tabpanel"
+        tabIndex={0}
         aria-labelledby={`backup-diff-tab-${tab}`}
-        className="flex-1 overflow-hidden rounded-b border border-t-0 border-border"
+        className="flex-1 overflow-hidden rounded-b border border-t-0 border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       >
         <Suspense
           fallback={<div className="p-6 text-sm text-muted-fg">Loading…</div>}

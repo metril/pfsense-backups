@@ -74,7 +74,11 @@ def parse(root: Element) -> list[DyndnsEntry]:
                 # <password>, which is.
                 username=text(d, "username"),
                 password=redact("password", text(d, "password")),
-                token=redact("token", text(d, "token")),
+                # Use a self-documenting redact tag that's in _EXACT
+                # (``api_token``) — ``token`` is intentionally not a
+                # blanket _EXACT entry since it has benign call sites
+                # elsewhere.
+                token=redact("api_token", text(d, "token")),
             )
         )
     return out

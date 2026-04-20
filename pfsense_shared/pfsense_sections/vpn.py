@@ -214,7 +214,10 @@ def parse_openvpn(
                 certref=text(s, "certref"),
                 authmode=[x for x in authmode_raw.split(",") if x],
                 shared_key=redact("shared_key", text(s, "shared_key")),
-                tls=redact("tls", text(s, "tls")),
+                # pfSense 2.4 stored the HMAC firewall key under
+                # <tls_auth>; 2.5+ collapsed it into <tls>. Read both
+                # so older backups don't silently drop the field.
+                tls=redact("tls", text(s, "tls") or text(s, "tls_auth")),
             )
         )
 
@@ -239,7 +242,7 @@ def parse_openvpn(
                 caref=text(c, "caref"),
                 certref=text(c, "certref"),
                 shared_key=redact("shared_key", text(c, "shared_key")),
-                tls=redact("tls", text(c, "tls")),
+                tls=redact("tls", text(c, "tls") or text(c, "tls_auth")),
             )
         )
 
