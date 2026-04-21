@@ -108,9 +108,13 @@ export function BackupViewPage() {
   // intersection observer or the Monaco cursor mapper), so blame
   // always opens on whatever the operator was most recently
   // focused on.
+  const onNoBlameAnchor = useCallback(() => {
+    toast.info("Scroll to a field and press h again");
+  }, [toast]);
   const { blameAnchor, closeBlame } = useBlameHotkey({
     enabled: tab === "structured",
     focusedAnchor,
+    onNoAnchor: onNoBlameAnchor,
   });
 
   const anchorForLine = useCallback(

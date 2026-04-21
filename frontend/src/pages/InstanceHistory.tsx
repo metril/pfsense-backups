@@ -13,6 +13,7 @@ import { collectChangedAnchors } from "@/lib/changedAnchors";
 import { useFocusedAnchor } from "@/lib/useFocusedAnchor";
 import { useBlameHotkey } from "@/lib/useBlameHotkey";
 import { AnchorHistoryDrawer } from "@/components/xref/AnchorHistoryDrawer";
+import { useToast } from "@/components/ui/Toast";
 
 const ParsedBackupView = lazy(() =>
   import("@/components/ParsedBackupView").then((m) => ({
@@ -41,6 +42,7 @@ export function InstanceHistoryPage() {
   const { id: idParam } = useParams();
   const id = Number(idParam);
   const nav = useNavigate();
+  const toast = useToast();
 
   const instances = useInstances();
   const instance = instances.data?.find((i) => i.id === id);
@@ -157,9 +159,13 @@ export function InstanceHistoryPage() {
   // the nearest visible row / field; ``Esc`` closes it (inside the
   // drawer). Shared with ``BackupView`` via ``useBlameHotkey``.
   const focusedAnchor = useFocusedAnchor(true);
+  const onNoAnchorToast = useCallback(() => {
+    toast.info("Scroll to a field and press h again");
+  }, [toast]);
   const { blameAnchor, openBlame, closeBlame } = useBlameHotkey({
     enabled: true,
     focusedAnchor,
+    onNoAnchor: onNoAnchorToast,
   });
 
   if (!Number.isFinite(id)) {
