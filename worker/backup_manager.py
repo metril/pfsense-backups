@@ -11,6 +11,7 @@ come from the singleton BackupSettings row.
 
 from __future__ import annotations
 
+import contextlib
 import gzip
 import logging
 import os
@@ -53,7 +54,7 @@ from pfsense_shared.schemas import (
     TestConnectionResult,
 )
 
-from .instance_locks import HostSemaphores, InstanceLocks
+from .instance_locks import CrossProcessInstanceLock, HostSemaphores, InstanceLocks
 from .ipc_publisher import IpcPublisher
 from .notifier import Notifier
 from .prometheus_metrics import MetricsTimer, PrometheusMetrics
@@ -197,6 +198,7 @@ class PfSenseBackupManager:
         hostname: str,
         instance_locks: InstanceLocks,
         host_semaphores: HostSemaphores | None = None,
+        cross_process_lock: CrossProcessInstanceLock | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._publisher = publisher
@@ -209,6 +211,11 @@ class PfSenseBackupManager:
         # most code paths do inject so both IPC + scheduler share a
         # single ceiling per host.
         self._host_semaphores = host_semaphores or HostSemaphores()
+        # ``cross_process_lock=None`` (the test default) disables
+        # cross-process serialisation — single-process deployments
+        # already get safety from ``instance_locks``. Production
+        # wiring in ``worker/__main__.py`` always provides one.
+        self._cross_process_lock = cross_process_lock
 
     # ------------------------------------------------------------------ #
     # Public entry points
@@ -284,6 +291,20 @@ class PfSenseBackupManager:
                 log.warning(
                     "Healthchecks start ping for %s failed: %s", snap.name, exc
                 )
+
+        # Cross-process advisory lock (v0.38.0). Serialises backups
+        # for this instance across multiple worker processes that
+        # share the same data volume. Single-process deployments get
+        # ``None`` here and fall through to ``nullcontext``; the
+        # existing in-process ``InstanceLocks`` at the call site
+        # already protects them. Acquired BEFORE ``_mark_job`` so a
+        # blocked worker doesn't advertise itself as "running" while
+        # it's actually waiting on another process to release.
+        cp_stack = contextlib.ExitStack()
+        if self._cross_process_lock is not None:
+            cp_stack.enter_context(
+                self._cross_process_lock.for_instance(snap.id)
+            )
 
         self._mark_job(job_id, status="running")
         self._publisher.publish(
@@ -415,6 +436,13 @@ class PfSenseBackupManager:
             )
             _notify_result(False, f"Backup failed for {snap.name}: {err}")
             return False
+        finally:
+            # Release the cross-process advisory lock, if any. Runs on
+            # both the return True and return False paths because
+            # ``finally`` fires for explicit returns too. Safe if no
+            # lock was entered (``ExitStack`` with no entered contexts
+            # is a no-op on close).
+            cp_stack.close()
 
     def test_connection(self, instance_id: int, job_id: int) -> bool:
         """Authenticate only — no download, no DB write. Reports result via event."""

@@ -52,6 +52,33 @@ Worker exposes Prometheus metrics → :8000/metrics
 - Traefik already running on a reachable `traefik` docker network (or edit
   `compose.yaml` to suit your reverse proxy).
 
+## Multi-worker deployment
+
+The default `compose.yaml` runs one `worker` container. Scaling the
+worker horizontally (e.g., for active/active redundancy across two
+hosts that share an NFS-mounted `/app/data`) is supported: since
+v0.38.0 each `backup_instance` call acquires an advisory
+`fcntl.flock` on `/app/data/locks/instance-{id}.lock` before
+running, so two worker processes firing the same cron tick for the
+same instance will serialise — one backs up, the other waits for
+the lock, then no-ops or re-runs as configured.
+
+Caveats:
+
+- The lock directory (`/app/data/locks`) must be on a shared volume
+  visible to every worker container. NFS, GlusterFS, and local
+  bind-mounts on the same host all work; any fs that honors
+  `fcntl.flock` is fine.
+- The web service doesn't need the lock — only workers write
+  backup files. It still shares `/app/data/app.db` via the same
+  volume.
+- One worker per physical host is usually enough; the backup
+  workload is I/O-bound on pfSense's HTTP response, not CPU-bound.
+
+A waiting worker logs `waiting for cross-process lock on instance N`
+every 5s with elapsed time, so `docker logs worker` clearly shows
+"politely blocked" vs "crashed / hung".
+
 ## Deployment
 
 ```bash

@@ -32,7 +32,7 @@ from pfsense_shared.models import Backup, Instance, Job
 from pfsense_shared.settings import WorkerSettings
 
 from .backup_manager import PfSenseBackupManager
-from .instance_locks import InstanceLocks
+from .instance_locks import CrossProcessInstanceLock, InstanceLocks
 from .ipc_listener import IpcListener
 from .ipc_publisher import IpcPublisher
 from .notifier import Notifier
@@ -115,6 +115,14 @@ def main() -> None:
     # listener, and backup_all's parallel sweep — one instance can never
     # back itself up twice concurrently regardless of trigger source.
     instance_locks = InstanceLocks()
+    # v0.38.0: advisory file lock that serialises per-instance backups
+    # across worker PROCESSES that share the same data volume. In a
+    # single-worker deployment this has zero effect — the in-process
+    # ``instance_locks`` above already covers it. Two worker containers
+    # firing the same cron tick land here and one blocks on flock
+    # until the other releases.
+    lock_dir = Path(settings.app_db_url.replace("sqlite:///", "")).parent / "locks"
+    cross_process_lock = CrossProcessInstanceLock(lock_dir)
     manager = PfSenseBackupManager(
         session_factory=session_factory,
         publisher=publisher,
@@ -123,6 +131,7 @@ def main() -> None:
         notifier=notifier,
         hostname=settings.hostname,
         instance_locks=instance_locks,
+        cross_process_lock=cross_process_lock,
     )
 
     scheduler = Scheduler(
