@@ -193,14 +193,14 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
         </Alert>
       </div>
     );
-  if (!data) return null;
+  if (!data || !rawData) return null;
 
   return (
     // Xref index builds from the UNFILTERED config so chips resolve even
     // when the referenced row is currently filtered out (e.g. a firewall
     // rule pointing at alias ``RFC1918`` while the user has filtered on
     // ``"LAN"``). Using the narrowed ``data`` would produce dead chips.
-    <XrefProvider data={rawData!}>
+    <XrefProvider data={rawData}>
     <XrefHistoryProvider scope={`view:${backupId}`}>
     <FilterProvider query={filterQuery}>
     <CardGroupProvider scope={`view:${backupId}`}>

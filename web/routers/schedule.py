@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -13,6 +14,8 @@ from pfsense_shared.schemas import ReloadScheduleCommand, ScheduleUpdate
 from ..dependencies import CurrentUser, DbSession, Ipc
 from ..services import audit
 from ..services.cron_utils import describe, next_runs, resolve_tz, validate, validate_tz
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/schedule", tags=["schedule"])
 
@@ -32,6 +35,14 @@ def _schedule_row(inst: Instance, default_tz: str) -> dict[str, Any]:
             else []
         )
     except Exception:
+        # A malformed cron expression shouldn't crash the list — the
+        # rest of the row is still useful. Surface the error in logs
+        # though so an operator investigating an empty ``next_runs``
+        # entry can trace back to the broken expression.
+        log.exception(
+            "next_runs failed for instance id=%s cron=%r tz=%s",
+            inst.id, inst.cron_expression, effective_tz,
+        )
         nxt = []
     return {
         "instance_id": inst.id,

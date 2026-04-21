@@ -340,11 +340,19 @@ export function BackupViewPage() {
             <History className="h-4 w-4" />
             History
           </Button>
-          <Button variant="secondary" size="sm" onClick={copyToClipboard}>
+          {/* Both handlers are async. Prefix with ``void`` so React
+              doesn't discard the returned Promise silently — any
+              rejection (network 500, clipboard API denied) should at
+              least reach the browser's unhandled-rejection channel. */}
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => void copyToClipboard()}
+          >
             <ClipboardCopy className="h-4 w-4" />
             Copy
           </Button>
-          <Button size="sm" onClick={download}>
+          <Button size="sm" onClick={() => void download()}>
             <Download className="h-4 w-4" />
             Download
           </Button>

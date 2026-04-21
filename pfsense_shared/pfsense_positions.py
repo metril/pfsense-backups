@@ -173,11 +173,13 @@ def _firewall_and_nat_anchors(
     if n_el is not None and parsed is None:
         # Fallback mode (tests, any future caller that forgets to
         # pass ``parsed``): we can't compute the parser's synthesized
-        # NAT keys without the parser. Surface the degradation so it
-        # doesn't silently ship.
-        log.debug(
-            "build_positions called without parsed; NAT anchors will "
-            "be skipped (frontend rows will miss on tab-switch)"
+        # NAT keys without the parser. Warn loud enough that a new
+        # call site can't silently ship degraded output — this is a
+        # user-visible gap (NAT tab-switch misses every row).
+        log.warning(
+            "build_positions: parsed=None on a config that contains "
+            "<nat> rules; xref-nat-* anchors will be skipped. Pass "
+            "parsed=parse(xml_bytes) to emit parser-keyed anchors."
         )
     if n_el is not None and parsed is not None:
         # Mirror the exact walk order used by

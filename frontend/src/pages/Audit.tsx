@@ -152,14 +152,35 @@ export function AuditPage() {
                     "border-t border-border",
                     hasDetails && "cursor-pointer hover:bg-muted/30",
                   )}
+                  // Keyboard-accessible expansion: Enter / Space toggles
+                  // the detail row. The row becomes a button for keyboard
+                  // users (role + tabIndex) without disturbing the
+                  // native table semantics for screen readers, and
+                  // aria-expanded keeps AT in sync with the disclosure.
+                  role={hasDetails ? "button" : undefined}
+                  tabIndex={hasDetails ? 0 : undefined}
+                  aria-expanded={hasDetails ? isOpen : undefined}
                   onClick={() => hasDetails && toggle(e.id)}
+                  onKeyDown={(evt) => {
+                    if (!hasDetails) return;
+                    if (evt.key === "Enter" || evt.key === " ") {
+                      evt.preventDefault();
+                      toggle(e.id);
+                    }
+                  }}
                 >
                   <td className="py-2 pl-1">
                     {hasDetails ? (
                       isOpen ? (
-                        <ChevronDown className="h-4 w-4 text-muted-fg" />
+                        <ChevronDown
+                          className="h-4 w-4 text-muted-fg"
+                          aria-label="Collapse details"
+                        />
                       ) : (
-                        <ChevronRight className="h-4 w-4 text-muted-fg" />
+                        <ChevronRight
+                          className="h-4 w-4 text-muted-fg"
+                          aria-label="Expand details"
+                        />
                       )
                     ) : null}
                   </td>

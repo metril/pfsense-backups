@@ -142,7 +142,16 @@ export function LogsPage() {
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Logs</h1>
-        <div className="flex items-center gap-2 text-xs text-muted-fg">
+        {/* Announce WebSocket connection transitions to assistive
+            tech. ``role="status"`` gives screen readers the polite
+            live region; the dot itself stays ``aria-hidden`` because
+            the text next to it ("live" / "reconnecting…") already
+            conveys the state. */}
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex items-center gap-2 text-xs text-muted-fg"
+        >
           <span
             className={cn(
               "inline-block h-2 w-2 rounded-full",
@@ -151,7 +160,7 @@ export function LogsPage() {
             aria-hidden
           />
           {connected ? "live" : "reconnecting…"}
-          <span>·</span>
+          <span aria-hidden>·</span>
           <span>
             {filtered.length} / {entries.length} lines
           </span>

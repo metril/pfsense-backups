@@ -494,16 +494,36 @@ function SummaryStrip({
             >
               <span className={cn("flex-1 truncate", gc.title)}>{label}</span>
               {s.added.length > 0 && (
-                <span className="font-mono text-ok">+{s.added.length}</span>
+                <span
+                  className="font-mono text-ok"
+                  aria-label={`${s.added.length} added`}
+                >
+                  +{s.added.length}
+                </span>
               )}
               {s.removed.length > 0 && (
-                <span className="font-mono text-danger">−{s.removed.length}</span>
+                <span
+                  className="font-mono text-danger"
+                  aria-label={`${s.removed.length} removed`}
+                >
+                  −{s.removed.length}
+                </span>
               )}
               {s.modified.length > 0 && (
-                <span className="font-mono text-warn">~{s.modified.length}</span>
+                <span
+                  className="font-mono text-warn"
+                  aria-label={`${s.modified.length} modified`}
+                >
+                  ~{s.modified.length}
+                </span>
               )}
               {s.reordered.length > 0 && (
-                <span className="font-mono text-info">↕{s.reordered.length}</span>
+                <span
+                  className="font-mono text-info"
+                  aria-label={`${s.reordered.length} reordered`}
+                >
+                  ↕{s.reordered.length}
+                </span>
               )}
             </a>
           );
