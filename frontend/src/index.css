@@ -52,6 +52,19 @@
   animation: flash 1.5s ease-out;
 }
 
+/* WCAG 2.3.3: suppress the flash keyframe for users who've asked for
+   reduced motion (vestibular disorders, epilepsy, migraine triggers).
+   Keep a static accent tint so the jump target is still findable —
+   the animation was the affordance, not the only indicator. */
+@media (prefers-reduced-motion: reduce) {
+  .flash-target,
+  .xref-flash,
+  .monaco-xref-focus-line {
+    animation: none;
+    background-color: hsl(var(--accent) / 0.25);
+  }
+}
+
 /* History-timeline diff overlay (v0.23.0). Applied by
    InstanceHistoryPage to any xref / field anchor that changed
    between the focused backup and the one before it. ``box-shadow

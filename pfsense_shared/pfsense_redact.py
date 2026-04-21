@@ -62,6 +62,21 @@ _EXACT: Final[frozenset[str]] = frozenset(
         "user_password",
         "proxy_auth_password",
         "influxdb_token",
+        # ACME DNS-01 provider credentials stored under
+        # <a_domainlist><item>. Today's parser reads only <name> +
+        # <method> and silently drops sibling credential tags, so
+        # these never reach JSON output — but any future parser
+        # revision that surfaces <item> child text would leak the
+        # tokens without redaction. Added defensively. ``_SUFFIXES``
+        # already catches ``*_secret_key`` / ``*_access_key`` /
+        # ``*_api_key`` variants; only ``_token`` / ``_api_key``
+        # without the ``_`` prefix fall through, so we name them
+        # explicitly here.
+        "cf_token",
+        "cf_key",
+        "do_api_key",
+        "gd_key",
+        "gd_secret",
         # Telegraf → InfluxDB username. Not a password by itself, but
         # the operator's login identity on the metrics backend — enough
         # to phish a password out of or to check membership in breach

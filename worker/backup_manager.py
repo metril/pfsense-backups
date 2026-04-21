@@ -347,18 +347,32 @@ class PfSenseBackupManager:
             err = str(exc)
             log.error("Backup failed for %s: %s", snap.name, err)
             self._metrics.record_backup_failure(snap.name, type(exc).__name__, duration)
-            self._write_backup_history(
-                instance_id=snap.id,
-                job_id=job_id,
-                started_at=started_at,
-                finished_at=finished_at,
-                duration=duration,
-                result=None,
-                success=False,
-                error=err,
-                snap=snap,
-            )
+            # Mark the job FIRST so it always reaches a terminal state,
+            # even if the history-row insert itself raises. Real case:
+            # operator deletes the instance row mid-backup →
+            # ``Backup.instance_id`` FK cascade blanks the row → the
+            # failure-path ``_write_backup_history`` below would raise
+            # its own FK violation that skips past ``_mark_job`` and
+            # leaves the job stuck in ``running`` forever.
             self._mark_job(job_id, status="failure", finished_at=finished_at, message=err)
+            try:
+                self._write_backup_history(
+                    instance_id=snap.id,
+                    job_id=job_id,
+                    started_at=started_at,
+                    finished_at=finished_at,
+                    duration=duration,
+                    result=None,
+                    success=False,
+                    error=err,
+                    snap=snap,
+                )
+            except Exception as hist_exc:  # noqa: BLE001
+                log.warning(
+                    "Could not write backup history row for failed job %s "
+                    "(instance %s): %s — job is marked failed anyway",
+                    job_id, snap.id, hist_exc,
+                )
             self._publisher.publish(
                 BackupFailed(
                     job_id=job_id,

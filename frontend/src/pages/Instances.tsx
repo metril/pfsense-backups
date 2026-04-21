@@ -756,15 +756,22 @@ function Switch({
   checked,
   onChange,
   label,
+  id,
 }: {
   checked: boolean;
   onChange: (v: boolean) => void;
   label: string;
+  /** Optional id to forward to the underlying button. The ``Field``
+   *  wrapper assigns this via ``cloneElement`` so ``<Label htmlFor>``
+   *  resolves to a real element — without it, clicking the visual
+   *  label didn't focus/toggle the switch. */
+  id?: string;
 }) {
   // M6 (a11y): expose as a proper switch so screen readers announce it.
   return (
     <button
       type="button"
+      id={id}
       role="switch"
       aria-checked={checked}
       aria-label={label}
