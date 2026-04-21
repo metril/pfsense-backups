@@ -9,4 +9,4 @@
 # with placeholder values only. One line per identity that needs rewriting.
 #
 # Example:
-metril <1517921+metril@users.noreply.github.com> Real Name <real@email.example>
+#   new-alias <123456+new-alias@users.noreply.github.com> Real Name <real@email.example>
