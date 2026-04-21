@@ -19,6 +19,10 @@ import { Kbd } from "@/components/ui/Kbd";
 export function XrefBackPill() {
   const history = useXrefHistory();
 
+  // Peek the top BEFORE calling pop so the navigation is driven by
+  // the value we can read synchronously. The old "pop returns the
+  // popped entry" pattern was lost to React 18's concurrent setState
+  // batching — the caller routinely saw ``null`` and silently no-op'd.
   useEffect(() => {
     if (!history) return;
     function onKey(e: KeyboardEvent) {
@@ -41,8 +45,10 @@ export function XrefBackPill() {
     }
     function goBack() {
       if (!history) return;
-      const entry = history.pop();
+      const stack = history.stack;
+      const entry = stack[stack.length - 1];
       if (!entry) return;
+      history.pop();
       expandThenScrollToHash(`#${entry.anchorId}`);
     }
     document.addEventListener("keydown", onKey);
@@ -53,9 +59,8 @@ export function XrefBackPill() {
 
   const top = history.stack[history.stack.length - 1];
   const onClick = () => {
-    const entry = history.pop();
-    if (!entry) return;
-    expandThenScrollToHash(`#${entry.anchorId}`);
+    history.pop();
+    expandThenScrollToHash(`#${top.anchorId}`);
   };
 
   return (

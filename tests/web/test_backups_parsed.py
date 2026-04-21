@@ -41,8 +41,11 @@ async def test_parsed_plain_backup_returns_structured_config(
     pos = body["positions"]
     assert "section-system" in pos
     assert "field-system-hostname" in pos
-    # Firewall rule tracker is "1" in the seeded fixture.
-    assert "xref-rule-1" in pos
+    # Firewall rule tracker is "1" in the seeded fixture; the
+    # position anchor uses the parser's synthesized key
+    # (``tracker:1``) sanitised to ``tracker_1`` so it matches the
+    # ``rowAnchorId("rule", r.key)`` emission on the frontend.
+    assert "xref-rule-tracker_1" in pos
 
 
 async def test_parsed_missing_backup_returns_404(client: AsyncClient) -> None:

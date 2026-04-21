@@ -44,6 +44,7 @@ const SECTION_ROW_ANCHOR: Record<string, Scope | null> = {
   lb_pools: { kind: "refkind", refKind: "lb_pool" },
   users: { kind: "refkind", refKind: "user" },
   groups: { kind: "refkind", refKind: "group" },
+  interface_groups: { kind: "refkind", refKind: "interface_group" },
   // Sections without a stable per-row anchor — only the section-
   // level fallback applies. Listed as ``null`` so we can still
   // surface "something changed here" without producing garbage ids.
@@ -73,7 +74,6 @@ const SECTION_ROW_ANCHOR: Record<string, Scope | null> = {
   voucher_rolls: null,
   apikeys: null,
   proxyarp: null,
-  interface_groups: null,
   unrecognized_sections: null,
 };
 

@@ -1,5 +1,5 @@
 import { Editor, type OnMount } from "@monaco-editor/react";
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import "@/lib/monacoInit";
 
 // Options is a module-level constant so re-rendering the viewer doesn't
@@ -93,15 +93,17 @@ export default function MonacoViewer({
     lastFocusRef.current = focusLine;
   };
 
-  // Re-reveal whenever ``focusLine`` changes. React's render cycle
-  // runs on every parent update; only act when the value actually
-  // moves (including re-selecting the same row, signalled by the
-  // parent bumping a version — we handle sentinel ``undefined`` as
-  // "clear highlight").
-  if (lastFocusRef.current !== focusLine && editorRef.current) {
+  // Re-reveal whenever ``focusLine`` changes. This lives in an
+  // effect rather than in the render body because revealing lines
+  // and mutating Monaco decorations is a side effect that would
+  // fire under React 18 strict mode / concurrent rendering in ways
+  // that could double-apply or leak the ``suppressCursor`` flag.
+  useEffect(() => {
+    if (!editorRef.current) return;
+    if (lastFocusRef.current === focusLine) return;
     applyFocus(focusLine);
     lastFocusRef.current = focusLine;
-  }
+  }, [focusLine]);
 
   return (
     <Editor

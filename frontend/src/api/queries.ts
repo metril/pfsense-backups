@@ -163,7 +163,13 @@ export function useImportBackups() {
       api.post<{ imported: number; skipped: number; scanned_dir: string }>(
         `/api/instances/${id}/import-backups`,
       ),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["backups"] }),
+    onSuccess: () => {
+      // New backup rows invalidate the backup list AND any
+      // instance-level views (last-seen time, backup count) that
+      // derive their summary from the backups table.
+      qc.invalidateQueries({ queryKey: ["backups"] });
+      invalidateInstanceViews(qc);
+    },
   });
 }
 

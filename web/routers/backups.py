@@ -9,13 +9,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pfsense_shared.models import Backup, Instance, Job
+from pfsense_shared.paths import BACKUPS_DIR  # noqa: F401 — used by /anchor-history
 from pfsense_shared.pfsense_anchor_values import resolve_anchor_value
 from pfsense_shared.pfsense_crypto import (
     PfSenseCryptoError,
@@ -240,7 +241,10 @@ async def _load(db: AsyncSession, backup_id: int) -> tuple[Backup, Path]:
     if b is None:
         raise HTTPException(404, "backup not found")
     path = Path(b.path)
-    if not path.is_file():
+    # ``stat`` is blocking — punt to a thread so a stalled mount
+    # (NFS, slow backing store) doesn't hang the event loop.
+    exists = await asyncio.to_thread(path.is_file)
+    if not exists:
         # M6: 404 is the correct semantic here (the resource doesn't exist at
         # the moment of the request). 410 implies permanent tombstone.
         raise HTTPException(
@@ -593,7 +597,10 @@ async def get_parsed(
     else:
         content_bytes = content
     parsed = await asyncio.to_thread(parse_pfsense_xml, content_bytes)
-    positions = await asyncio.to_thread(build_positions, content_bytes)
+    # Pass ``parsed`` so firewall + NAT rule anchors pair 1:1 with the
+    # parser's synthesized ``r.key`` (tracker-less rules get a hash
+    # fallback that the frontend also emits via ``rowAnchorId``).
+    positions = await asyncio.to_thread(build_positions, content_bytes, parsed)
     return ParsedBackupResponse(config=parsed, positions=positions)
 
 
@@ -705,6 +712,63 @@ class AnchorHistoryResponse(BaseModel):
     entries: list[AnchorHistoryChange]
 
 
+class _BackupWalkRow(BaseModel):
+    """Plain snapshot of a ``Backup`` row — safe to hand to a worker
+    thread (unlike the live ORM instance, which can lazy-load attrs
+    on access and is not thread-safe when accessed off the event
+    loop)."""
+
+    model_config = {"arbitrary_types_allowed": True}
+
+    id: int
+    started_at: datetime
+    path: str
+    compressed: bool
+    encrypted: bool
+    encrypt_password_ct: bytes | None
+
+
+def _row_path(raw_path: str) -> Path:
+    p = Path(raw_path)
+    return p if p.is_absolute() else BACKUPS_DIR / p
+
+
+def _read_for_walk(row: _BackupWalkRow, crypto: Any) -> bytes | str:
+    """Version of ``_decrypt_row_content`` that operates on the plain
+    snapshot (``_BackupWalkRow``) instead of an ORM instance — safe
+    to call from inside ``asyncio.to_thread``."""
+    import gzip
+
+    path = _row_path(row.path)
+    if path.suffix == ".gz" or row.compressed:
+        with gzip.open(path, "rb") as gz:
+            raw = gz.read()
+    else:
+        raw = path.read_bytes()
+    if not row.encrypted or not looks_encrypted(raw):
+        return raw
+    if not row.encrypt_password_ct:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "cannot decrypt backup: no per-row password stored. "
+            "Download the raw encrypted file and decrypt offline.",
+        )
+    try:
+        password = crypto.decrypt(row.encrypt_password_ct)
+    except Exception as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"cannot decrypt backup password: {exc}",
+        ) from exc
+    try:
+        return decrypt_pfsense_backup(raw, password)
+    except PfSenseCryptoError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"cannot decrypt backup — password missing or KDF mismatch ({exc})",
+        ) from exc
+
+
 @router.get(
     "/instance/{instance_id}/anchor-history",
     response_model=AnchorHistoryResponse,
@@ -712,6 +776,7 @@ class AnchorHistoryResponse(BaseModel):
 async def instance_anchor_history(
     instance_id: int,
     anchor: str,
+    request: Request,
     db: DbSession,
     user: CurrentUser,
     crypto: CryptoDep,
@@ -727,6 +792,15 @@ async def instance_anchor_history(
     for a single instance are typically dozens to a few hundred;
     parsing is a few-hundred-ms per config. Result is deterministic
     and idempotent; frontend caches aggressively via TanStack Query.
+
+    Connection discipline: the dependency-injected ``db`` session
+    holds a pool connection for the lifetime of this handler. For
+    instances with many backups the walk can take tens of seconds,
+    so we fetch the rows, snapshot them into plain objects, then
+    ``await db.close()`` to free the connection BEFORE entering the
+    parse thread. A fresh session is opened from the factory for
+    the trailing audit write. Under modest concurrency this is the
+    difference between pool-exhaustion under load and smooth-running.
 
     Audited as ``view_decrypted`` once per request (not once per
     encrypted backup) — operators reviewing blame data see only one
@@ -748,30 +822,43 @@ async def instance_anchor_history(
         )
     ).scalars().all()
 
-    from pathlib import Path as _Path
+    # Snapshot everything we need from the ORM BEFORE releasing the
+    # session. Subsequent code treats ``snapshots`` as plain data,
+    # safe to consume from a worker thread.
+    snapshots = [
+        _BackupWalkRow(
+            id=r.id,
+            started_at=r.started_at,
+            path=r.path,
+            compressed=r.compressed,
+            encrypted=r.encrypted,
+            encrypt_password_ct=r.encrypt_password_ct,
+        )
+        for r in rows
+    ]
 
-    from pfsense_shared.paths import BACKUPS_DIR as _BACKUPS_DIR
+    # Release the pool connection immediately — the parse loop below
+    # can be slow and would otherwise starve concurrent callers.
+    await db.close()
 
-    any_encrypted = False
+    any_encrypted = any(s.encrypted for s in snapshots)
 
     def _gather() -> list[AnchorHistoryChange]:
-        nonlocal any_encrypted
         out: list[AnchorHistoryChange] = []
         previous_value: Any = _MISSING
-        for row in rows:
-            path = _Path(row.path) if _Path(row.path).is_absolute() else _BACKUPS_DIR / row.path
-            if row.encrypted:
-                any_encrypted = True
-                raw_bytes: bytes | str = _decrypt_row_content(row, path, crypto)
+        for s in snapshots:
+            raw_bytes: bytes | str
+            if s.encrypted:
+                raw_bytes = _read_for_walk(s, crypto)
             else:
-                raw_bytes = read_content(path)
+                raw_bytes = read_content(_row_path(s.path))
             parsed = parse_pfsense_xml(raw_bytes)
             value = resolve_anchor_value(parsed, anchor)
             is_change = previous_value is _MISSING or value != previous_value
             out.append(
                 AnchorHistoryChange(
-                    backup_id=row.id,
-                    started_at=row.started_at.isoformat(),
+                    backup_id=s.id,
+                    started_at=s.started_at.isoformat(),
                     value=value,
                     is_change=is_change,
                 )
@@ -782,12 +869,20 @@ async def instance_anchor_history(
     entries = await asyncio.to_thread(_gather)
 
     if any_encrypted:
-        audit.record(
-            db, actor_email=user["email"], action="view_decrypted",
-            resource="anchor_history", resource_id=instance_id,
-            details={"anchor": anchor, "backups": len(entries)},
-        )
-        await db.commit()
+        # Fresh session from the factory — the original ``db`` was
+        # closed above. ``async with`` returns the connection to the
+        # pool when the audit commit completes.
+        session_factory = request.app.state.session_factory
+        async with session_factory() as audit_session:
+            audit.record(
+                audit_session,
+                actor_email=user["email"],
+                action="view_decrypted",
+                resource="anchor_history",
+                resource_id=instance_id,
+                details={"anchor": anchor, "backups": len(entries)},
+            )
+            await audit_session.commit()
 
     return AnchorHistoryResponse(
         anchor=anchor,

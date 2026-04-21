@@ -55,15 +55,24 @@ export function DeepLinkBridge({
   }, [includeHashchange]);
 
   // Custom event → CardGroupProvider.snapTarget bridge.
+  //
+  // Depend on ``snapTarget`` (the stable ``useCallback``-wrapped
+  // function from the provider) rather than the whole ``groupCtx``.
+  // ``groupCtx`` re-memoises every time the provider's internal state
+  // ticks (resetVersion, snapTargetVersion), which would tear the
+  // listener down and re-install it on every expand-all / snap —
+  // a brief window in which a rapidly-dispatched ``pfsense-snap-to-
+  // card`` event would be missed.
+  const snapTarget = groupCtx?.snapTarget;
   useEffect(() => {
-    if (!groupCtx) return;
+    if (!snapTarget) return;
     const onSnap = (ev: Event) => {
       const ce = ev as CustomEvent<{ cardId: string }>;
-      if (ce.detail?.cardId) groupCtx.snapTarget(ce.detail.cardId);
+      if (ce.detail?.cardId) snapTarget(ce.detail.cardId);
     };
     window.addEventListener("pfsense-snap-to-card", onSnap);
     return () => window.removeEventListener("pfsense-snap-to-card", onSnap);
-  }, [groupCtx]);
+  }, [snapTarget]);
 
   return null;
 }

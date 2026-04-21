@@ -86,13 +86,31 @@ def _async_url(url: str) -> str:
     return url
 
 
-def make_async_engine(url: str) -> AsyncEngine:
+def make_async_engine(
+    url: str,
+    *,
+    pool_size: int = 20,
+    max_overflow: int = 40,
+) -> AsyncEngine:
+    # Defaults bumped from SQLAlchemy's 5/10 because endpoints that parse
+    # a config inside ``asyncio.to_thread`` (notably ``/parsed`` and
+    # ``/instance/{id}/anchor-history``) hold a pool connection while the
+    # parse runs. Under modest concurrency the old 15-slot ceiling hit
+    # QueuePool TimeoutError. SQLite + aiosqlite is happy with many
+    # connections — WAL allows parallel readers, writes still serialise
+    # via ``busy_timeout``.
     async_url = _async_url(url)
     connect_args = {}
     if async_url.startswith("sqlite"):
         connect_args["check_same_thread"] = False
 
-    engine = create_async_engine(async_url, connect_args=connect_args, pool_pre_ping=True)
+    engine = create_async_engine(
+        async_url,
+        connect_args=connect_args,
+        pool_pre_ping=True,
+        pool_size=pool_size,
+        max_overflow=max_overflow,
+    )
 
     # WAL + foreign_keys + busy_timeout on every connection. The sync event
     # listener receives DBAPI connections synchronously even for the async

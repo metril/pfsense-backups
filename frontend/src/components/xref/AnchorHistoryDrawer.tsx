@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { Clock, ExternalLink, X } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -20,6 +20,18 @@ import {
  * The drawer is a controlled component — parent owns ``anchor`` +
  * ``onClose`` state. Closed (``anchor === null``) renders nothing
  * so we don't pay for the fetch when the drawer isn't in use.
+ *
+ * Accessibility:
+ *   - ``role="dialog"`` + ``aria-modal="true"`` so screen readers
+ *     treat the content outside the drawer as inert.
+ *   - ``Tab`` / ``Shift+Tab`` cycle within the drawer (simple focus
+ *     trap — the dialog only holds a handful of focusable elements).
+ *   - Focus lands on the close button on open and restores to the
+ *     element that held focus before the drawer mounted when it
+ *     closes (parent-triggered or Esc / tap-outside).
+ *   - A full-viewport backdrop behind the drawer captures clicks
+ *     anywhere outside the panel; mobile users can dismiss without
+ *     having to hit the tiny close button.
  */
 export function AnchorHistoryDrawer({
   instanceId,
@@ -37,18 +49,57 @@ export function AnchorHistoryDrawer({
 }) {
   const query = useAnchorHistory(instanceId, anchor);
 
-  // Auto-focus the close button on open for keyboard users, and
-  // Esc to dismiss.
+  const dialogRef = useRef<HTMLDivElement | null>(null);
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
+  // Remember who had focus before the drawer opened so we can
+  // restore on close. ``HTMLElement`` only — if the pre-open focus
+  // was ``<body>`` we don't attempt restore.
+  const restoreFocusRef = useRef<HTMLElement | null>(null);
+
   useEffect(() => {
-    if (anchor) closeBtnRef.current?.focus();
+    if (!anchor) return;
+    const prev = document.activeElement;
+    restoreFocusRef.current =
+      prev instanceof HTMLElement && prev !== document.body ? prev : null;
+    // Defer focus to the next frame — the dialog may not be mounted
+    // in the DOM yet when the effect runs under Suspense.
+    const id = window.setTimeout(() => closeBtnRef.current?.focus(), 0);
+    return () => {
+      window.clearTimeout(id);
+      const target = restoreFocusRef.current;
+      // Only restore if the element is still in the DOM.
+      if (target && document.body.contains(target)) {
+        target.focus();
+      }
+    };
   }, [anchor]);
+
   useEffect(() => {
     if (!anchor) return;
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
         e.preventDefault();
         onClose();
+        return;
+      }
+      if (e.key === "Tab") {
+        // Focus trap: keep Tab inside the dialog.
+        const root = dialogRef.current;
+        if (!root) return;
+        const focusables = root.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        );
+        if (focusables.length === 0) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        const active = document.activeElement;
+        if (e.shiftKey && active === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && active === last) {
+          e.preventDefault();
+          first.focus();
+        }
       }
     }
     document.addEventListener("keydown", onKey);
@@ -63,72 +114,83 @@ export function AnchorHistoryDrawer({
   if (!anchor) return null;
 
   return (
-    <div
-      role="dialog"
-      aria-label="Anchor history"
-      className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-border bg-bg shadow-2xl"
-    >
-      <div className="flex items-start justify-between gap-3 border-b border-border p-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-1 text-xs text-muted-fg">
-            <Clock className="h-3 w-3" />
-            <span>Blame timeline</span>
+    <>
+      {/* Backdrop — click / tap anywhere outside the panel to close.
+          ``aria-hidden`` so the dialog's content remains the only a11y
+          target. */}
+      <div
+        aria-hidden="true"
+        onClick={onClose}
+        className="fixed inset-0 z-40 bg-black/20"
+      />
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Anchor history"
+        className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-border bg-bg shadow-2xl"
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-border p-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1 text-xs text-muted-fg">
+              <Clock className="h-3 w-3" />
+              <span>Blame timeline</span>
+            </div>
+            <h2 className="mt-1 truncate text-sm font-semibold">
+              {label ?? anchor}
+            </h2>
+            <p className="mt-0.5 truncate font-mono text-[10px] text-muted-fg">
+              {anchor}
+            </p>
           </div>
-          <h2 className="mt-1 truncate text-sm font-semibold">
-            {label ?? anchor}
-          </h2>
-          <p className="mt-0.5 truncate font-mono text-[10px] text-muted-fg">
-            {anchor}
-          </p>
+          <Button
+            ref={closeBtnRef}
+            variant="secondary"
+            size="sm"
+            onClick={onClose}
+            aria-label="Close"
+          >
+            <X className="h-4 w-4" />
+          </Button>
         </div>
-        <Button
-          ref={closeBtnRef}
-          variant="secondary"
-          size="sm"
-          onClick={onClose}
-          aria-label="Close"
-        >
-          <X className="h-4 w-4" />
-        </Button>
-      </div>
 
-      <div className="flex-1 overflow-y-auto p-3 text-sm">
-        {query.isLoading && (
-          <div className="text-muted-fg">Walking every backup…</div>
-        )}
-        {query.isError && (
-          <div className="text-danger">{String(query.error)}</div>
-        )}
-        {query.data && rendered.length === 0 && (
-          <div className="text-muted-fg">
-            No successful backups to compare.
-          </div>
-        )}
-        <ol className="space-y-2">
-          {rendered.map((r) =>
-            r.kind === "run" ? (
-              <li
-                key={`run-${r.startIdx}`}
-                className="flex items-center gap-2 text-xs text-muted-fg"
-              >
-                <span className="h-px flex-1 bg-border" />
-                {r.count} run{r.count === 1 ? "" : "s"} with no change
-                <span className="h-px flex-1 bg-border" />
-              </li>
-            ) : (
-              <EntryRow key={r.entry.backup_id} entry={r.entry} />
-            ),
+        <div className="flex-1 overflow-y-auto p-3 text-sm">
+          {query.isLoading && (
+            <div className="text-muted-fg">Walking every backup…</div>
           )}
-        </ol>
+          {query.isError && (
+            <div className="text-danger">{String(query.error)}</div>
+          )}
+          {query.data && rendered.length === 0 && (
+            <div className="text-muted-fg">
+              No successful backups to compare.
+            </div>
+          )}
+          <ol className="space-y-2">
+            {rendered.map((r) =>
+              r.kind === "run" ? (
+                <li
+                  key={`run-${r.startIdx}`}
+                  className="flex items-center gap-2 text-xs text-muted-fg"
+                >
+                  <span className="h-px flex-1 bg-border" />
+                  {r.count} run{r.count === 1 ? "" : "s"} with no change
+                  <span className="h-px flex-1 bg-border" />
+                </li>
+              ) : (
+                <EntryRow key={r.entry.backup_id} entry={r.entry} />
+              ),
+            )}
+          </ol>
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 
 // ---------------------- internals ---------------------------------
 
 function EntryRow({ entry }: { entry: AnchorHistoryChange }) {
-  const nav = useNavigate();
   const when = new Date(entry.started_at);
   return (
     <li
@@ -144,12 +206,12 @@ function EntryRow({ entry }: { entry: AnchorHistoryChange }) {
           {entry.is_change && <Badge tone="warn">changed</Badge>}
           {entry.value === null && <Badge tone="muted">missing</Badge>}
         </div>
+        {/* ``Link`` handles SPA navigation on plain click and lets
+            the browser handle middle-click / Cmd+click to open in a
+            new tab. An ``onClick`` with ``preventDefault`` would
+            kill both behaviours. */}
         <Link
           to={`/backups/${entry.backup_id}/view`}
-          onClick={(e) => {
-            e.preventDefault();
-            nav(`/backups/${entry.backup_id}/view`);
-          }}
           className="inline-flex items-center gap-1 text-xs text-muted-fg hover:text-accent"
           title="Open this backup"
         >

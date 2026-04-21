@@ -69,25 +69,35 @@ export function useFocusedAnchor(enabled: boolean): string | null {
     // anchors. Re-observe when the DOM shape under the main content
     // container mutates. Narrow the root to avoid pathological
     // churn — mutations outside the structured scroll container
-    // don't matter.
+    // don't matter. Debounce: typing into the filter bar produces
+    // dozens of child mutations per keystroke, each of which would
+    // rebuild observer membership across hundreds of anchors. Batch
+    // into a single re-observe per idle tick.
     const mutationRoot = document.querySelector<HTMLElement>(
       "[data-structured-root]",
     );
-    const mutator = new MutationObserver(() => {
-      // Rebuild observer membership without rebuilding the
-      // observer itself — cheaper than tearing down entirely.
+    let rebuildHandle: number | null = null;
+    const rebuild = () => {
+      rebuildHandle = null;
       const next = document.querySelectorAll<HTMLElement>(
         '[id^="xref-"], [id^="field-"]',
       );
       observer.disconnect();
       ratios.clear();
       for (const t of next) observer.observe(t);
+    };
+    const mutator = new MutationObserver(() => {
+      if (rebuildHandle !== null) return;
+      rebuildHandle = window.setTimeout(rebuild, 50);
     });
     if (mutationRoot) {
       mutator.observe(mutationRoot, { childList: true, subtree: true });
     }
 
     return () => {
+      if (rebuildHandle !== null) {
+        window.clearTimeout(rebuildHandle);
+      }
       observer.disconnect();
       mutator.disconnect();
     };

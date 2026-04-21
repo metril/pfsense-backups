@@ -51,7 +51,15 @@ export interface XrefBackEntry {
 interface XrefHistoryContextValue {
   stack: XrefBackEntry[];
   push: (entry: XrefBackEntry) => void;
-  pop: () => XrefBackEntry | null;
+  /** Remove the top entry. Returns void — read the current top via
+   *  ``stack[stack.length - 1]`` BEFORE calling ``pop`` to decide
+   *  where to navigate. The older ``pop(): XrefBackEntry | null``
+   *  pattern captured the popped value inside a ``setStack`` updater
+   *  and returned it synchronously; under React 18 strict mode /
+   *  concurrent rendering the updater can fire after ``pop`` returns,
+   *  so the caller saw ``null`` and the back-nav silently no-op'd.
+   *  Splitting peek and pop keeps the caller in control. */
+  pop: () => void;
   clear: () => void;
 }
 
@@ -133,14 +141,8 @@ export function XrefHistoryProvider({
     });
   }, []);
 
-  const pop = useCallback((): XrefBackEntry | null => {
-    let popped: XrefBackEntry | null = null;
-    setStack((prev) => {
-      if (prev.length === 0) return prev;
-      popped = prev[prev.length - 1];
-      return prev.slice(0, -1);
-    });
-    return popped;
+  const pop = useCallback((): void => {
+    setStack((prev) => (prev.length === 0 ? prev : prev.slice(0, -1)));
   }, []);
 
   const clear = useCallback(() => setStack([]), []);

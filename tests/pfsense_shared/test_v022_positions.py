@@ -12,11 +12,24 @@ from __future__ import annotations
 
 import textwrap
 
+from pfsense_shared.pfsense_parser import parse as parse_pfsense_xml
 from pfsense_shared.pfsense_positions import build_positions
 
 
 def _positions(xml: str) -> dict[str, tuple[int, int]]:
+    """Fallback-mode positions — no parser output, emits only what
+    lxml can see directly from the XML. Useful for testing individual
+    elements in isolation; the production ``/parsed`` endpoint always
+    passes ``parsed`` so the keys line up with the frontend."""
     return build_positions(textwrap.dedent(xml).strip().encode())
+
+
+def _positions_with_parsed(xml: str) -> dict[str, tuple[int, int]]:
+    """Production-mode positions: parse first, then build positions
+    with the parsed config so firewall + NAT keys match the frontend."""
+    blob = textwrap.dedent(xml).strip().encode()
+    parsed = parse_pfsense_xml(blob)
+    return build_positions(blob, parsed)
 
 
 def test_firewall_rule_anchored_by_tracker():
@@ -60,25 +73,51 @@ def test_firewall_rule_with_non_ident_tracker_sanitises_to_underscore():
     assert "xref-rule-fw_rule_42" in pos
 
 
-def test_nat_variants_are_not_indexed_yet():
-    """NAT rules are intentionally skipped by the positions builder
-    (v0.24.0 follow-up): the viewer anchors NAT rows with the
-    parser's synthesized ``key``, which lxml can't compute alone.
-    Make the gap explicit so a future change that DOES index NAT
-    deliberately updates this test rather than quietly regressing
-    the tab-switch sync with orphan tracker-keyed entries."""
-    pos = _positions(
-        """
-        <pfsense>
-          <nat>
-            <rule>
-              <tracker>100</tracker>
-            </rule>
-          </nat>
-        </pfsense>
-        """
-    )
-    assert not any(k.startswith("xref-nat-") for k in pos)
+def test_nat_positions_with_parsed_emit_parser_keys():
+    """v0.25.0 — when ``parsed`` is supplied, NAT rule positions
+    pair lxml's document-order walk with the parser's ``nat_rules``
+    list so keys match the frontend's
+    ``rowAnchorId("nat", r.key)`` emission exactly."""
+    import re
+
+    xml = """
+    <pfsense>
+      <nat>
+        <rule>
+          <tracker>100</tracker>
+          <interface>wan</interface>
+          <target>10.0.0.5</target>
+        </rule>
+      </nat>
+    </pfsense>
+    """
+    pos = _positions_with_parsed(xml)
+    # Exactly one xref-nat-* anchor, keyed by the parser's
+    # ``port_forward-...`` hash key (sanitised).
+    nat_keys = [k for k in pos if k.startswith("xref-nat-")]
+    assert len(nat_keys) == 1, nat_keys
+    # Sanity: the key shape is ``xref-nat-hash_...``.
+    assert re.match(r"^xref-nat-hash_[a-f0-9]{12}$", nat_keys[0])
+
+
+def test_firewall_rule_with_parsed_uses_parser_key():
+    """When ``parsed`` is supplied, firewall rule positions use the
+    parser's ``r.key`` (``tracker:XXX`` / ``hash:...``) sanitised —
+    matches the frontend's ``rowAnchorId("rule", r.key)`` emission."""
+    xml = """
+    <pfsense>
+      <filter>
+        <rule>
+          <tracker>1706288423</tracker>
+          <type>pass</type>
+        </rule>
+      </filter>
+    </pfsense>
+    """
+    pos = _positions_with_parsed(xml)
+    # With parsed, key is ``tracker:1706288423`` → sanitised
+    # ``tracker_1706288423``.
+    assert "xref-rule-tracker_1706288423" in pos
 
 
 def test_kind_anchors_cover_every_refkind():
@@ -118,6 +157,9 @@ def test_kind_anchors_cover_every_refkind():
           <vlans>
             <vlan><vlanif>em0.100</vlanif></vlan>
           </vlans>
+          <ifgroups>
+            <ifgroupentry><ifname>VPN</ifname></ifgroupentry>
+          </ifgroups>
           <interfaces>
             <wan/>
             <lan/>
@@ -142,6 +184,7 @@ def test_kind_anchors_cover_every_refkind():
         "xref-ipsec_phase1-1",
         "xref-lb_pool-web-pool",
         "xref-vlan-em0_100",
+        "xref-interface_group-VPN",
         "xref-interface-wan",
         "xref-interface-lan",
         "xref-interface-opt1",
@@ -237,6 +280,43 @@ def test_line_ranges_are_1_based_and_monotonic():
     assert h_end >= h_start
     s_start, _ = pos["section-system"]
     assert s_start == 2
+
+
+def test_positions_and_scopes_tables_stay_in_sync():
+    """Drift-resistance: every ``_KIND_ANCHORS`` kind in positions.py
+    must also resolve via ``_ROW_SCOPES`` in anchor_values.py, and
+    every ``_SINGLETON_SECTIONS`` key must appear in
+    ``_SINGLETON_PATH``. Failing this test means a frontend chip
+    will silently miss on the tab-switch or blame drawer."""
+    from pfsense_shared import pfsense_anchor_values as av
+    from pfsense_shared import pfsense_positions as pp
+
+    # Every row anchor kind has a resolver scope.
+    pos_kinds = {kind for kind, _, _ in pp._KIND_ANCHORS}
+    # ``interface`` is handled by ``_interface_anchors`` (element
+    # tag, not xpath+key_tag), so it's not in ``_KIND_ANCHORS`` but
+    # IS in ``_ROW_SCOPES``. Add it here so the assertion is
+    # symmetric.
+    pos_kinds.add("interface")
+    # Firewall + NAT rules aren't in ``_KIND_ANCHORS`` either (they
+    # go through ``_firewall_and_nat_anchors``); their scopes are
+    # ``rule`` / ``nat`` in ``_ROW_SCOPES``.
+    pos_kinds.update({"rule", "nat"})
+    scope_kinds = set(av._ROW_SCOPES.keys())
+    missing_scope = pos_kinds - scope_kinds
+    assert not missing_scope, (
+        f"positions emit anchor kinds with no resolver scope: {missing_scope}"
+    )
+
+    # Every singleton section emitted as ``section-{name}`` /
+    # ``field-{name}-*`` resolves via ``_SINGLETON_PATH``.
+    pos_singletons = {name for name, _, _ in pp._SINGLETON_SECTIONS}
+    path_singletons = set(av._SINGLETON_PATH.keys())
+    missing_path = pos_singletons - path_singletons
+    assert not missing_path, (
+        f"singleton sections emitted by positions with no "
+        f"_SINGLETON_PATH entry: {missing_path}"
+    )
 
 
 def test_missing_key_skips_row():

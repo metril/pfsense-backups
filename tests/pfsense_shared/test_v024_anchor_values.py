@@ -101,17 +101,20 @@ def test_row_anchors_resolve_to_dicts():
     import re
 
     cfg = _cfg(SAMPLE_XML)
-    rule = resolve_anchor_value(cfg, "xref-rule-1706288423")
+    # Firewall + NAT rules are keyed by the parser's synthesized
+    # ``r.key`` — ``tracker:1706288423`` for the test rule,
+    # ``hash:…`` for the NAT. Compute from the parsed row so the
+    # test doesn't hard-code the sanitised form.
+    rule_row = cfg.firewall_rules[0]
+    safe_rule_key = re.sub(r"[^A-Za-z0-9_-]", "_", rule_row.key)
+    rule = resolve_anchor_value(cfg, f"xref-rule-{safe_rule_key}")
     assert isinstance(rule, dict)
     assert rule["type"] == "pass"
     assert rule["descr"] == "allow lan"
 
-    # NAT rules use the parser's synthesized ``key`` (e.g.
-    # ``hash:b3838bbf606d``) — compute the anchor from the parsed
-    # config so the test doesn't hard-code a hash.
     nat_row = cfg.nat_rules[0]
-    safe_key = re.sub(r"[^A-Za-z0-9_-]", "_", nat_row.key)
-    nat = resolve_anchor_value(cfg, f"xref-nat-{safe_key}")
+    safe_nat_key = re.sub(r"[^A-Za-z0-9_-]", "_", nat_row.key)
+    nat = resolve_anchor_value(cfg, f"xref-nat-{safe_nat_key}")
     assert isinstance(nat, dict)
     assert nat["target"] == "10.0.0.5"
 
@@ -155,16 +158,70 @@ def test_missing_anchor_returns_none():
     earlier, etc.) resolve to None so the blame drawer can label
     them as absent rather than raising."""
     cfg = _cfg(SAMPLE_XML)
-    assert resolve_anchor_value(cfg, "xref-rule-9999999") is None
+    assert resolve_anchor_value(cfg, "xref-rule-tracker_9999999") is None
     assert resolve_anchor_value(cfg, "xref-alias-does-not-exist") is None
     assert resolve_anchor_value(cfg, "field-system-doesnotexist") is None
+
+
+def test_every_singleton_section_resolves():
+    """``_SINGLETON_PATH`` must cover every non-row section the
+    frontend might emit a ``field-*`` or ``section-*`` anchor for.
+    Package singletons use dotted descent into
+    ``installedpackages``; this test exercises the descent."""
+    xml = """
+    <pfsense>
+      <theme>Dark</theme>
+      <diag>
+        <shownoaliases>on</shownoaliases>
+      </diag>
+      <installedpackages>
+        <avahi>
+          <enable>on</enable>
+        </avahi>
+        <miniupnpd>
+          <enable_upnp>on</enable_upnp>
+        </miniupnpd>
+        <telegraf>
+          <url>http://host:8086</url>
+        </telegraf>
+      </installedpackages>
+    </pfsense>
+    """
+    cfg = _cfg(xml)
+    # ThemePreference stores the theme name under ``name``.
+    assert resolve_anchor_value(cfg, "field-theme-name") == "Dark"
+    assert resolve_anchor_value(cfg, "field-diag-shownoaliases") == "yes"
+    assert resolve_anchor_value(cfg, "field-avahi-enable") == "yes"
+    assert resolve_anchor_value(cfg, "field-miniupnpd-enable_upnp") == "yes"
+    assert resolve_anchor_value(cfg, "field-telegraf-url") == "http://host:8086"
+
+
+def test_interface_group_anchor_resolves():
+    """``interface_group`` is a full ``RefKind`` on the frontend but
+    was missing from ``_ROW_SCOPES`` in v0.22.0–v0.24.0. Resolver must
+    find the group by ``ifname`` so the blame drawer can show it."""
+    xml = """
+    <pfsense>
+      <ifgroups>
+        <ifgroupentry>
+          <ifname>VPN</ifname>
+          <members>wan lan</members>
+          <descr>VPN peers</descr>
+        </ifgroupentry>
+      </ifgroups>
+    </pfsense>
+    """
+    cfg = _cfg(xml)
+    got = resolve_anchor_value(cfg, "xref-interface_group-VPN")
+    assert isinstance(got, dict)
+    assert got["ifname"] == "VPN"
 
 
 def test_sanitised_key_matching():
     """Trackers with non-ident chars (``:`` / ``.`` / ``|``) get
     sanitised to ``_`` in the frontend anchor id. The resolver
-    sanitises candidate row keys the same way when matching so the
-    two sides agree."""
+    sanitises candidate row keys (``tracker:fw:rule.42``) the same
+    way when matching so the two sides agree."""
     xml = """
     <pfsense>
       <filter>
@@ -176,9 +233,9 @@ def test_sanitised_key_matching():
     </pfsense>
     """
     cfg = _cfg(xml)
-    # The frontend would render this row with anchorId
-    # ``xref-rule-fw_rule_42`` — the underscores must line up.
-    assert resolve_anchor_value(cfg, "xref-rule-fw_rule_42") is not None
+    # Parser produces ``r.key = "tracker:fw:rule.42"``; frontend
+    # sanitises that to ``tracker_fw_rule_42``. Backend must match.
+    assert resolve_anchor_value(cfg, "xref-rule-tracker_fw_rule_42") is not None
 
 
 def test_malformed_anchor_returns_none():

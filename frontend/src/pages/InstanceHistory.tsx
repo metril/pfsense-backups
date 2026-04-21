@@ -278,14 +278,26 @@ export function InstanceHistoryPage() {
               value={focusIdx < 0 ? 0 : focusIdx}
               onChange={onSliderChange}
               aria-label="Backup timeline"
-              aria-valuetext={focused?.started_at}
+              aria-valuetext={
+                focused
+                  ? new Date(focused.started_at).toLocaleString()
+                  : undefined
+              }
               className="w-full"
             />
             <div className="mt-1 flex justify-between text-xs text-muted-fg">
               <span title={backups[0]?.started_at}>
                 {new Date(backups[0].started_at).toLocaleDateString()}
               </span>
-              <span className="font-mono">
+              {/* Position counter is the primary feedback for keyboard /
+                  screen-reader users scrubbing the timeline — wrap in a
+                  polite live region so assistive tech announces the new
+                  position without interrupting ongoing speech. */}
+              <span
+                className="font-mono"
+                aria-live="polite"
+                aria-atomic="true"
+              >
                 #{focusIdx + 1} / {backups.length}
               </span>
               <span title={backups[backups.length - 1]?.started_at}>

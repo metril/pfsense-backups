@@ -11,9 +11,13 @@ Anchor-id conventions mirror
   one of ``rule``, ``nat``, ``alias``, ``interface``, ``vlan``,
   ``gateway``, ``gateway_group``, ``schedule``, ``ca``, ``cert``,
   ``crl``, ``authserver``, ``openvpn_server``, ``openvpn_client``,
-  ``ipsec_phase1``, ``lb_pool``, ``user``, ``group``.
+  ``openvpn_csc``, ``ipsec_phase1``, ``ipsec_phase2``, ``lb_pool``,
+  ``user``, ``group``, ``interface_group``, ``haproxy_backend``.
 - ``field-{section}-{name}`` — a single field inside a singleton
-  panel (``<system>``, ``<dns>``, etc.).
+  panel (``<system>``, ``<dns>``, etc.). ``section`` may refer to a
+  package singleton (``avahi``, ``miniupnpd``, ``telegraf``,
+  ``openvpn_client_export``) — the resolver walks a dotted path on
+  ``ParsedConfig`` for those.
 - ``section-{section}``       — falls through to the whole section
   object; rarely useful but cheap to support.
 
@@ -39,7 +43,7 @@ from pfsense_shared.pfsense_parser import ParsedConfig
 # row where ``getattr(row, key_field) == key``, and returns a dict of
 # the row's fields (model_dump).
 _ROW_SCOPES: dict[str, tuple[str, str]] = {
-    "rule": ("firewall_rules", "tracker"),
+    "rule": ("firewall_rules", "key"),
     # NAT rules don't have a reliable ``<tracker>`` in the XML; the
     # viewer's ``rowAnchorId("nat", r.key)`` uses the parser's
     # synthesized ``key`` (``hash:…`` or ``port_forward-N``). Match
@@ -57,16 +61,23 @@ _ROW_SCOPES: dict[str, tuple[str, str]] = {
     "authserver": ("authservers", "name"),
     "openvpn_server": ("openvpn_servers", "vpnid"),
     "openvpn_client": ("openvpn_clients", "vpnid"),
+    "openvpn_csc": ("openvpn_cscs", "common_name"),
     "ipsec_phase1": ("ipsec_phase1", "ikeid"),
+    "ipsec_phase2": ("ipsec_phase2", "uniqid"),
     "lb_pool": ("lb_pools", "name"),
     "user": ("users", "name"),
     "group": ("groups", "name"),
+    "interface_group": ("interface_groups", "ifname"),
+    # Package-level row list — dotted path descends into
+    # ``installedpackages.haproxy.backends``. The resolver handles
+    # dotted paths in ``list_attr``.
+    "haproxy_backend": ("installedpackages.haproxy.backends", "name"),
 }
 
 # Singleton sections — ``field-{section}-{name}`` reads
-# ``getattr(getattr(cfg, SINGLETON_PATH[section]), name)``. Most
-# frontend "section names" match ParsedConfig field names one-for-one;
-# the exceptions map via this table.
+# ``getattr(getattr(cfg, SINGLETON_PATH[section]), name)``. The value
+# may be a dotted attribute path (``installedpackages.avahi``) so
+# package-level singletons resolve without special-casing.
 _SINGLETON_PATH: dict[str, str] = {
     "system": "system",
     "dns": "dns",
@@ -82,6 +93,13 @@ _SINGLETON_PATH: dict[str, str] = {
     "ups": "ups",
     "ftpproxy": "ftpproxy",
     "diag": "diag",
+    "theme": "theme",
+    # Package-level singletons. Dotted paths descend
+    # ParsedConfig.installedpackages.<pkg>.
+    "avahi": "installedpackages.avahi",
+    "miniupnpd": "installedpackages.miniupnpd",
+    "openvpn_client_export": "installedpackages.openvpn_client_export",
+    "telegraf": "installedpackages.telegraf",
 }
 
 _ANCHOR_RE = re.compile(r"^(xref|field|section)-([A-Za-z0-9_]+?)(?:-(.+))?$")
@@ -108,6 +126,17 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
     return {"value": row}
 
 
+def _descend(obj: Any, path: str) -> Any:
+    """Walk a dotted attribute path; return ``None`` if any segment
+    doesn't exist."""
+    cur = obj
+    for part in path.split("."):
+        if cur is None:
+            return None
+        cur = getattr(cur, part, None)
+    return cur
+
+
 def resolve_anchor_value(
     cfg: ParsedConfig, anchor_id: str
 ) -> dict[str, Any] | str | None:
@@ -126,19 +155,19 @@ def resolve_anchor_value(
     if namespace == "section":
         # ``section-{name}`` — return the whole section object if we
         # know it's a singleton; rows sit under row scopes already.
-        attr = _SINGLETON_PATH.get(scope)
-        if attr is None:
+        path = _SINGLETON_PATH.get(scope)
+        if path is None:
             return None
-        section = getattr(cfg, attr, None)
+        section = _descend(cfg, path)
         return _row_to_dict(section) if section is not None else None
 
     if namespace == "field":
         if tail is None:
             return None
-        attr = _SINGLETON_PATH.get(scope)
-        if attr is None:
+        path = _SINGLETON_PATH.get(scope)
+        if path is None:
             return None
-        section = getattr(cfg, attr, None)
+        section = _descend(cfg, path)
         if section is None:
             return None
         # Direct attribute lookup on the Pydantic model. The field
@@ -153,7 +182,9 @@ def resolve_anchor_value(
     if mapping is None:
         return None
     list_attr, key_attr = mapping
-    rows = getattr(cfg, list_attr, None)
+    # ``list_attr`` may be dotted (``installedpackages.haproxy.backends``)
+    # for row lists that live under a nested model.
+    rows = _descend(cfg, list_attr) if "." in list_attr else getattr(cfg, list_attr, None)
     if rows is None:
         return None
     wanted = _safe(tail)
