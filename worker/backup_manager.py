@@ -1008,7 +1008,13 @@ class PfSenseBackupManager:
                 # Dump more signal than before so the user can diagnose a
                 # misidentified response (themed dashboard, MFA prompt,
                 # account locked, password-expired redirect, etc.).
-                snippet = body[:400].replace("\n", " ").strip()
+                # 100 bytes (was 400): pfSense's failed-login page
+                # reflects the submitted username back into the HTML
+                # error message. 400 bytes was enough to capture that
+                # in a shape log aggregators would surface; 100 is
+                # enough for structural diagnosis (<html>, <form>,
+                # Dashboard, etc.) without the reflected value.
+                snippet = body[:100].replace("\n", " ").strip()
                 log.error(
                     "Authentication failed for %s "
                     "(status=%d, final_url=%s, cookies=%s, body=%d bytes, "

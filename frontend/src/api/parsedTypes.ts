@@ -915,9 +915,6 @@ export interface FrrOspfConfig {
   interfaces: FrrOspfInterface[];
 }
 
-// OSPFv3 (IPv6) rows carry the same field set as OSPFv2.
-export type FrrOspfdInterface = FrrOspfInterface;
-
 export interface FrrConfig {
   enabled: boolean;
   bgp: FrrBgpConfig | null;
@@ -928,7 +925,10 @@ export interface FrrConfig {
   global_acls_present: boolean;
   global_prefixes_present: boolean;
   bgp6_present: boolean;
-  ospfd_interfaces: FrrOspfdInterface[];
+  // OSPFv3 (IPv6) rows carry the same field set as OSPFv2 — reuse the
+  // existing type directly rather than aliasing (the old indirection
+  // had no independent imports).
+  ospfd_interfaces: FrrOspfInterface[];
 }
 
 export interface ZabbixAgentConfig {

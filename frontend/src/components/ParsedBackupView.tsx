@@ -210,7 +210,7 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
     <XrefHistoryProvider scope={`view:${backupId}`}>
     <FilterProvider query={filterQuery}>
     <CardGroupProvider scope={`view:${backupId}`}>
-    <DeepLinkBridge includeHashchange />
+    <DeepLinkBridge />
     <XrefBackPill />
     <ViewerLayout
       cfg={data}

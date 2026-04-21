@@ -352,7 +352,7 @@ export function ParsedBackupDiff({
   const body = (
     <FilterProvider query={filterQuery}>
       <CardGroupProvider scope={`diff:${a}-${b}`}>
-        <DeepLinkBridge includeHashchange />
+        <DeepLinkBridge />
         <DiffLayout
           diff={data}
           filterQuery={filterQuery}

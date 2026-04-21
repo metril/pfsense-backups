@@ -116,6 +116,31 @@ encrypted pfSense credentials are unrecoverable.
 **Back up the entire `./data/` directory off-site.** One hourly `rsync` or
 `restic` job is enough.
 
+### If `secret.key` is lost
+
+The worker generates a fresh key on first boot (0600 permissions, owner-only).
+If `secret.key` is deleted or replaced, the web service will start normally but
+every stored credential decrypt will silently throw `cryptography.fernet.
+InvalidToken`:
+
+- The instance list renders, but usernames show `<decryption failed>` and
+  backups fail with a 409 when triggered.
+- Encrypted-backup ciphertexts on disk are unaffected — only the *password used
+  to encrypt them* (stored in `Backup.encrypt_password_ct`) is opaque.
+
+**Recovery**: re-enter each instance's pfSense password via the UI. Encrypted
+historical backups remain readable only via `openssl enc -aes-256-cbc` with
+whatever password was used when they were taken — download the raw ciphertext
+and decrypt offline.
+
+### If `app.db` is lost
+
+No instances, no schedules, no audit history. The backup XML files on
+`/backups` survive. Restore the file from your off-site copy if one exists; if
+not, re-add each instance in the UI — the worker will write new `Backup` rows
+as backups succeed, and old on-disk files become orphans you can either delete
+or leave in place.
+
 ## Security notes
 
 - pfSense credentials are encrypted with Fernet at rest (`Crypto` class in

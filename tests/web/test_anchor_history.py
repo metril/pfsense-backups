@@ -205,3 +205,153 @@ async def test_anchor_history_empty_instance_returns_empty_list(
     )
     assert r.status_code == 200
     assert r.json()["entries"] == []
+
+
+async def test_anchor_history_missing_password_returns_409(
+    client: AsyncClient,
+    app_and_session: tuple[FastAPI, async_sessionmaker[AsyncSession], Crypto],
+    tmp_path: Path,
+) -> None:
+    """An encrypted backup row without a per-row password ciphertext
+    raises ``_WalkAbortError`` inside the parse loop; the outer
+    coroutine must translate it to a proper 409 HTTP response rather
+    than surfacing an uncaught exception as 500. Regression guard for
+    the v0.32.0 layering fix — the translation path lives inside
+    ``asyncio.to_thread`` and is easy to regress invisibly."""
+    _, session_factory, crypto = app_and_session
+    inst = await _seed_instance(session_factory)
+
+    # Build an encrypted file on disk but LEAVE ``encrypt_password_ct``
+    # unset — mimics a row imported from an old instance before per-
+    # row passwords existed.
+    payload = encrypt_pfsense_backup(_xml("gw-locked"), "the-real-password")
+    p = tmp_path / "daily_orphan.xml"
+    p.write_bytes(payload)
+    async with session_factory() as s:
+        row = Backup(
+            instance_id=inst.id,
+            started_at=datetime(2026, 4, 1, tzinfo=UTC),
+            finished_at=datetime(2026, 4, 1, tzinfo=UTC),
+            duration_seconds=1.0,
+            filename=p.name,
+            path=str(p),
+            size_bytes=p.stat().st_size,
+            compressed=False,
+            success=True,
+            encrypted=True,
+            encrypt_password_ct=None,  # the load-bearing None
+        )
+        s.add(row)
+        await s.commit()
+
+    r = await client.get(
+        f"/api/backups/instance/{inst.id}/anchor-history"
+        "?anchor=field-system-hostname"
+    )
+    assert r.status_code == 409, r.text
+    assert "no per-row password" in r.json()["detail"]
+
+
+async def test_anchor_history_malformed_xml_returns_422(
+    client: AsyncClient,
+    app_and_session: tuple[FastAPI, async_sessionmaker[AsyncSession], Crypto],
+    tmp_path: Path,
+) -> None:
+    """A truncated / malformed XML file in the walk path must produce
+    a 422 rather than crashing as a 500. The ``PfSenseParseError`` ->
+    ``_WalkAbortError(422)`` translation is all that separates a
+    crafted-input 500 from a polite client-visible rejection."""
+    _, session_factory, _ = app_and_session
+    inst = await _seed_instance(session_factory)
+
+    p = tmp_path / "daily_truncated.xml"
+    p.write_bytes(b"<pfsense><system><hostname>trunc")
+    async with session_factory() as s:
+        row = Backup(
+            instance_id=inst.id,
+            started_at=datetime(2026, 4, 1, tzinfo=UTC),
+            finished_at=datetime(2026, 4, 1, tzinfo=UTC),
+            duration_seconds=1.0,
+            filename=p.name,
+            path=str(p),
+            size_bytes=p.stat().st_size,
+            compressed=False,
+            success=True,
+            encrypted=False,
+        )
+        s.add(row)
+        await s.commit()
+
+    r = await client.get(
+        f"/api/backups/instance/{inst.id}/anchor-history"
+        "?anchor=field-system-hostname"
+    )
+    assert r.status_code == 422, r.text
+    assert "could not be parsed" in r.json()["detail"]
+
+
+async def test_anchor_history_mixed_encryption_audits_once(
+    client: AsyncClient,
+    app_and_session: tuple[FastAPI, async_sessionmaker[AsyncSession], Crypto],
+    tmp_path: Path,
+) -> None:
+    """An instance that was unencrypted then turned encryption on has
+    a mix of plain + encrypted backups. ``any_encrypted = any(...)``
+    should still fire the audit exactly once and the walk should
+    correctly read both shapes."""
+    _, session_factory, crypto = app_and_session
+    inst = await _seed_instance(session_factory)
+
+    backup_password = "unit-test-mixed"
+    t0 = datetime(2026, 4, 1, tzinfo=UTC)
+    # Two plain backups, then two encrypted.
+    for i, hostname in enumerate(["gw-a", "gw-b"]):
+        p = tmp_path / f"plain_{i}.xml"
+        p.write_bytes(_xml(hostname))
+        async with session_factory() as s:
+            s.add(Backup(
+                instance_id=inst.id,
+                started_at=t0 + timedelta(days=i),
+                finished_at=t0 + timedelta(days=i),
+                duration_seconds=1.0,
+                filename=p.name,
+                path=str(p),
+                size_bytes=p.stat().st_size,
+                compressed=False,
+                success=True,
+                encrypted=False,
+            ))
+            await s.commit()
+    for i, hostname in enumerate(["gw-c", "gw-d"], start=2):
+        p = tmp_path / f"enc_{i}.xml"
+        p.write_bytes(encrypt_pfsense_backup(_xml(hostname), backup_password))
+        async with session_factory() as s:
+            s.add(Backup(
+                instance_id=inst.id,
+                started_at=t0 + timedelta(days=i),
+                finished_at=t0 + timedelta(days=i),
+                duration_seconds=1.0,
+                filename=p.name,
+                path=str(p),
+                size_bytes=p.stat().st_size,
+                compressed=False,
+                success=True,
+                encrypted=True,
+                encrypt_password_ct=crypto.encrypt(backup_password),
+            ))
+            await s.commit()
+
+    r = await client.get(
+        f"/api/backups/instance/{inst.id}/anchor-history"
+        "?anchor=field-system-hostname"
+    )
+    assert r.status_code == 200, r.text
+    values = [e["value"] for e in r.json()["entries"]]
+    assert values == ["gw-a", "gw-b", "gw-c", "gw-d"]
+
+    # Single audit entry even though only SOME of the backups were
+    # encrypted — the audit signals the drill-in as a whole.
+    count = await count_audit_entries(
+        session_factory, "view_decrypted", "anchor_history"
+    )
+    assert count == 1

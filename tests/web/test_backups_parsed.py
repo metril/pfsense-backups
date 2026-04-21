@@ -11,6 +11,8 @@ serialized as the structured Pydantic model.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import FastAPI
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -51,6 +53,30 @@ async def test_parsed_plain_backup_returns_structured_config(
 async def test_parsed_missing_backup_returns_404(client: AsyncClient) -> None:
     r = await client.get("/api/backups/9999/parsed")
     assert r.status_code == 404
+
+
+async def test_parsed_malformed_xml_returns_422(
+    client: AsyncClient,
+    app_and_session: tuple[FastAPI, async_sessionmaker[AsyncSession], Crypto],
+    tmp_path: Path,
+) -> None:
+    """A partially-written or genuinely-invalid XML file must return
+    422 (unprocessable entity) rather than 500. The ``PfSenseParseError``
+    wrapper translates the stdlib ``ParseError`` into a client-visible
+    message instead of a Python traceback."""
+    from .conftest import _seed_backup_row, _seed_instance
+
+    _, session_factory, _ = app_and_session
+    inst = await _seed_instance(session_factory)
+    p = tmp_path / "truncated.xml"
+    p.write_bytes(b"<pfsense><system><hostname>oh no")
+    row = await _seed_backup_row(
+        session_factory, instance_id=inst.id, path=p, encrypted=False
+    )
+
+    r = await client.get(f"/api/backups/{row.id}/parsed")
+    assert r.status_code == 422, r.text
+    assert "not valid XML" in r.json()["detail"]
 
 
 async def test_parsed_gzipped_backup_is_decompressed(

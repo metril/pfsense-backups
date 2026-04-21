@@ -17,20 +17,11 @@ import { useCardGroup } from "@/components/CardGroupContext";
  *   ``snapTarget``. Keeps ``xref.ts`` pure DOM (it can't import React
  *   context directly).
  *
- * Props:
- *   ``includeHashchange`` — both pages default this to ``true``. The
- *   diff page's summary strip anchors fire ``hashchange`` natively,
- *   and since v0.14.0 those targets may be collapsed cards that need
- *   to be auto-opened before the scroll lands. Setting this to
- *   ``false`` skips that auto-open and produces the same silent
- *   no-op the v0.15.0 review flagged. Pass ``false`` only for pages
- *   with no Card collapse behaviour at all.
+ * Both viewer and diff pages mount this; there is no configuration
+ * knob — a previous ``includeHashchange`` prop had no ``false``
+ * caller (dead branch; removed in v0.33.0).
  */
-export function DeepLinkBridge({
-  includeHashchange = true,
-}: {
-  includeHashchange?: boolean;
-}) {
+export function DeepLinkBridge() {
   const groupCtx = useCardGroup();
 
   // On mount: pick up whatever hash is in the URL right now.
@@ -45,14 +36,16 @@ export function DeepLinkBridge({
     return;
   }, []);
 
-  // hashchange listener (viewer only, by default).
+  // hashchange listener — ``hashchange`` fires natively when the diff
+  // summary strip or any ``<a href="#...">`` is clicked; since v0.14.0
+  // those targets may be inside collapsed cards, so we re-run
+  // ``expandThenScrollToHash`` to auto-open + scroll.
   useEffect(() => {
-    if (!includeHashchange) return;
     if (typeof window === "undefined") return;
     const onHash = () => expandThenScrollToHash(window.location.hash);
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
-  }, [includeHashchange]);
+  }, []);
 
   // Custom event → CardGroupProvider.snapTarget bridge.
   //

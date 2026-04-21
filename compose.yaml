@@ -63,11 +63,17 @@ services:
       # arbitrary upstreams. This compose topology runs the app behind
       # Traefik on a Docker bridge network; the connecting address
       # uvicorn sees is the bridge gateway (172.x), which is outside
-      # the default list. Trust anything on the bridge so
-      # ``request.client.host`` reflects the real client and audit
-      # logs stay useful. If you expose the container port directly
-      # (no proxy), tighten this back to ``127.0.0.1,::1``.
-      TRUSTED_PROXIES: "*"
+      # the default list. The default value ``*`` trusts anything on
+      # the bridge so ``request.client.host`` reflects the real
+      # client and audit logs stay useful.
+      #
+      # v0.33.0 — this is now overridable via ``.env`` for operators
+      # who expose the container port directly (no Traefik). Set
+      # ``TRUSTED_PROXIES=127.0.0.1,::1`` (or the specific proxy IP)
+      # in ``.env`` to disable wildcard trust. Leaving it at ``*``
+      # when bypassing the proxy makes ``X-Forwarded-For`` spoofable
+      # by any client that can reach the port.
+      TRUSTED_PROXIES: "${TRUSTED_PROXIES:-*}"
 
     volumes:
       # Shared DB + Fernet key with the worker.
