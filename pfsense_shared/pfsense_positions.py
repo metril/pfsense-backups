@@ -32,6 +32,7 @@ tests that exercise the builder in isolation still pass.
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import TYPE_CHECKING
 
@@ -39,6 +40,8 @@ from lxml import etree
 
 if TYPE_CHECKING:
     from pfsense_shared.pfsense_parser import ParsedConfig
+
+log = logging.getLogger(__name__)
 
 # Anchor-id safe-charset — mirrors the ``safe`` helper in
 # ``frontend/src/lib/xref.ts``. Any char outside ``[A-Za-z0-9_-]``
@@ -100,7 +103,9 @@ _KIND_ANCHORS: list[tuple[str, str, str]] = [
     ("authserver", "system/authserver", "name"),
     ("openvpn_server", "openvpn/openvpn-server", "vpnid"),
     ("openvpn_client", "openvpn/openvpn-client", "vpnid"),
+    ("openvpn_csc", "openvpn/openvpn-csc", "common_name"),
     ("ipsec_phase1", "ipsec/phase1", "ikeid"),
+    ("ipsec_phase2", "ipsec/phase2", "uniqid"),
     ("lb_pool", "load_balancer/lbpool", "name"),
     ("user", "system/user", "name"),
     ("group", "system/group", "name"),
@@ -165,6 +170,15 @@ def _firewall_and_nat_anchors(
                 _add(positions, f"xref-rule-{_safe(key)}", el)
 
     n_el = root.find("nat")
+    if n_el is not None and parsed is None:
+        # Fallback mode (tests, any future caller that forgets to
+        # pass ``parsed``): we can't compute the parser's synthesized
+        # NAT keys without the parser. Surface the degradation so it
+        # doesn't silently ship.
+        log.debug(
+            "build_positions called without parsed; NAT anchors will "
+            "be skipped (frontend rows will miss on tab-switch)"
+        )
     if n_el is not None and parsed is not None:
         # Mirror the exact walk order used by
         # ``pfsense_sections.nat.parse``:
@@ -181,6 +195,17 @@ def _firewall_and_nat_anchors(
         if len(parsed.nat_rules) == len(nat_els):
             for el, nat_rule in zip(nat_els, parsed.nat_rules, strict=True):
                 _add(positions, f"xref-nat-{_safe(nat_rule.key)}", el)
+        else:
+            # Length disagrees with parser — a comment / PI between
+            # rule elements, an unknown NAT kind, etc. Fall back to
+            # tracker-keyed anchors for the port-forward children.
+            # Better to surface SOME tab-switch target than none; the
+            # frontend's itemId miss gracefully degrades to the
+            # section anchor on misses.
+            for el in n_el.findall("rule"):
+                key = _findtext(el, "tracker")
+                if key:
+                    _add(positions, f"xref-nat-{_safe(key)}", el)
 
 
 # ---------------------------------------------------------------- #

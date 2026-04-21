@@ -77,8 +77,15 @@ export function useFocusedAnchor(enabled: boolean): string | null {
       "[data-structured-root]",
     );
     let rebuildHandle: number | null = null;
+    // ``active`` guards against a race where the debounced rebuild
+    // fires between the cleanup running and the new observer being
+    // installed — rebuild would otherwise re-observe on the
+    // just-disconnected observer, silently leaking membership for
+    // the next mount cycle.
+    let active = true;
     const rebuild = () => {
       rebuildHandle = null;
+      if (!active) return;
       const next = document.querySelectorAll<HTMLElement>(
         '[id^="xref-"], [id^="field-"]',
       );
@@ -95,6 +102,7 @@ export function useFocusedAnchor(enabled: boolean): string | null {
     }
 
     return () => {
+      active = false;
       if (rebuildHandle !== null) {
         window.clearTimeout(rebuildHandle);
       }

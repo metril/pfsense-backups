@@ -289,15 +289,15 @@ export function InstanceHistoryPage() {
               <span title={backups[0]?.started_at}>
                 {new Date(backups[0].started_at).toLocaleDateString()}
               </span>
-              {/* Position counter is the primary feedback for keyboard /
-                  screen-reader users scrubbing the timeline — wrap in a
-                  polite live region so assistive tech announces the new
-                  position without interrupting ongoing speech. */}
-              <span
-                className="font-mono"
-                aria-live="polite"
-                aria-atomic="true"
-              >
+              {/* Visual position counter. The slider's own
+                  ``aria-valuetext`` already drives the screen-reader
+                  announcement for this view (with the localised
+                  timestamp), throttled properly by the AT. Adding
+                  ``aria-live="polite"`` here would queue a second
+                  announcement per drag tick — which screen readers
+                  drain for seconds after the drag ends. So this is
+                  visual-only. */}
+              <span className="font-mono">
                 #{focusIdx + 1} / {backups.length}
               </span>
               <span title={backups[backups.length - 1]?.started_at}>

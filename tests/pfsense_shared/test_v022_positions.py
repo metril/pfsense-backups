@@ -283,29 +283,47 @@ def test_line_ranges_are_1_based_and_monotonic():
 
 
 def test_positions_and_scopes_tables_stay_in_sync():
-    """Drift-resistance: every ``_KIND_ANCHORS`` kind in positions.py
-    must also resolve via ``_ROW_SCOPES`` in anchor_values.py, and
-    every ``_SINGLETON_SECTIONS`` key must appear in
-    ``_SINGLETON_PATH``. Failing this test means a frontend chip
-    will silently miss on the tab-switch or blame drawer."""
+    """Drift-resistance, both directions: every ``_KIND_ANCHORS``
+    kind in positions.py must also resolve via ``_ROW_SCOPES`` in
+    anchor_values.py, and every ``_ROW_SCOPES`` entry must have a
+    corresponding positions emitter so the blame drawer and the
+    tab-switch always agree on which anchors are reachable.
+
+    Adding a resolver scope without a matching positions entry
+    produces silent tab-switch misses — the blame drawer resolves
+    the anchor but the Raw XML tab can't find it. Adding a positions
+    entry without a resolver scope produces silent blame-drawer
+    misses — the Raw XML tab scrolls correctly but the history
+    drawer returns None for every backup."""
     from pfsense_shared import pfsense_anchor_values as av
     from pfsense_shared import pfsense_positions as pp
 
-    # Every row anchor kind has a resolver scope.
+    # Positions side: every kind emitted as an anchor.
     pos_kinds = {kind for kind, _, _ in pp._KIND_ANCHORS}
     # ``interface`` is handled by ``_interface_anchors`` (element
     # tag, not xpath+key_tag), so it's not in ``_KIND_ANCHORS`` but
-    # IS in ``_ROW_SCOPES``. Add it here so the assertion is
-    # symmetric.
+    # IS in ``_ROW_SCOPES``. Add it so the assertion is symmetric.
     pos_kinds.add("interface")
     # Firewall + NAT rules aren't in ``_KIND_ANCHORS`` either (they
     # go through ``_firewall_and_nat_anchors``); their scopes are
     # ``rule`` / ``nat`` in ``_ROW_SCOPES``.
     pos_kinds.update({"rule", "nat"})
+
     scope_kinds = set(av._ROW_SCOPES.keys())
+
     missing_scope = pos_kinds - scope_kinds
     assert not missing_scope, (
-        f"positions emit anchor kinds with no resolver scope: {missing_scope}"
+        f"positions emit anchor kinds with no resolver scope: "
+        f"{missing_scope}"
+    )
+
+    missing_positions = scope_kinds - pos_kinds
+    assert not missing_positions, (
+        f"resolver scopes with no matching positions emitter: "
+        f"{missing_positions} — adding a _ROW_SCOPES entry without "
+        f"also adding to _KIND_ANCHORS (or _interface_anchors / "
+        f"_firewall_and_nat_anchors) means the blame drawer can "
+        f"resolve an anchor the Raw XML tab-switch can't find"
     )
 
     # Every singleton section emitted as ``section-{name}`` /
@@ -316,6 +334,12 @@ def test_positions_and_scopes_tables_stay_in_sync():
     assert not missing_path, (
         f"singleton sections emitted by positions with no "
         f"_SINGLETON_PATH entry: {missing_path}"
+    )
+    # Reverse direction for singletons too.
+    missing_pos_singletons = path_singletons - pos_singletons
+    assert not missing_pos_singletons, (
+        f"_SINGLETON_PATH entries with no matching "
+        f"_SINGLETON_SECTIONS emitter: {missing_pos_singletons}"
     )
 
 

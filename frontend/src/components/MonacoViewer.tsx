@@ -98,8 +98,16 @@ export default function MonacoViewer({
   // and mutating Monaco decorations is a side effect that would
   // fire under React 18 strict mode / concurrent rendering in ways
   // that could double-apply or leak the ``suppressCursor`` flag.
+  //
+  // If the editor hasn't mounted yet we still sync ``lastFocusRef``
+  // so ``handleMount`` doesn't double-apply when the prop arrives
+  // before the editor is ready (rapid tab-switch + slider scrub
+  // can produce focusLine changes between render and mount).
   useEffect(() => {
-    if (!editorRef.current) return;
+    if (!editorRef.current) {
+      lastFocusRef.current = focusLine;
+      return;
+    }
     if (lastFocusRef.current === focusLine) return;
     applyFocus(focusLine);
     lastFocusRef.current = focusLine;

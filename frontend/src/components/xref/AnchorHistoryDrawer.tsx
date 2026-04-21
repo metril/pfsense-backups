@@ -117,11 +117,14 @@ export function AnchorHistoryDrawer({
     <>
       {/* Backdrop — click / tap anywhere outside the panel to close.
           ``aria-hidden`` so the dialog's content remains the only a11y
-          target. */}
+          target. ``z-[45]`` sits ABOVE the floating back-pill
+          (``z-40``) so the pill doesn't intercept clicks while the
+          drawer is open, and BELOW the drawer panel (``z-50``) so the
+          dialog itself stays interactive. */}
       <div
         aria-hidden="true"
         onClick={onClose}
-        className="fixed inset-0 z-40 bg-black/20"
+        className="fixed inset-0 z-[45] bg-black/20"
       />
       <div
         ref={dialogRef}
