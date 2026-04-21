@@ -2,21 +2,33 @@
 
 Boots Prometheus metrics, ZMQ publisher/listener, APScheduler, and signals;
 then blocks until SIGTERM/SIGINT for graceful shutdown.
+
+Subcommands (via ``python -m worker <cmd>``):
+
+- (default) — run the worker loop described above.
+- ``rotate-key`` — generate a fresh Fernet key, re-encrypt every
+  stored ciphertext with it, and prune the legacy keys from the
+  secret-key file. Must be run with both the worker and web service
+  stopped so neither process holds a stale ``Crypto`` instance.
 """
 
 from __future__ import annotations
 
 import logging
 import signal
+import sys
 import threading
 from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
 
-from sqlalchemy import update
+from cryptography.fernet import Fernet
+from sqlalchemy import select, update
 
-from pfsense_shared.crypto import Crypto
+from pfsense_shared.crypto import Crypto, ensure_keys, write_keys
 from pfsense_shared.db import init_db, make_engine, make_session_factory
 from pfsense_shared.log_buffer import InProcessLogHandler, LogLine
-from pfsense_shared.models import Job
+from pfsense_shared.models import Backup, Instance, Job
 from pfsense_shared.settings import WorkerSettings
 
 from .backup_manager import PfSenseBackupManager
@@ -167,5 +179,185 @@ def main() -> None:
     log.info("Bye")
 
 
-if __name__ == "__main__":
+def rotate_key() -> int:
+    """Re-encrypt every stored ciphertext under a fresh Fernet key
+    and prune the legacy keys from the secret-key file.
+
+    Flow:
+      1. Load current key(s) from the file → ``old_keys``.
+      2. Generate a new key.
+      3. Atomically write the file as ``[new_key, *old_keys]``.
+         ``MultiFernet`` in the rotation process now accepts both.
+      4. Walk every ciphertext column on ``Instance`` and ``Backup``,
+         decrypting (MultiFernet tries every key) and re-encrypting
+         with the new key. Commit in one transaction per chunk.
+      5. Verify every newly-written ciphertext decrypts under a
+         ``MultiFernet`` that ONLY knows the new key. Any failure
+         halts rotation before the legacy keys are pruned.
+      6. Atomically rewrite the file as ``[new_key]``.
+
+    Returns a shell-style exit code (0 = success, non-zero = failed).
+    """
+    log = logging.getLogger("worker.rotate_key")
+    settings = WorkerSettings()
+    key_file = Path(settings.pfsense_backups_secret_key_file)
+
+    old_keys = ensure_keys(key_file)
+    log.info(
+        "Loaded %d key(s) from %s (current=key[0])",
+        len(old_keys),
+        key_file,
+    )
+
+    new_key = Fernet.generate_key()
+    transitional = [new_key, *old_keys]
+    write_keys(key_file, transitional)
+    log.info(
+        "Wrote transitional secret-key file with %d key(s) — new key prepended",
+        len(transitional),
+    )
+
+    crypto_multi = Crypto(transitional)
+    crypto_new_only = Crypto(new_key)
+
+    engine = make_engine(settings.app_db_url)
+    session_factory = make_session_factory(engine)
+    try:
+        rotated_instance = _rotate_instance_rows(session_factory, crypto_multi, log)
+        rotated_backup = _rotate_backup_rows(session_factory, crypto_multi, log)
+        log.info(
+            "Re-encrypted %d instance row(s) + %d backup row(s)",
+            rotated_instance,
+            rotated_backup,
+        )
+
+        # Verification sweep: every row that came out of step 4 must
+        # decrypt under the NEW key alone. If it doesn't, the pruning
+        # step below would lock the ciphertext out — bail before that.
+        _verify_all_rows_decrypt(session_factory, crypto_new_only, log)
+    except Exception as exc:
+        log.error("Rotation failed: %s", exc, exc_info=True)
+        log.error(
+            "The transitional key file has been left in place. "
+            "Existing ciphertexts remain decryptable via the legacy "
+            "keys. Investigate and re-run rotate-key."
+        )
+        return 1
+    finally:
+        engine.dispose()
+
+    # Pruning: new key only. Old keys drop out of the file.
+    write_keys(key_file, [new_key])
+    log.info(
+        "Rotation complete. Secret-key file rewritten with 1 key "
+        "(legacy keys dropped). Restart the worker + web service to "
+        "pick up the new Crypto instance."
+    )
+    return 0
+
+
+def _rotate_instance_rows(
+    session_factory: Any, crypto: Crypto, log: logging.Logger
+) -> int:
+    """Walk every ``Instance`` row, decrypt its three ciphertext
+    columns, re-encrypt with the new (first) key, commit. Returns
+    the number of rows updated."""
+    count = 0
+    with session_factory() as session:  # type: Session
+        rows = session.execute(select(Instance)).scalars().all()
+        for row in rows:
+            row.username_ct = crypto.encrypt(crypto.decrypt(row.username_ct))
+            row.password_ct = crypto.encrypt(crypto.decrypt(row.password_ct))
+            if row.backup_encrypt_password_ct is not None:
+                row.backup_encrypt_password_ct = crypto.encrypt(
+                    crypto.decrypt(row.backup_encrypt_password_ct)
+                )
+            count += 1
+        session.commit()
+        log.info("Instance rows re-encrypted: %d", count)
+    return count
+
+
+def _rotate_backup_rows(
+    session_factory: Any, crypto: Crypto, log: logging.Logger
+) -> int:
+    """Walk every ``Backup`` row that has an ``encrypt_password_ct``.
+    Commits in chunks of 500 to keep the transaction manageable for
+    instances with deep history."""
+    chunk = 500
+    total = 0
+    with session_factory() as session:
+        offset = 0
+        while True:
+            rows = (
+                session.execute(
+                    select(Backup)
+                    .where(Backup.encrypt_password_ct.is_not(None))
+                    .order_by(Backup.id.asc())
+                    .offset(offset)
+                    .limit(chunk)
+                )
+                .scalars()
+                .all()
+            )
+            if not rows:
+                break
+            for row in rows:
+                assert row.encrypt_password_ct is not None  # narrowed by WHERE
+                row.encrypt_password_ct = crypto.encrypt(
+                    crypto.decrypt(row.encrypt_password_ct)
+                )
+            session.commit()
+            total += len(rows)
+            offset += chunk
+            log.info("Backup rows re-encrypted so far: %d", total)
+    return total
+
+
+def _verify_all_rows_decrypt(
+    session_factory: Any, crypto_new_only: Crypto, log: logging.Logger
+) -> None:
+    """Sanity pass: every ciphertext column we just touched must
+    decrypt under a ``Crypto`` built with ONLY the new key. If any
+    row fails, the pruning step would render it unreadable —
+    raise and stop rotation before writing the pruned file."""
+    bad: list[str] = []
+    with session_factory() as session:  # type: Session
+        for inst in session.execute(select(Instance)).scalars():
+            try:
+                crypto_new_only.decrypt(inst.username_ct)
+                crypto_new_only.decrypt(inst.password_ct)
+                if inst.backup_encrypt_password_ct is not None:
+                    crypto_new_only.decrypt(inst.backup_encrypt_password_ct)
+            except Exception as exc:
+                bad.append(f"Instance id={inst.id}: {exc}")
+        for bkp in session.execute(
+            select(Backup).where(Backup.encrypt_password_ct.is_not(None))
+        ).scalars():
+            try:
+                assert bkp.encrypt_password_ct is not None
+                crypto_new_only.decrypt(bkp.encrypt_password_ct)
+            except Exception as exc:
+                bad.append(f"Backup id={bkp.id}: {exc}")
+    if bad:
+        raise RuntimeError(
+            "Post-rotation verification failed for "
+            f"{len(bad)} row(s): " + "; ".join(bad[:5])
+        )
+    log.info("Post-rotation verification OK — all rows decrypt under new key alone")
+
+
+def dispatch() -> int:
+    """Dispatch to a subcommand based on ``sys.argv[1]``. Returns an
+    exit code. Default (no arg) runs the worker loop, which never
+    returns under normal operation — wrapping it in an int return
+    only matters for the ``rotate-key`` path."""
+    if len(sys.argv) > 1 and sys.argv[1] == "rotate-key":
+        _configure_logging("INFO")
+        return rotate_key()
     main()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(dispatch())

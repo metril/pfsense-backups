@@ -133,6 +133,44 @@ historical backups remain readable only via `openssl enc -aes-256-cbc` with
 whatever password was used when they were taken — download the raw ciphertext
 and decrypt offline.
 
+### Rotating `secret.key` without re-entering passwords
+
+Since v0.36.0 the worker ships with a `rotate-key` subcommand that
+replaces the Fernet key in-place — every stored credential is
+re-encrypted with the new key and the old key is dropped from the
+file. Nothing in the UI changes; operators don't need to re-enter
+any pfSense passwords.
+
+```bash
+# 1. Stop the stack so no process holds a stale Crypto instance.
+docker compose stop web worker
+
+# 2. Run rotation inside the worker image. The container gets the
+#    same data-volume mounts as in normal operation (so it sees
+#    /app/data/secret.key + /app/data/app.db).
+docker compose run --rm worker python -m worker rotate-key
+
+# 3. Bring the stack back up. Both services reload the key file on
+#    startup.
+docker compose start web worker
+```
+
+The rotation flow:
+
+1. Reads the current secret-key file (one key per line since
+   v0.36.0; pre-v0.36.0 single-line files are accepted).
+2. Generates a fresh Fernet key and writes `[new, *old]` to the file
+   — the process now has a `MultiFernet` that can decrypt under any
+   key while always encrypting under the newest.
+3. Walks every ciphertext on every `Instance` and `Backup` row,
+   decrypting via `MultiFernet` and re-encrypting with the new key.
+4. Verifies every row decrypts under the new key alone.
+5. Atomically rewrites the file with just the new key.
+
+If step 3 or 4 fails, rotation aborts with the transitional
+`[new, *old]` file still in place — old ciphertexts remain decryptable
+via the legacy keys. Investigate, fix, re-run.
+
 ### If `app.db` is lost
 
 No instances, no schedules, no audit history. The backup XML files on
