@@ -1,4 +1,5 @@
 import { cloneElement, isValidElement, useEffect, useId, useMemo, useState } from "react";
+import { useBlocker } from "react-router-dom";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Label } from "@/components/ui/Label";
@@ -45,6 +46,51 @@ export function SettingsPage() {
     if (settings.data?.backup) setBackup(settings.data.backup);
     if (settings.data?.logging) setLogging(settings.data.logging);
   }, [settings.data]);
+
+  // Dirty-state tracking so navigating away with pending edits warns
+  // instead of silently losing them. Compare against the server's
+  // last-known-good values so clicking Save flips both ``isDirty``
+  // paths back to false on the next ``settings.data`` refetch.
+  const backupDirty = useMemo(
+    () =>
+      settings.data?.backup
+        ? JSON.stringify(settings.data.backup) !== JSON.stringify(backup)
+        : false,
+    [settings.data, backup],
+  );
+  const loggingDirty = useMemo(
+    () =>
+      settings.data?.logging
+        ? JSON.stringify(settings.data.logging) !== JSON.stringify(logging)
+        : false,
+    [settings.data, logging],
+  );
+  const isDirty = backupDirty || loggingDirty;
+
+  // React Router v6.4+ blocker — fires on in-app navigation. Combined
+  // with a ``beforeunload`` for full-page reload / close. ``confirm``
+  // is deliberately synchronous so keyboard Enter on the native dialog
+  // does the right thing; React Router 7's modal pattern would be a
+  // bigger refactor.
+  useBlocker(({ currentLocation, nextLocation }) => {
+    if (!isDirty) return false;
+    if (currentLocation.pathname === nextLocation.pathname) return false;
+    return !window.confirm(
+      "You have unsaved settings. Leave and discard changes?",
+    );
+  });
+  useEffect(() => {
+    if (!isDirty) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      // Most browsers ignore the custom string since 2019; the empty
+      // string + preventDefault still triggers their own "leave site?"
+      // dialog which is what we actually want.
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [isDirty]);
 
   useEffect(() => {
     if (backup.default_timezone && !tzValues.has(backup.default_timezone)) {

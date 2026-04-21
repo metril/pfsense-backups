@@ -771,7 +771,11 @@ def _read_for_walk(row: _BackupWalkRow, crypto: Any) -> bytes | str:
     if not row.encrypted or not looks_encrypted(raw):
         return raw
     if not row.encrypt_password_ct:
-        raise HTTPException(
+        # Raises ``_WalkAbortError`` instead of HTTPException because
+        # this function is called from inside ``asyncio.to_thread``.
+        # The outer coroutine catches ``_WalkAbortError`` and
+        # translates to a real HTTPException in a normal async frame.
+        raise _WalkAbortError(
             status.HTTP_409_CONFLICT,
             "cannot decrypt backup: no per-row password stored. "
             "Download the raw encrypted file and decrypt offline.",
@@ -779,14 +783,14 @@ def _read_for_walk(row: _BackupWalkRow, crypto: Any) -> bytes | str:
     try:
         password = crypto.decrypt(row.encrypt_password_ct)
     except Exception as exc:
-        raise HTTPException(
+        raise _WalkAbortError(
             status.HTTP_409_CONFLICT,
             f"cannot decrypt backup password: {exc}",
         ) from exc
     try:
         return decrypt_pfsense_backup(raw, password)
     except PfSenseCryptoError as exc:
-        raise HTTPException(
+        raise _WalkAbortError(
             status.HTTP_409_CONFLICT,
             f"cannot decrypt backup — password missing or KDF mismatch ({exc})",
         ) from exc
@@ -872,16 +876,11 @@ async def instance_anchor_history(
         for s in snapshots:
             raw_bytes: bytes | str
             if s.encrypted:
-                # ``_read_for_walk`` can raise HTTPException on bad
-                # ciphertext / missing password. Raising HTTPException
-                # from inside ``asyncio.to_thread`` works today but is
-                # fragile — translate it in the outer coroutine below
-                # via the dedicated ``_WalkAbortError`` domain exception so
-                # the thread boundary only carries plain Python errors.
-                try:
-                    raw_bytes = _read_for_walk(s, crypto)
-                except HTTPException as hx:
-                    raise _WalkAbortError(hx.status_code, str(hx.detail)) from hx
+                # ``_read_for_walk`` raises ``_WalkAbortError`` directly
+                # so it can carry status+detail across the
+                # ``asyncio.to_thread`` boundary without an HTTPException
+                # round-trip. Caught by the outer coroutine below.
+                raw_bytes = _read_for_walk(s, crypto)
             else:
                 raw_bytes = read_content(_row_path(s.path))
             try:

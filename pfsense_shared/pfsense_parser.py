@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import Final
 from xml.etree.ElementTree import Element, ParseError, tostring
 
+from defusedxml import DefusedXmlException
 from defusedxml.ElementTree import fromstring as _defused_fromstring
 from pydantic import BaseModel, ConfigDict
 
@@ -358,6 +359,17 @@ def parse(xml_bytes: bytes | str) -> ParsedConfig:
         # ``/anchor-history``) — callers now catch ``PfSenseParseError``
         # and translate to a 422 with an actionable message.
         raise PfSenseParseError(f"backup content is not valid XML: {exc}") from exc
+    except DefusedXmlException as exc:
+        # defusedxml raises its own security-blocking exceptions
+        # (DTDForbidden, EntitiesForbidden, ExternalReferenceForbidden,
+        # NotSupportedError) for crafted XML. None inherit from
+        # ``ParseError``, so without this catch a backup with a DOCTYPE
+        # declaration would surface as a 500 instead of a 422. Treat
+        # these as "backup content is unsafe to parse" — same user-
+        # visible message family as malformed XML.
+        raise PfSenseParseError(
+            f"backup content rejected by XML safety checks: {exc}"
+        ) from exc
     # pfSense wraps everything in ``<pfsense>``; defusedxml gives us that
     # element as the root.
     gws, ggroups = _routing.parse_gateways(root)

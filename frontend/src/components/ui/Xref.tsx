@@ -140,8 +140,10 @@ function XrefInner({
         {kind.replace(/_/g, " ")}
         {target.secondary ? ` — ${target.secondary}` : ""}
       </div>
-      {incoming > 1 && (
-        <div className="text-muted-fg">Used by {incoming} items</div>
+      {incoming > 0 && (
+        <div className="text-muted-fg">
+          Used by {incoming} {incoming === 1 ? "item" : "items"}
+        </div>
       )}
     </div>
   );
