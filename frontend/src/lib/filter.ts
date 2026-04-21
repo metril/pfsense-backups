@@ -43,25 +43,51 @@ export function buildMatcher(query: string): FilterMatcher {
   return { query, match, active };
 }
 
-/** Extract all flat string-valued field contents from a row object
- *  so the item-level filter has something to match against. Used by
- *  table renderers that opt into item-level filtering. Accepts
- *  ``unknown`` (not ``Record<string, unknown>``) so the parser's
- *  typed interfaces — which don't carry a string index signature —
- *  pass without noise. */
+/** Extract all string-valued field contents from a row object so the
+ *  item-level filter has something to match against. Walks nested
+ *  objects one level deep so struct-valued sub-fields — ``Endpoint``
+ *  on ``FirewallRule`` / ``NatRule``, nested ``Gateway.monitor``, etc.
+ *  — contribute to the haystack. Without the recursion, filtering for
+ *  ``192.168.1.0`` inside a rule's ``source.address`` silently missed.
+ *
+ *  One-level depth is enough for every row type the parser emits;
+ *  deeper recursion would only serve to include RawSection XML which
+ *  is already searchable via the Raw XML tab. Cycles can't occur
+ *  because Pydantic models are tree-shaped. */
 export function rowHaystack(row: unknown): string {
   if (!row || typeof row !== "object") return "";
   const parts: string[] = [];
-  for (const v of Object.values(row as Record<string, unknown>)) {
+  const pushScalar = (v: unknown): void => {
     if (typeof v === "string") parts.push(v);
     else if (typeof v === "number" || typeof v === "boolean")
       parts.push(String(v));
-    else if (Array.isArray(v)) {
+  };
+  for (const v of Object.values(row as Record<string, unknown>)) {
+    if (v === null || v === undefined) continue;
+    if (Array.isArray(v)) {
       for (const el of v) {
-        if (typeof el === "string") parts.push(el);
-        else if (typeof el === "number" || typeof el === "boolean")
-          parts.push(String(el));
+        if (el && typeof el === "object" && !Array.isArray(el)) {
+          // Array of objects — flatten one level.
+          for (const inner of Object.values(el as Record<string, unknown>)) {
+            pushScalar(inner);
+          }
+        } else {
+          pushScalar(el);
+        }
       }
+    } else if (typeof v === "object") {
+      // Nested object (e.g. Endpoint) — flatten its scalar + array
+      // children. Do NOT recurse further; avoids accidentally pulling
+      // in enormous sub-trees like RawSection.
+      for (const inner of Object.values(v as Record<string, unknown>)) {
+        if (Array.isArray(inner)) {
+          for (const el of inner) pushScalar(el);
+        } else {
+          pushScalar(inner);
+        }
+      }
+    } else {
+      pushScalar(v);
     }
   }
   return parts.join(" ");
