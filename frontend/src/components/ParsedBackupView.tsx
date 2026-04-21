@@ -172,15 +172,21 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
     (title: string) => !matcher.active || matcher.match(title),
     [matcher],
   );
+  // Stable empty matcher so ``countVisibleSections(rawData, …)`` for
+  // the "total" count doesn't reallocate on every keystroke into the
+  // filter bar — buildMatcher("") produces identical output but a
+  // fresh object identity, and this memo depends on ``matcher`` which
+  // changes per keystroke.
+  const emptyMatcher = useMemo(() => buildMatcher(""), []);
   const sectionCounter = useMemo(
     () =>
       data && rawData
         ? {
             visible: countVisibleSections(data, matcher),
-            total: countVisibleSections(rawData, buildMatcher("")),
+            total: countVisibleSections(rawData, emptyMatcher),
           }
         : undefined,
-    [data, rawData, matcher],
+    [data, rawData, matcher, emptyMatcher],
   );
 
   if (isLoading)

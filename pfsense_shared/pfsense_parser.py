@@ -16,7 +16,7 @@ review value.
 from __future__ import annotations
 
 from typing import Final
-from xml.etree.ElementTree import Element, tostring
+from xml.etree.ElementTree import Element, ParseError, tostring
 
 from defusedxml.ElementTree import fromstring as _defused_fromstring
 from pydantic import BaseModel, ConfigDict
@@ -235,6 +235,14 @@ _KNOWN: Final[frozenset[str]] = frozenset(
 _IGNORED: Final[frozenset[str]] = frozenset({"widgets", "rrd", "pkgs"})
 
 
+class PfSenseParseError(ValueError):
+    """Raised when ``parse`` cannot extract a usable tree from the
+    input bytes — malformed XML, truncation, or a root element that
+    isn't ``<pfsense>``. Callers should translate this to a 422 /
+    client-visible "this backup can't be parsed" rather than leaking
+    the underlying stdlib ``ParseError`` traceback as a 500."""
+
+
 class RawSection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -341,7 +349,15 @@ def parse(xml_bytes: bytes | str) -> ParsedConfig:
     ):
         return ParsedConfig()
 
-    root = _defused_fromstring(xml_bytes)
+    try:
+        root = _defused_fromstring(xml_bytes)
+    except ParseError as exc:
+        # defusedxml re-raises stdlib ParseError for malformed XML.
+        # Without this wrap the traceback surfaces as an unhandled 500
+        # on every downstream endpoint (``/parsed``, ``/diff/pair/parsed``,
+        # ``/anchor-history``) — callers now catch ``PfSenseParseError``
+        # and translate to a 422 with an actionable message.
+        raise PfSenseParseError(f"backup content is not valid XML: {exc}") from exc
     # pfSense wraps everything in ``<pfsense>``; defusedxml gives us that
     # element as the root.
     gws, ggroups = _routing.parse_gateways(root)

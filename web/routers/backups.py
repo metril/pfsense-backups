@@ -24,7 +24,7 @@ from pfsense_shared.pfsense_crypto import (
     looks_encrypted,
 )
 from pfsense_shared.pfsense_diff import ConfigDiff, diff_configs
-from pfsense_shared.pfsense_parser import ParsedConfig
+from pfsense_shared.pfsense_parser import ParsedConfig, PfSenseParseError
 from pfsense_shared.pfsense_parser import parse as parse_pfsense_xml
 from pfsense_shared.pfsense_positions import build_positions
 from pfsense_shared.schemas import (
@@ -247,10 +247,14 @@ async def _load(db: AsyncSession, backup_id: int) -> tuple[Backup, Path]:
     if not exists:
         # M6: 404 is the correct semantic here (the resource doesn't exist at
         # the moment of the request). 410 implies permanent tombstone.
-        raise HTTPException(
-            404,
-            f"backup file missing on disk: {path}",
+        # Don't leak the absolute container path into the response body —
+        # it reveals the data-volume layout to authenticated clients. The
+        # server-side log entry below captures the path for operators.
+        log.warning(
+            "_load id=%d reports path=%s but file is missing on disk",
+            backup_id, path,
         )
+        raise HTTPException(404, "backup file not found on disk")
     return b, path
 
 
@@ -596,7 +600,10 @@ async def get_parsed(
         content_bytes = content.encode("utf-8")
     else:
         content_bytes = content
-    parsed = await asyncio.to_thread(parse_pfsense_xml, content_bytes)
+    try:
+        parsed = await asyncio.to_thread(parse_pfsense_xml, content_bytes)
+    except PfSenseParseError as exc:
+        raise HTTPException(422, str(exc)) from exc
     # Pass ``parsed`` so firewall + NAT rule anchors pair 1:1 with the
     # parser's synthesized ``r.key`` (tracker-less rules get a hash
     # fallback that the frontend also emits via ``rowAnchorId``).
@@ -631,8 +638,11 @@ async def diff_pair_parsed(
             details={"a": a_row.id, "b": b_row.id, "via": "parsed"},
         )
         await db.commit()
-    a_parsed = await asyncio.to_thread(parse_pfsense_xml, a_bytes)
-    b_parsed = await asyncio.to_thread(parse_pfsense_xml, b_bytes)
+    try:
+        a_parsed = await asyncio.to_thread(parse_pfsense_xml, a_bytes)
+        b_parsed = await asyncio.to_thread(parse_pfsense_xml, b_bytes)
+    except PfSenseParseError as exc:
+        raise HTTPException(422, str(exc)) from exc
     return await asyncio.to_thread(diff_configs, a_parsed, b_parsed)
 
 
@@ -710,6 +720,19 @@ class AnchorHistoryResponse(BaseModel):
     anchor: str
     instance_id: int
     entries: list[AnchorHistoryChange]
+
+
+class _WalkAbortError(Exception):
+    """Plain-Python exception used to carry an ``HTTPException`` across
+    ``asyncio.to_thread`` in the anchor-history walker. Raising
+    ``HTTPException`` directly inside ``to_thread`` happens to work on
+    CPython today but is undocumented — using a domain exception and
+    translating in the outer coroutine keeps the boundary explicit."""
+
+    def __init__(self, status_code: int, detail: str) -> None:
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
 
 
 class _BackupWalkRow(BaseModel):
@@ -849,10 +872,24 @@ async def instance_anchor_history(
         for s in snapshots:
             raw_bytes: bytes | str
             if s.encrypted:
-                raw_bytes = _read_for_walk(s, crypto)
+                # ``_read_for_walk`` can raise HTTPException on bad
+                # ciphertext / missing password. Raising HTTPException
+                # from inside ``asyncio.to_thread`` works today but is
+                # fragile — translate it in the outer coroutine below
+                # via the dedicated ``_WalkAbortError`` domain exception so
+                # the thread boundary only carries plain Python errors.
+                try:
+                    raw_bytes = _read_for_walk(s, crypto)
+                except HTTPException as hx:
+                    raise _WalkAbortError(hx.status_code, str(hx.detail)) from hx
             else:
                 raw_bytes = read_content(_row_path(s.path))
-            parsed = parse_pfsense_xml(raw_bytes)
+            try:
+                parsed = parse_pfsense_xml(raw_bytes)
+            except PfSenseParseError as exc:
+                raise _WalkAbortError(
+                    422, f"backup id={s.id} could not be parsed: {exc}"
+                ) from exc
             value = resolve_anchor_value(parsed, anchor)
             is_change = previous_value is _MISSING or value != previous_value
             out.append(
@@ -866,7 +903,10 @@ async def instance_anchor_history(
             previous_value = value
         return out
 
-    entries = await asyncio.to_thread(_gather)
+    try:
+        entries = await asyncio.to_thread(_gather)
+    except _WalkAbortError as abort:
+        raise HTTPException(abort.status_code, abort.detail) from abort
 
     if any_encrypted:
         # Fresh session from the factory — the original ``db`` was

@@ -40,12 +40,27 @@ router = APIRouter(prefix="/api/instances", tags=["instances"])
 
 
 def _to_read(inst: Instance, crypto) -> InstanceRead:
+    # A corrupted / re-keyed ``username_ct`` would otherwise raise
+    # ``cryptography.fernet.InvalidToken`` into ``list_instances``
+    # and 500 the entire list, taking the UI down. Surface a sentinel
+    # for the affected row so operators can still see the instance and
+    # fix / delete it. The credentials are already unusable by this
+    # point, so no information is lost.
+    try:
+        username = crypto.decrypt(inst.username_ct)
+    except Exception:
+        log.warning(
+            "instance id=%s username_ct could not be decrypted — "
+            "emitting sentinel in read model",
+            inst.id,
+        )
+        username = "<decryption failed>"
     return InstanceRead.model_validate(
         {
             "id": inst.id,
             "name": inst.name,
             "url": inst.url,
-            "username": crypto.decrypt(inst.username_ct),
+            "username": username,
             "subfolder": inst.subfolder,
             "backup_prefix": inst.backup_prefix,
             "verify_ssl": inst.verify_ssl,

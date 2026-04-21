@@ -203,8 +203,13 @@ export function BackupsPage() {
             <Split className="h-4 w-4" />
             Diff selected
           </Button>
+          {/* Danger tone at the trigger so an operator scanning the
+              toolbar sees the destructive affordance before clicking —
+              tooltip text alone is invisible on touch devices. The
+              ``ConfirmDialog`` still gates the actual submission, but
+              a missed click shouldn't look innocuous. */}
           <Button
-            variant="secondary"
+            variant="danger"
             size="sm"
             onClick={() => setReencryptOpen(true)}
             title="Re-encrypt every encrypted backup with a new password"

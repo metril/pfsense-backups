@@ -431,7 +431,17 @@ function EditorDialog({
           <Input type="password" value={d.password} onChange={(e) => setD({ ...d, password: e.target.value })} />
         </Field>
         <Field label="Subfolder"><Input value={d.subfolder ?? ""} onChange={(e) => setD({ ...d, subfolder: e.target.value || null })} /></Field>
-        <Field label="Backup prefix"><Input value={d.backup_prefix} onChange={(e) => setD({ ...d, backup_prefix: e.target.value })} /></Field>
+        <Field label="Backup prefix">
+          <Input
+            placeholder="daily"
+            value={d.backup_prefix}
+            onChange={(e) => setD({ ...d, backup_prefix: e.target.value })}
+          />
+          <p className="mt-1 text-xs text-muted-fg">
+            Prefix for backup filenames — e.g. <code>daily</code> produces{" "}
+            <code>daily-{d.name || "instance"}-2026-04-20.xml</code>.
+          </p>
+        </Field>
         <Field label="Timeout (s)">
           <Input
             type="number"

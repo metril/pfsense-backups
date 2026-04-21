@@ -67,7 +67,13 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <Ctx.Provider value={api}>
       {children}
-      <div className="pointer-events-none fixed bottom-4 right-4 z-50 flex w-80 flex-col gap-2">
+      {/* ``env(safe-area-inset-bottom)`` keeps toasts above the iOS home
+          indicator and Android gesture bar. On devices with no safe
+          area (desktop, most laptops) the max() degrades to 1rem. */}
+      <div
+        className="pointer-events-none fixed right-4 z-50 flex w-80 flex-col gap-2"
+        style={{ bottom: "max(1rem, env(safe-area-inset-bottom))" }}
+      >
         {toasts.map((t) => (
           <ToastItem key={t.id} toast={t} onDismiss={dismiss} />
         ))}

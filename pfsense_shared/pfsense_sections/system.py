@@ -61,10 +61,23 @@ def parse(root: Element) -> SystemInfo | None:
     sys_el = root.find("system")
     if sys_el is None:
         return None
-    # ``<dnsserver>`` is repeated; same for ``<timeservers>`` (space-joined list).
+    # ``<dnsserver>`` is always repeated child elements.
     dnsservers = [e.text or "" for e in children(sys_el, "dnsserver") if (e.text or "").strip()]
-    timeservers_raw = text(sys_el, "timeservers")
-    timeservers = timeservers_raw.split() if timeservers_raw else []
+    # ``<timeservers>`` has shipped in two shapes across pfSense history:
+    #   - pre-2.7:  single <timeservers>0.pool 1.pool</timeservers> (space-joined)
+    #   - 2.7+:     multiple <timeservers>0.pool</timeservers> children
+    # Accept both so an upgrade from 2.6 → 2.7 doesn't silently drop
+    # every NTP peer after the first. If BOTH shapes are present on the
+    # same backup (shouldn't happen, but survivable), we merge.
+    timeservers_list: list[str] = []
+    for el in children(sys_el, "timeservers"):
+        raw = (el.text or "").strip()
+        if not raw:
+            continue
+        # A single-child scalar may still contain space-delimited values
+        # (legacy layout); split to normalise.
+        timeservers_list.extend(raw.split())
+    timeservers = timeservers_list
     return SystemInfo(
         hostname=text(sys_el, "hostname"),
         domain=text(sys_el, "domain"),

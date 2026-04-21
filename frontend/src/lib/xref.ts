@@ -34,7 +34,9 @@ export type RefKind =
   | "authserver"
   | "openvpn_server"
   | "openvpn_client"
+  | "openvpn_csc"
   | "ipsec_phase1"
+  | "ipsec_phase2"
   | "haproxy_backend"
   | "lb_pool"
   | "user"
@@ -58,7 +60,9 @@ const KIND_TO_GROUP: Record<RefKind, SectionGroup> = {
   authserver: "vpn-pki",
   openvpn_server: "vpn-pki",
   openvpn_client: "vpn-pki",
+  openvpn_csc: "vpn-pki",
   ipsec_phase1: "vpn-pki",
+  ipsec_phase2: "vpn-pki",
   haproxy_backend: "packages",
   lb_pool: "services",
   user: "vpn-pki",
@@ -84,6 +88,11 @@ export interface XrefIndex {
   /** Reverse index: anchorId → every other target that points at it.
    *  Used by the tooltip to say "Used by N other items." */
   incoming: Map<string, XrefTarget[]>;
+  /** ``anchorId → XrefTarget`` lookup. Added in v0.31.0 so
+   *  ``findTargetByAnchorId`` is O(1) instead of scanning every
+   *  ``byKind`` entry on every back-pill click. Populated at
+   *  ``buildIndex`` time — one extra ``Map.set`` per entry. */
+  byAnchorId: Map<string, XrefTarget>;
   /** Human labels for leaf rows that aren't proper xref targets —
    *  firewall rules and NAT rules anchored via ``rowAnchorId``. Keyed
    *  by anchorId, value is the row's description (or a sensible
@@ -139,7 +148,9 @@ function emptyByKind(): Record<RefKind, Map<string, XrefTarget>> {
     "authserver",
     "openvpn_server",
     "openvpn_client",
+    "openvpn_csc",
     "ipsec_phase1",
+    "ipsec_phase2",
     "haproxy_backend",
     "lb_pool",
     "user",
@@ -169,6 +180,11 @@ function add(
     secondary: secondary ?? undefined,
   };
   idx.byKind[kind].set(key, t);
+  // Populate the reverse index so ``findTargetByAnchorId`` is O(1)
+  // — it was scanning every kind map on every back-pill click, which
+  // on a large config (1000+ aliases + rules) produced a noticeable
+  // lag on rapid back-stack navigation.
+  idx.byAnchorId.set(t.anchorId, t);
   return t;
 }
 
@@ -216,6 +232,7 @@ export function buildIndex(cfg: ParsedConfig): XrefIndex {
   const idx: XrefIndex = {
     byKind: emptyByKind(),
     incoming: new Map(),
+    byAnchorId: new Map(),
     originLabels: new Map(),
   };
 
@@ -306,6 +323,20 @@ export function buildIndex(cfg: ParsedConfig): XrefIndex {
     );
   }
 
+  // OpenVPN client-specific overrides — keyed by ``common_name``.
+  // Backend already carries a resolver scope for these; aligning the
+  // frontend closes the mirror-table gap so the blame drawer can
+  // work on ``xref-openvpn_csc-*`` anchors the viewer emits.
+  for (const csc of cfg.openvpn_cscs) {
+    add(
+      idx,
+      "openvpn_csc",
+      csc.common_name,
+      csc.description ?? csc.common_name,
+      csc.tunnel_network,
+    );
+  }
+
   for (const p of cfg.ipsec_phase1) {
     add(
       idx,
@@ -313,6 +344,18 @@ export function buildIndex(cfg: ParsedConfig): XrefIndex {
       p.ikeid,
       p.descr ?? `IPsec P1 #${p.ikeid}`,
       p.remote_gateway,
+    );
+  }
+
+  // IPsec Phase 2 child SAs — keyed by ``uniqid``. Secondary is the
+  // protocol + mode so the tooltip is informative even without a descr.
+  for (const p2 of cfg.ipsec_phase2) {
+    add(
+      idx,
+      "ipsec_phase2",
+      p2.uniqid,
+      p2.descr ?? `IPsec P2 #${p2.uniqid}`,
+      p2.mode ?? p2.protocol,
     );
   }
 
@@ -413,12 +456,7 @@ export function findTargetByAnchorId(
   index: XrefIndex,
   anchorId: string,
 ): XrefTarget | null {
-  for (const m of Object.values(index.byKind)) {
-    for (const t of m.values()) {
-      if (t.anchorId === anchorId) return t;
-    }
-  }
-  return null;
+  return index.byAnchorId.get(anchorId) ?? null;
 }
 
 /** Human label for a leaf row (firewall rule, NAT rule). Returns
@@ -504,7 +542,9 @@ const SCOPE_TO_SECTION_ID: Record<string, string> = {
   authserver: "section-external-auth-servers",
   openvpn_server: "section-openvpn-servers",
   openvpn_client: "section-openvpn-clients",
+  openvpn_csc: "section-openvpn-client-specific-overrides",
   ipsec_phase1: "section-ipsec-phase-1",
+  ipsec_phase2: "section-ipsec-phase-2",
   haproxy_backend: "section-installed-packages",
   lb_pool: "section-load-balancer",
   user: "section-users",
