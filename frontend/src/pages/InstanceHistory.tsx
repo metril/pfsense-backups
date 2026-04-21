@@ -345,6 +345,58 @@ export function InstanceHistoryPage() {
               </span>
             </>
           )}
+          {/* v0.37.0 — "+N since first backup" precomputed summary.
+              Clicking the cluster opens the full structural diff
+              against the oldest-still-on-disk backup. Rendered only
+              when (a) the focused row isn't itself the first (its
+              changes_since_first would be all zeros) and (b) the
+              backend has a cached summary to show. */}
+          {focused?.changes_since_first && focusIdx > 0 && (
+            <>
+              <span className="mx-2 text-muted-fg">·</span>
+              <button
+                type="button"
+                onClick={() => {
+                  // ``backups`` is sorted ASC, so ``backups[0]`` is
+                  // the oldest-still-on-disk — exactly the base the
+                  // backend used for changes_since_first.
+                  const first = backups[0];
+                  if (first && first.id !== focused.id) {
+                    nav(`/backups/diff/${first.id}/${focused.id}`);
+                  }
+                }}
+                className="inline-flex items-center gap-1.5 rounded-md border border-border bg-bg/50 px-2 py-0.5 text-xs text-muted-fg transition-colors hover:bg-muted/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+                title={
+                  backups[0]
+                    ? `Open full diff vs ${new Date(
+                        backups[0].started_at,
+                      ).toLocaleString()}`
+                    : "Open full diff vs first backup"
+                }
+              >
+                <span>since first:</span>
+                {focused.changes_since_first.added > 0 && (
+                  <Badge tone="success">
+                    +{focused.changes_since_first.added}
+                  </Badge>
+                )}
+                {focused.changes_since_first.removed > 0 && (
+                  <Badge tone="danger">
+                    −{focused.changes_since_first.removed}
+                  </Badge>
+                )}
+                {focused.changes_since_first.modified > 0 && (
+                  <Badge tone="warn">
+                    ~{focused.changes_since_first.modified}
+                  </Badge>
+                )}
+                {focused.changes_since_first.added +
+                  focused.changes_since_first.removed +
+                  focused.changes_since_first.modified ===
+                  0 && <span>no semantic changes</span>}
+              </button>
+            </>
+          )}
         </div>
       </div>
 

@@ -26,8 +26,14 @@ import requests
 import urllib3
 from sqlalchemy.orm import sessionmaker
 
+from pfsense_shared.backup_diff_storage import (
+    compute_diff,
+    encode_diff,
+    read_backup_bytes,
+    summarise_diff,
+)
 from pfsense_shared.crypto import Crypto
-from pfsense_shared.models import Backup, BackupSettings, Instance, Job
+from pfsense_shared.models import Backup, BackupDiff, BackupSettings, Instance, Job
 from pfsense_shared.pfsense_crypto import looks_encrypted
 from pfsense_shared.pfsense_probe import (
     BROWSER_HEADERS,
@@ -321,7 +327,7 @@ class PfSenseBackupManager:
             duration = time.time() - t0
             finished_at = datetime.now(UTC)
             self._metrics.record_backup_success(snap.name, duration)
-            self._write_backup_history(
+            new_backup_id = self._write_backup_history(
                 instance_id=snap.id,
                 job_id=job_id,
                 started_at=started_at,
@@ -332,6 +338,21 @@ class PfSenseBackupManager:
                 error=None,
                 snap=snap,
             )
+            # Compute + persist ``backup_diff`` rows for "vs previous"
+            # and "vs first". Best-effort — a failed diff logs a
+            # warning and moves on without marking the backup failed.
+            # Read paths (``/api/backups/{id}/diff-summary``) lazily
+            # recompute on miss + stale, so this is purely a
+            # "populate the cache eagerly" step.
+            if new_backup_id is not None:
+                try:
+                    self._compute_and_persist_diffs(new_backup_id, snap.id)
+                except Exception as exc:
+                    log.warning(
+                        "post-backup diff computation failed for backup %s: %s",
+                        new_backup_id,
+                        exc,
+                    )
             self._mark_job(job_id, status="success", finished_at=finished_at)
             self._publisher.publish(
                 BackupFinished(
@@ -1240,7 +1261,12 @@ class PfSenseBackupManager:
         success: bool,
         error: str | None,
         snap: _InstanceSnapshot | None = None,
-    ) -> None:
+    ) -> int | None:
+        """Insert the ``Backup`` row and return its new id, or None
+        on failure path (so the diff step upstream can tell whether
+        there's anything to diff against). Callers that don't need
+        the id can ignore the return value — existing behavior is
+        preserved."""
         with self._session_factory() as s:
             # Carry forward what was actually captured. When snap is None
             # (the instance disappeared before the snapshot call) we leave
@@ -1286,6 +1312,102 @@ class PfSenseBackupManager:
                 encrypt_password_ct=encrypt_password_ct,
             )
             s.add(row)
+            s.commit()
+            return row.id
+
+    def _compute_and_persist_diffs(self, new_backup_id: int, instance_id: int) -> None:
+        """Compute ``(previous, first)`` diffs for a newly-landed
+        backup and upsert ``backup_diff`` rows. Runs post-commit of
+        the ``Backup`` row and after the host semaphore has released,
+        so this is latency that operators see in "backup complete"
+        but not in "connected to pfSense".
+
+        Skip rules:
+          - No previous/first backup exists → skip that kind.
+          - File unreadable / XML malformed → skip that kind,
+            log at warning. No user-facing surface for these.
+        """
+        from sqlalchemy import select
+
+        with self._session_factory() as s:
+            new_row = s.get(Backup, new_backup_id)
+            if new_row is None:
+                return
+
+            new_bytes = read_backup_bytes(
+                Path(new_row.path),
+                encrypted=new_row.encrypted,
+                encrypt_password_ct=new_row.encrypt_password_ct,
+                crypto=self._crypto,
+            )
+            if new_bytes is None:
+                return
+
+            # Previous: immediate predecessor (most recent successful
+            # backup before this one). None on first-ever backup.
+            previous = (
+                s.execute(
+                    select(Backup)
+                    .where(Backup.instance_id == instance_id)
+                    .where(Backup.success.is_(True))
+                    .where(Backup.id != new_backup_id)
+                    .where(Backup.started_at < new_row.started_at)
+                    .order_by(Backup.started_at.desc())
+                    .limit(1)
+                )
+                .scalar_one_or_none()
+            )
+            # First: oldest successful backup for this instance. Tied
+            # with previous when history has exactly two rows; that's
+            # fine — we write both rows with base pointing at the same
+            # backup and read paths treat them independently.
+            first = (
+                s.execute(
+                    select(Backup)
+                    .where(Backup.instance_id == instance_id)
+                    .where(Backup.success.is_(True))
+                    .where(Backup.id != new_backup_id)
+                    .order_by(Backup.started_at.asc())
+                    .limit(1)
+                )
+                .scalar_one_or_none()
+            )
+
+            for kind, base in (("previous", previous), ("first", first)):
+                if base is None:
+                    continue
+                base_bytes = read_backup_bytes(
+                    Path(base.path),
+                    encrypted=base.encrypted,
+                    encrypt_password_ct=base.encrypt_password_ct,
+                    crypto=self._crypto,
+                )
+                if base_bytes is None:
+                    continue
+                diff = compute_diff(new_bytes, base_bytes)
+                if diff is None:
+                    continue
+                added, removed, modified = summarise_diff(diff)
+                blob = encode_diff(diff)
+                # Upsert via ORM: delete any stale row first, then insert.
+                # SQLite doesn't support ON CONFLICT DO UPDATE through
+                # the ORM portably for composite PKs, and this path is
+                # write-once per (backup_id, kind) in steady state.
+                existing = s.get(BackupDiff, (new_backup_id, kind))
+                if existing is not None:
+                    s.delete(existing)
+                    s.flush()
+                s.add(
+                    BackupDiff(
+                        backup_id=new_backup_id,
+                        kind=kind,
+                        base_backup_id=base.id,
+                        added_count=added,
+                        removed_count=removed,
+                        modified_count=modified,
+                        full_diff_gz=blob,
+                    )
+                )
             s.commit()
 
     def _mark_job(

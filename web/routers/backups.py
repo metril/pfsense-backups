@@ -15,7 +15,14 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from pfsense_shared.models import Backup, Instance, Job
+from pfsense_shared.backup_diff_storage import (
+    compute_diff,
+    decode_diff,
+    encode_diff,
+    read_backup_bytes,
+    summarise_diff,
+)
+from pfsense_shared.models import Backup, BackupDiff, Instance, Job
 from pfsense_shared.paths import BACKUPS_DIR  # noqa: F401 — used by /anchor-history
 from pfsense_shared.pfsense_anchor_values import resolve_anchor_value
 from pfsense_shared.pfsense_crypto import (
@@ -42,6 +49,12 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/backups", tags=["backups"])
 
 
+class DiffCounts(BaseModel):
+    added: int
+    removed: int
+    modified: int
+
+
 class BackupListItem(BaseModel):
     id: int
     instance_id: int
@@ -62,6 +75,12 @@ class BackupListItem(BaseModel):
     included_packages: bool = True
     included_ssh: bool = True
     encrypted: bool = False
+
+    # v0.37.0 precomputed summary against the oldest-still-on-disk
+    # backup for this instance. ``None`` when no diff row exists yet
+    # (backup predates v0.37.0 or diff compute skipped / failed).
+    # Rendered as "—" by the frontend on null.
+    changes_since_first: DiffCounts | None = None
 
 
 class ZipRequest(BaseModel):
@@ -198,9 +217,22 @@ async def list_backups(
 ) -> list[BackupListItem]:
     col = _SORTABLE.get(sort, Backup.started_at)
     direction = col.desc() if order.lower() == "desc" else col.asc()
+    # LEFT JOIN against ``backup_diff`` on kind='first' so each row
+    # carries its precomputed "+N since first" summary when one
+    # exists. Missing rows render as ``None`` — frontend shows "—".
     stmt = (
-        select(Backup, Instance.name)
+        select(
+            Backup,
+            Instance.name,
+            BackupDiff.added_count,
+            BackupDiff.removed_count,
+            BackupDiff.modified_count,
+        )
         .join(Instance, Backup.instance_id == Instance.id)
+        .outerjoin(
+            BackupDiff,
+            (BackupDiff.backup_id == Backup.id) & (BackupDiff.kind == "first"),
+        )
         .order_by(direction)
         .limit(limit)
         .offset(offset)
@@ -212,28 +244,34 @@ async def list_backups(
     if started_to is not None:
         stmt = stmt.where(Backup.started_at <= started_to)
     rows = (await db.execute(stmt)).all()
-    return [
-        BackupListItem(
-            id=b.id,
-            instance_id=b.instance_id,
-            instance_name=name,
-            started_at=b.started_at.isoformat(),
-            finished_at=b.finished_at.isoformat(),
-            duration_seconds=b.duration_seconds,
-            filename=b.filename,
-            size_bytes=b.size_bytes,
-            compressed=b.compressed,
-            success=b.success,
-            tag=b.tag,
-            note=b.note,
-            area=b.area or "",
-            included_rrd=b.included_rrd,
-            included_packages=b.included_packages,
-            included_ssh=b.included_ssh,
-            encrypted=b.encrypted,
+    out: list[BackupListItem] = []
+    for b, name, added, removed, modified in rows:
+        counts: DiffCounts | None = None
+        if added is not None and removed is not None and modified is not None:
+            counts = DiffCounts(added=added, removed=removed, modified=modified)
+        out.append(
+            BackupListItem(
+                id=b.id,
+                instance_id=b.instance_id,
+                instance_name=name,
+                started_at=b.started_at.isoformat(),
+                finished_at=b.finished_at.isoformat(),
+                duration_seconds=b.duration_seconds,
+                filename=b.filename,
+                size_bytes=b.size_bytes,
+                compressed=b.compressed,
+                success=b.success,
+                tag=b.tag,
+                note=b.note,
+                area=b.area or "",
+                included_rrd=b.included_rrd,
+                included_packages=b.included_packages,
+                included_ssh=b.included_ssh,
+                encrypted=b.encrypted,
+                changes_since_first=counts,
+            )
         )
-        for b, name in rows
-    ]
+    return out
 
 
 async def _load(db: AsyncSession, backup_id: int) -> tuple[Backup, Path]:
@@ -691,6 +729,244 @@ async def diff_pair(
             "content": b_content,
         },
     }
+
+
+# --------------------------------------------------------------------- #
+# v0.37.0 — precomputed "+N since first" summaries + full "vs first"
+# diff view, backed by the ``backup_diff`` table. Writer lives in the
+# worker (``_compute_and_persist_diffs``); readers below handle cache
+# hits, lazy recompute on staleness (first backup pruned → base NULL),
+# and on-demand backfill for backups that predate v0.37.0.
+# --------------------------------------------------------------------- #
+
+
+class DiffSummary(BaseModel):
+    added: int
+    removed: int
+    modified: int
+
+
+class DiffSummaryResponse(BaseModel):
+    backup_id: int
+    # Each side is ``None`` when there's no backup to diff against
+    # (e.g. this IS the first backup for its instance).
+    vs_previous: DiffSummary | None = None
+    vs_first: DiffSummary | None = None
+    first_backup_id: int | None = None
+    first_backup_started_at: str | None = None
+
+
+async def _find_base(
+    db: AsyncSession, backup: Backup, kind: str
+) -> Backup | None:
+    """Resolve the base backup for a given ``(backup, kind)``. Returns
+    None when no base exists — first-ever backup for 'previous', or
+    an instance with only one successful backup for 'first'."""
+    if kind == "previous":
+        stmt = (
+            select(Backup)
+            .where(Backup.instance_id == backup.instance_id)
+            .where(Backup.success.is_(True))
+            .where(Backup.id != backup.id)
+            .where(Backup.started_at < backup.started_at)
+            .order_by(Backup.started_at.desc())
+            .limit(1)
+        )
+    elif kind == "first":
+        stmt = (
+            select(Backup)
+            .where(Backup.instance_id == backup.instance_id)
+            .where(Backup.success.is_(True))
+            .where(Backup.id != backup.id)
+            .order_by(Backup.started_at.asc())
+            .limit(1)
+        )
+    else:
+        return None
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def _recompute_diff_row(
+    db: AsyncSession,
+    backup: Backup,
+    kind: str,
+    crypto: Any,
+) -> BackupDiff | None:
+    """Lazy recompute path: missing row OR stale (base pruned). Reads
+    both backups from disk, diffs them, upserts the row. Returns the
+    freshly-inserted ``BackupDiff`` or None if computation failed
+    (base missing on disk, XML malformed)."""
+    base = await _find_base(db, backup, kind)
+    if base is None:
+        return None
+
+    def _read() -> tuple[bytes | None, bytes | None]:
+        new_b = read_backup_bytes(
+            Path(backup.path),
+            encrypted=backup.encrypted,
+            encrypt_password_ct=backup.encrypt_password_ct,
+            crypto=crypto,
+        )
+        base_b = read_backup_bytes(
+            Path(base.path),
+            encrypted=base.encrypted,
+            encrypt_password_ct=base.encrypt_password_ct,
+            crypto=crypto,
+        )
+        return new_b, base_b
+
+    new_bytes, base_bytes = await asyncio.to_thread(_read)
+    if new_bytes is None or base_bytes is None:
+        return None
+    diff = await asyncio.to_thread(compute_diff, new_bytes, base_bytes)
+    if diff is None:
+        return None
+    added, removed, modified = summarise_diff(diff)
+    blob = encode_diff(diff)
+    # Delete any existing (stale) row, then insert fresh.
+    existing = await db.get(BackupDiff, (backup.id, kind))
+    if existing is not None:
+        await db.delete(existing)
+        await db.flush()
+    row = BackupDiff(
+        backup_id=backup.id,
+        kind=kind,
+        base_backup_id=base.id,
+        added_count=added,
+        removed_count=removed,
+        modified_count=modified,
+        full_diff_gz=blob,
+    )
+    db.add(row)
+    await db.commit()
+    return row
+
+
+async def _get_or_recompute(
+    db: AsyncSession,
+    backup: Backup,
+    kind: str,
+    crypto: Any,
+) -> BackupDiff | None:
+    """Check the cache, recompute on miss or stale. Stale =
+    ``base_backup_id`` no longer matches the current canonical base
+    for this kind (typically fires when retention prunes the first
+    backup and 'vs_first' diffs now point at a deleted row)."""
+    existing = await db.get(BackupDiff, (backup.id, kind))
+    if existing is not None:
+        current_base = await _find_base(db, backup, kind)
+        current_base_id = current_base.id if current_base else None
+        if existing.base_backup_id == current_base_id and current_base_id is not None:
+            return existing
+    return await _recompute_diff_row(db, backup, kind, crypto)
+
+
+@router.get("/{backup_id}/diff-summary", response_model=DiffSummaryResponse)
+async def backup_diff_summary(
+    backup_id: int,
+    db: DbSession,
+    user: CurrentUser,
+    crypto: CryptoDep,
+) -> DiffSummaryResponse:
+    """Return the "+N since previous" + "+N since first" count
+    rollups for a backup. Hits the ``backup_diff`` table; on miss or
+    stale (first backup pruned) it recomputes + upserts lazily. Safe
+    to call on backups that predate v0.37.0 — they simply pay the
+    full diff cost on first access and are cached afterwards."""
+    backup = await db.get(Backup, backup_id)
+    if backup is None:
+        raise HTTPException(404, "backup not found")
+
+    vs_prev_row = await _get_or_recompute(db, backup, "previous", crypto)
+    vs_first_row = await _get_or_recompute(db, backup, "first", crypto)
+
+    # Encrypted backups can't be diffed without decryption. If either
+    # side required decrypt-on-read, treat the compute as a
+    # view_decrypted event so the audit log stays honest.
+    if vs_prev_row is not None or vs_first_row is not None:
+        if backup.encrypted:
+            audit.record(
+                db,
+                actor_email=user["email"],
+                action="view_decrypted",
+                resource="backup_diff_summary",
+                resource_id=str(backup_id),
+            )
+            await db.commit()
+
+    first_backup = await _find_base(db, backup, "first")
+
+    return DiffSummaryResponse(
+        backup_id=backup_id,
+        vs_previous=(
+            DiffSummary(
+                added=vs_prev_row.added_count,
+                removed=vs_prev_row.removed_count,
+                modified=vs_prev_row.modified_count,
+            )
+            if vs_prev_row is not None
+            else None
+        ),
+        vs_first=(
+            DiffSummary(
+                added=vs_first_row.added_count,
+                removed=vs_first_row.removed_count,
+                modified=vs_first_row.modified_count,
+            )
+            if vs_first_row is not None
+            else None
+        ),
+        first_backup_id=first_backup.id if first_backup else None,
+        first_backup_started_at=(
+            first_backup.started_at.isoformat() if first_backup else None
+        ),
+    )
+
+
+@router.get("/{backup_id}/diff-vs-first/parsed")
+async def backup_diff_vs_first_parsed(
+    backup_id: int,
+    db: DbSession,
+    user: CurrentUser,
+    crypto: CryptoDep,
+) -> dict[str, Any]:
+    """Full ``ConfigDiff`` JSON between this backup and the oldest-
+    still-on-disk backup for the same instance. Served from the
+    cached ``full_diff_gz`` blob whenever available; falls through to
+    recompute on miss / stale. Returns 404 when there's no first
+    backup to diff against (single-backup instance), 409 when the
+    diff cannot be computed (XML malformed, base file missing)."""
+    backup = await db.get(Backup, backup_id)
+    if backup is None:
+        raise HTTPException(404, "backup not found")
+
+    row = await _get_or_recompute(db, backup, "first", crypto)
+    if row is None:
+        # Distinguish "no first to diff against" from "compute failed".
+        first = await _find_base(db, backup, "first")
+        if first is None:
+            raise HTTPException(
+                404,
+                "no earlier backup to diff against — this is the first "
+                "successful backup for its instance",
+            )
+        raise HTTPException(
+            409,
+            "could not compute diff against first backup "
+            "(base file missing or XML malformed)",
+        )
+
+    if backup.encrypted:
+        audit.record(
+            db,
+            actor_email=user["email"],
+            action="view_decrypted",
+            resource="backup_diff_vs_first",
+            resource_id=str(backup_id),
+        )
+        await db.commit()
+
+    return decode_diff(row.full_diff_gz)
 
 
 # --------------------------------------------------------------------- #

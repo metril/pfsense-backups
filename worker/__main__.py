@@ -263,7 +263,7 @@ def _rotate_instance_rows(
     columns, re-encrypt with the new (first) key, commit. Returns
     the number of rows updated."""
     count = 0
-    with session_factory() as session:  # type: Session
+    with session_factory() as session:
         rows = session.execute(select(Instance)).scalars().all()
         for row in rows:
             row.username_ct = crypto.encrypt(crypto.decrypt(row.username_ct))
@@ -322,7 +322,7 @@ def _verify_all_rows_decrypt(
     row fails, the pruning step would render it unreadable —
     raise and stop rotation before writing the pruned file."""
     bad: list[str] = []
-    with session_factory() as session:  # type: Session
+    with session_factory() as session:
         for inst in session.execute(select(Instance)).scalars():
             try:
                 crypto_new_only.decrypt(inst.username_ct)

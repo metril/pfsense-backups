@@ -84,6 +84,12 @@ export interface ReencryptAllRequest {
   also_update_instance_passwords: boolean;
 }
 
+export interface DiffCounts {
+  added: number;
+  removed: number;
+  modified: number;
+}
+
 export interface BackupListItem {
   id: number;
   instance_id: number;
@@ -103,6 +109,18 @@ export interface BackupListItem {
   included_packages: boolean;
   included_ssh: boolean;
   encrypted: boolean;
+  /** v0.37.0 — precomputed "+N since first backup" summary. Null for
+   *  backups taken before v0.37.0 (or when compute skipped / failed);
+   *  the UI renders null as a quiet "—". */
+  changes_since_first: DiffCounts | null;
+}
+
+export interface DiffSummaryResponse {
+  backup_id: number;
+  vs_previous: DiffCounts | null;
+  vs_first: DiffCounts | null;
+  first_backup_id: number | null;
+  first_backup_started_at: string | null;
 }
 
 export interface ScheduleRow {

@@ -198,3 +198,53 @@ class AuditLog(Base):
     resource: Mapped[str] = mapped_column(String(64))
     resource_id: Mapped[str | None] = mapped_column(String(64), default=None, nullable=True)
     details_json: Mapped[str | None] = mapped_column(Text, default=None, nullable=True)
+
+
+class BackupDiff(Base):
+    """Precomputed structural diff between a backup and a baseline.
+
+    Two rows per (typical) ``Backup`` exist once the v0.37.0 write
+    path lands: ``kind='previous'`` against the immediately prior
+    successful backup, and ``kind='first'`` against the oldest-still-
+    on-disk successful backup for the same instance. Failed / missing
+    base rows skip the write; lazy recompute on read covers pre-
+    v0.37.0 backups.
+
+    Cascade strategy:
+
+    - ``ON DELETE CASCADE`` via ``backup_id`` — retention pruning
+      the backup itself drops this row automatically.
+    - ``ON DELETE SET NULL`` via ``base_backup_id`` — when the
+      baseline gets pruned, the row survives with a NULL base and
+      the read-side helper recomputes against the current baseline
+      on next access, upserting over the stale row.
+    """
+
+    __tablename__ = "backup_diff"
+
+    backup_id: Mapped[int] = mapped_column(
+        ForeignKey("backups.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    # kind ∈ {"previous", "first"}. Checked at the DB level via
+    # a CheckConstraint added in the Alembic migration (SQLite dialect
+    # enforces it at row insert time).
+    kind: Mapped[str] = mapped_column(String(16), primary_key=True)
+
+    # NULL once retention prunes the base; read path detects NULL as
+    # "stale, recompute".
+    base_backup_id: Mapped[int | None] = mapped_column(
+        ForeignKey("backups.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    added_count: Mapped[int] = mapped_column(Integer, default=0)
+    removed_count: Mapped[int] = mapped_column(Integer, default=0)
+    modified_count: Mapped[int] = mapped_column(Integer, default=0)
+    # gzipped UTF-8 JSON of the full ConfigDiff payload. ~5-20 KB
+    # typical. Reading + ungzip is cheap compared to the alternative
+    # (re-parse both backups + diff them).
+    full_diff_gz: Mapped[bytes] = mapped_column(LargeBinary)
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
