@@ -47,7 +47,7 @@ from pfsense_shared.schemas import (
     TestConnectionResult,
 )
 
-from .instance_locks import InstanceLocks
+from .instance_locks import HostSemaphores, InstanceLocks
 from .ipc_publisher import IpcPublisher
 from .notifier import Notifier
 from .prometheus_metrics import MetricsTimer, PrometheusMetrics
@@ -190,6 +190,7 @@ class PfSenseBackupManager:
         notifier: Notifier,
         hostname: str,
         instance_locks: InstanceLocks,
+        host_semaphores: HostSemaphores | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._publisher = publisher
@@ -198,6 +199,10 @@ class PfSenseBackupManager:
         self._notifier = notifier
         self._hostname = hostname
         self._instance_locks = instance_locks
+        # Default to a fresh pool if the caller didn't inject one —
+        # most code paths do inject so both IPC + scheduler share a
+        # single ceiling per host.
+        self._host_semaphores = host_semaphores or HostSemaphores()
 
     # ------------------------------------------------------------------ #
     # Public entry points
@@ -288,24 +293,30 @@ class PfSenseBackupManager:
         t0 = time.time()
 
         try:
-            with requests.Session() as http:
-                self._emit_progress(job_id, snap.id, "auth")
-                if not self._authenticate(http, snap):
-                    raise RuntimeError("authentication failed")
+            # Per-host semaphore wraps the network-bound phases (auth
+            # + download) so a fleet sweep never points more than N
+            # threads at one pfSense box at once. Save/cleanup + DB
+            # writes run outside the semaphore — they don't touch the
+            # appliance and shouldn't contribute to the host cap.
+            with self._host_semaphores.for_url(snap.url):
+                with requests.Session() as http:
+                    self._emit_progress(job_id, snap.id, "auth")
+                    if not self._authenticate(http, snap):
+                        raise RuntimeError("authentication failed")
 
-                self._emit_progress(job_id, snap.id, "download")
-                content = self._download_config(http, snap)
-                if content is None:
-                    raise RuntimeError("config download failed")
+                    self._emit_progress(job_id, snap.id, "download")
+                    content = self._download_config(http, snap)
+                    if content is None:
+                        raise RuntimeError("config download failed")
 
-                self._emit_progress(job_id, snap.id, "save")
-                result = self._save_backup(content, snap)
+            self._emit_progress(job_id, snap.id, "save")
+            result = self._save_backup(content, snap)
 
-                self._emit_progress(job_id, snap.id, "cleanup")
-                cleaned = self._cleanup_old_backups(snap)
-                if cleaned > 0:
-                    self._metrics.record_files_cleaned(snap.name, cleaned)
-                self._update_retained_files_count(snap)
+            self._emit_progress(job_id, snap.id, "cleanup")
+            cleaned = self._cleanup_old_backups(snap)
+            if cleaned > 0:
+                self._metrics.record_files_cleaned(snap.name, cleaned)
+            self._update_retained_files_count(snap)
 
             duration = time.time() - t0
             finished_at = datetime.now(UTC)
@@ -472,6 +483,12 @@ class PfSenseBackupManager:
             # Per-instance lock serializes with user-triggered single-instance
             # backups + scheduled cron fires, so the same instance never races
             # itself. Different instances run concurrently.
+            #
+            # The per-HOST semaphore (which prevents 32 threads from
+            # slamming one HA pair) lives INSIDE ``backup_instance``
+            # so it applies on every call path — user-triggered
+            # one-shot, scheduled cron fire, and this fleet sweep —
+            # not just here.
             with self._instance_locks.for_instance(iid):
                 ok = self.backup_instance(
                     iid, job_id=job_id, notify=False, overrides=overrides

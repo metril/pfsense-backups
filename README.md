@@ -141,6 +141,31 @@ not, re-add each instance in the UI — the worker will write new `Backup` rows
 as backups succeed, and old on-disk files become orphans you can either delete
 or leave in place.
 
+## What's NOT in a config.xml backup
+
+pfSense's `config.xml` captures every setting the web UI writes, but
+several packages hold operational state outside that file. After a
+from-scratch restore, these need to be re-populated manually:
+
+- **pfBlockerNG** — GeoIP databases, downloaded blocklists (DNSBL +
+  IP). The package config (feed URLs, update schedule) lives in
+  `config.xml`; the feed contents themselves are downloaded on
+  `pfblockerng-update.sh` runs. Expect 10–30 minutes on first boot
+  before the lists are populated.
+- **Suricata / Snort** — rule databases, signatures. Rules are
+  downloaded from Emerging Threats / Snort.org via the package's
+  scheduled update job. A freshly-restored box has zero rules until
+  the first update cycle finishes.
+- **ACME / LE certificates** — issued cert bodies and intermediate
+  chains (the package config specifies the *how*; the issued certs
+  themselves are renewed on schedule).
+- **FreeRADIUS** — user database and accounting data if using file
+  backends outside the XML tree.
+- **Captive portal** — voucher databases (live state, not config).
+
+Operators restoring to a new box under active threat should expect a
+refresh window before network defences are back at full strength.
+
 ## Security notes
 
 - pfSense credentials are encrypted with Fernet at rest (`Crypto` class in
