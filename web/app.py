@@ -11,6 +11,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from cachetools import LRUCache  # type: ignore[import-untyped]
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
@@ -68,6 +69,15 @@ async def lifespan(app: FastAPI):
     bus = EventBus()
     app.state.event_bus = bus
 
+    # LRU cache for /anchor-history. The endpoint decrypts + parses
+    # every backup for an instance on each request — deterministic
+    # result, cacheable. Keyed ``(instance_id, anchor)``; invalidation
+    # lives in the ``_anchor_history_invalidator`` task below.
+    # ``maxsize=512`` holds ~50 instances × ~10 recently-blamed anchors;
+    # per-entry cost is the full history list (dozens of rows × a few
+    # hundred bytes = ~10 KB), so ~5 MB worst case in process.
+    app.state.anchor_history_cache = LRUCache(maxsize=512)
+
     # Ring buffer for the in-app log viewer. The root logger handler we
     # install below feeds it with web-side records, and the ZMQ SUB bridge
     # routes worker log frames (topic "log") into the same ring so the
@@ -97,14 +107,59 @@ async def lifespan(app: FastAPI):
         client_secret=settings.oidc_client_secret,
     )
 
+    # Cache invalidation subscriber — consumes the EventBus alongside
+    # the WebSocket fanout. When a new backup lands for an instance,
+    # any /anchor-history cache entry for that instance is now stale
+    # (new row to walk), so drop every entry whose key starts with
+    # ``(instance_id, …)``. Only ``backup.finished`` with
+    # ``success=True`` invalidates — failures don't change history,
+    # and other topics are orthogonal.
+    invalidator_task = asyncio.create_task(
+        _anchor_history_invalidator(bus, app.state.anchor_history_cache)
+    )
+    app.state.anchor_history_invalidator = invalidator_task
+
     log.info("web service ready")
     try:
         yield
     finally:
         log.info("shutting down ipc client")
+        invalidator_task.cancel()
+        try:
+            await invalidator_task
+        except (asyncio.CancelledError, Exception):
+            pass
         logging.getLogger().removeHandler(web_log_handler)
         await ipc.close()
         await async_engine.dispose()
+
+
+async def _anchor_history_invalidator(
+    bus: EventBus, cache: LRUCache[tuple[int, str], object]
+) -> None:
+    """Purge ``/anchor-history`` cache entries when a new successful
+    backup lands for an instance. Runs for the lifetime of the app;
+    cancelled during shutdown."""
+    queue = await bus.subscribe()
+    try:
+        while True:
+            envelope = await queue.get()
+            if envelope.get("topic") != "backup.finished":
+                continue
+            if not envelope.get("success"):
+                continue
+            inst_id = envelope.get("instance_id")
+            if inst_id is None:
+                continue
+            # Iterate a snapshot of keys — ``cache`` is mutated in the
+            # body, so walking the live keys view would raise.
+            for key in list(cache.keys()):
+                if key[0] == inst_id:
+                    cache.pop(key, None)
+    except asyncio.CancelledError:
+        raise
+    finally:
+        await bus.unsubscribe(queue)
 
 
 def create_app(settings: WebSettings | None = None, static_dir: Path | None = None) -> FastAPI:

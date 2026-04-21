@@ -902,10 +902,24 @@ async def instance_anchor_history(
             previous_value = value
         return out
 
-    try:
-        entries = await asyncio.to_thread(_gather)
-    except _WalkAbortError as abort:
-        raise HTTPException(abort.status_code, abort.detail) from abort
+    # LRU cache keyed ``(instance_id, anchor)``. The cached result
+    # includes every snapshot walked, so any new backup for this
+    # instance invalidates the entry (handled by the
+    # ``_anchor_history_invalidator`` background task in ``app.py``).
+    # Cache miss pays the full walk + parse cost; hit short-circuits.
+    cache = getattr(request.app.state, "anchor_history_cache", None)
+    cache_key = (instance_id, anchor)
+    cached = cache.get(cache_key) if cache is not None else None
+    entries: list[AnchorHistoryChange]
+    if cached is not None:
+        entries = cached
+    else:
+        try:
+            entries = await asyncio.to_thread(_gather)
+        except _WalkAbortError as abort:
+            raise HTTPException(abort.status_code, abort.detail) from abort
+        if cache is not None:
+            cache[cache_key] = entries
 
     if any_encrypted:
         # Fresh session from the factory — the original ``db`` was

@@ -6,11 +6,21 @@ import { useEffect, useRef, useState } from "react";
  * XML tab-switch sync so "current focus" survives a tab toggle.
  *
  * Implementation: IntersectionObserver over every ``[id^="xref-"] |
- * [id^="field-"]`` in the document, tracking the observed element
- * whose top is closest to the viewport's upper third (the same
- * reading-position bias ``useActiveSection`` uses). Only fires when
- * the winner actually changes, so a React state update per scroll
- * frame is avoided.
+ * [id^="field-"]`` under the ``[data-structured-root]`` scroll
+ * container, tracking the observed element whose top is closest to
+ * the container's upper third (same reading-position bias
+ * ``useActiveSection`` uses). Only fires when the winner actually
+ * changes, so a React state update per scroll frame is avoided.
+ *
+ * The ``root`` option on IntersectionObserver is load-bearing here:
+ * ``[data-structured-root]`` is an ``overflow-auto`` div nested
+ * inside a parent with ``overflow-hidden``. Without passing it
+ * explicitly, IntersectionObserver defaults to the viewport — but
+ * the viewport never scrolls because scroll is confined to the
+ * inner div. The observer would then only ever fire on initial
+ * mount, making the focused anchor freeze at "whatever row was in
+ * viewport when the Structured tab was first shown". (Bug fixed in
+ * v0.35.0.)
  *
  * ``enabled`` — pass ``false`` to disable observation (e.g. the Raw
  * XML tab is active). Saves the observer cost when no consumer
@@ -36,46 +46,10 @@ export function useFocusedAnchor(enabled: boolean): string | null {
     }
     const ratios = ratiosRef.current;
     ratios.clear();
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const e of entries) {
-          ratios.set(e.target.id, e.intersectionRatio);
-        }
-        let bestId: string | null = null;
-        let bestRatio = -1;
-        for (const [id, r] of ratios.entries()) {
-          if (r > bestRatio) {
-            bestRatio = r;
-            bestId = id;
-          }
-        }
-        emitRef.current(bestRatio > 0 ? bestId : null);
-      },
-      {
-        // Same "lead the scroll slightly" bias as ``useActiveSection``
-        // — the section / row whose top is in the upper third of the
-        // viewport wins.
-        rootMargin: "0px 0px -66% 0px",
-        threshold: [0, 0.1, 0.25, 0.5, 1],
-      },
-    );
 
-    const targets = document.querySelectorAll<HTMLElement>(
-      '[id^="xref-"], [id^="field-"]',
-    );
-    for (const t of targets) observer.observe(t);
-
-    // Filter changes / navigation can swap the set of rendered
-    // anchors. Re-observe when the DOM shape under the main content
-    // container mutates. Narrow the root to avoid pathological
-    // churn — mutations outside the structured scroll container
-    // don't matter. Debounce: typing into the filter bar produces
-    // dozens of child mutations per keystroke, each of which would
-    // rebuild observer membership across hundreds of anchors. Batch
-    // into a single re-observe per idle tick.
-    const mutationRoot = document.querySelector<HTMLElement>(
-      "[data-structured-root]",
-    );
+    let observer: IntersectionObserver | null = null;
+    let mutator: MutationObserver | null = null;
+    let waitObserver: MutationObserver | null = null;
     let rebuildHandle: number | null = null;
     // ``active`` guards against a race where the debounced rebuild
     // fires between the cleanup running and the new observer being
@@ -83,22 +57,82 @@ export function useFocusedAnchor(enabled: boolean): string | null {
     // just-disconnected observer, silently leaking membership for
     // the next mount cycle.
     let active = true;
-    const rebuild = () => {
-      rebuildHandle = null;
-      if (!active) return;
-      const next = document.querySelectorAll<HTMLElement>(
-        '[id^="xref-"], [id^="field-"]',
+
+    function install(structuredRoot: HTMLElement): void {
+      observer = new IntersectionObserver(
+        (entries) => {
+          for (const e of entries) {
+            ratios.set(e.target.id, e.intersectionRatio);
+          }
+          let bestId: string | null = null;
+          let bestRatio = -1;
+          for (const [id, r] of ratios.entries()) {
+            if (r > bestRatio) {
+              bestRatio = r;
+              bestId = id;
+            }
+          }
+          emitRef.current(bestRatio > 0 ? bestId : null);
+        },
+        {
+          root: structuredRoot,
+          // "Lead the scroll slightly" bias — row whose top is in
+          // the upper third of the scroll root wins. Matches
+          // ``useActiveSection``'s heuristic.
+          rootMargin: "0px 0px -66% 0px",
+          threshold: [0, 0.1, 0.25, 0.5, 1],
+        },
       );
-      observer.disconnect();
-      ratios.clear();
-      for (const t of next) observer.observe(t);
-    };
-    const mutator = new MutationObserver(() => {
-      if (rebuildHandle !== null) return;
-      rebuildHandle = window.setTimeout(rebuild, 50);
-    });
-    if (mutationRoot) {
-      mutator.observe(mutationRoot, { childList: true, subtree: true });
+
+      for (const t of structuredRoot.querySelectorAll<HTMLElement>(
+        '[id^="xref-"], [id^="field-"]',
+      )) {
+        observer.observe(t);
+      }
+
+      // Filter / navigation churn: the set of rendered anchors
+      // changes on every keystroke in the FilterBar. Debounce
+      // re-observe into a single tick per idle window.
+      const rebuild = () => {
+        rebuildHandle = null;
+        if (!active || !observer) return;
+        observer.disconnect();
+        ratios.clear();
+        for (const t of structuredRoot.querySelectorAll<HTMLElement>(
+          '[id^="xref-"], [id^="field-"]',
+        )) {
+          observer.observe(t);
+        }
+      };
+      mutator = new MutationObserver(() => {
+        if (rebuildHandle !== null) return;
+        rebuildHandle = window.setTimeout(rebuild, 50);
+      });
+      mutator.observe(structuredRoot, { childList: true, subtree: true });
+    }
+
+    const initialRoot = document.querySelector<HTMLElement>(
+      "[data-structured-root]",
+    );
+    if (initialRoot) {
+      install(initialRoot);
+    } else {
+      // Lazy-loaded ParsedBackupView hasn't mounted yet (Suspense
+      // fallback still showing). Watch for it to arrive.
+      waitObserver = new MutationObserver(() => {
+        const root = document.querySelector<HTMLElement>(
+          "[data-structured-root]",
+        );
+        if (root && active) {
+          waitObserver?.disconnect();
+          waitObserver = null;
+          install(root);
+        }
+      });
+      waitObserver.observe(document.body, {
+        childList: true,
+        subtree: true,
+      });
     }
 
     return () => {
@@ -106,8 +140,9 @@ export function useFocusedAnchor(enabled: boolean): string | null {
       if (rebuildHandle !== null) {
         window.clearTimeout(rebuildHandle);
       }
-      observer.disconnect();
-      mutator.disconnect();
+      observer?.disconnect();
+      mutator?.disconnect();
+      waitObserver?.disconnect();
     };
   }, [enabled]);
 

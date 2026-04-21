@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   Check,
   ClipboardCopy,
+  Clock,
   Download,
   History,
   Pencil,
@@ -24,7 +25,9 @@ import {
 } from "@/api/queries";
 import { api, triggerDownload } from "@/api/client";
 import { useFocusedAnchor } from "@/lib/useFocusedAnchor";
+import { useBlameHotkey } from "@/lib/useBlameHotkey";
 import { expandThenScrollToHash } from "@/lib/xref";
+import { AnchorHistoryDrawer } from "@/components/xref/AnchorHistoryDrawer";
 
 const MonacoViewer = lazy(() => import("@/components/MonacoViewer"));
 const ParsedBackupView = lazy(() =>
@@ -98,6 +101,18 @@ export function BackupViewPage() {
     }
   }, [tab, structuredAnchor]);
 
+  // Blame drawer — same ``h`` hotkey as the InstanceHistory page,
+  // gated on the Structured tab so pressing ``h`` while scrolling
+  // Monaco doesn't silently open blame for a stale anchor. Reuses
+  // the unified ``focusedAnchor`` above (driven by either the
+  // intersection observer or the Monaco cursor mapper), so blame
+  // always opens on whatever the operator was most recently
+  // focused on.
+  const { blameAnchor, closeBlame } = useBlameHotkey({
+    enabled: tab === "structured",
+    focusedAnchor,
+  });
+
   const anchorForLine = useCallback(
     (line: number): string | null => {
       if (!positions) return null;
@@ -141,16 +156,34 @@ export function BackupViewPage() {
         setRawFocusLine(range ? range[0] : undefined);
       } else {
         // Raw → Structured: bump the hash so the deep-link bridge +
-        // scroll helpers land on the focused row. ``expandThenScroll
-        // ToHash`` runs after the tab's DOM mounts (the call is
-        // safe to make eagerly because the helper only touches
-        // existing anchor ids).
+        // scroll helpers land on the focused row.
         if (focusedAnchor) {
-          // Defer to the next frame so the Structured tree mounts
-          // before we try to locate the anchor.
-          requestAnimationFrame(() =>
-            expandThenScrollToHash(`#${focusedAnchor}`),
-          );
+          // ``ParsedBackupView`` is React.lazy — the import can
+          // take tens to hundreds of ms after tab switch, and the
+          // anchor id we want to scroll to doesn't exist in the
+          // DOM until then. A plain rAF defer isn't enough. Poll
+          // via MutationObserver with a deadline; when the anchor
+          // appears, call ``expandThenScrollToHash``. Give up after
+          // 3s so a missing anchor (e.g. filtered out) doesn't leak
+          // the observer forever.
+          const targetId = focusedAnchor;
+          const deadline = Date.now() + 3000;
+          const tryScroll = (): boolean => {
+            if (document.getElementById(targetId)) {
+              expandThenScrollToHash(`#${targetId}`);
+              return true;
+            }
+            return false;
+          };
+          if (!tryScroll()) {
+            const obs = new MutationObserver(() => {
+              if (tryScroll() || Date.now() > deadline) {
+                obs.disconnect();
+              }
+            });
+            obs.observe(document.body, { childList: true, subtree: true });
+            window.setTimeout(() => obs.disconnect(), 3000);
+          }
         }
       }
       setTab(next);
@@ -373,6 +406,17 @@ export function BackupViewPage() {
         ]}
       />
 
+      {tab === "structured" && (
+        <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-fg">
+          <Clock aria-hidden="true" className="h-3 w-3" />
+          <span>Press</span>
+          <kbd className="rounded border border-border bg-muted px-1 text-[10px]">
+            h
+          </kbd>
+          <span>on a focused row or field for its history.</span>
+        </div>
+      )}
+
       <div
         id="backup-view-panel"
         role="tabpanel"
@@ -394,6 +438,12 @@ export function BackupViewPage() {
           )}
         </Suspense>
       </div>
+
+      <AnchorHistoryDrawer
+        instanceId={detail.instance_id}
+        anchor={blameAnchor}
+        onClose={closeBlame}
+      />
     </div>
   );
 }

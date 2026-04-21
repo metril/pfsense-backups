@@ -11,6 +11,7 @@ import {
 } from "@/api/queries";
 import { collectChangedAnchors } from "@/lib/changedAnchors";
 import { useFocusedAnchor } from "@/lib/useFocusedAnchor";
+import { useBlameHotkey } from "@/lib/useBlameHotkey";
 import { AnchorHistoryDrawer } from "@/components/xref/AnchorHistoryDrawer";
 
 const ParsedBackupView = lazy(() =>
@@ -152,35 +153,14 @@ export function InstanceHistoryPage() {
     [],
   );
 
-  // ------- Blame drawer (v0.24.0) ----------------------------------
-  // ``useFocusedAnchor`` tracks the nearest visible row / field in
-  // the Structured view. Pressing ``h`` (outside inputs / modals)
-  // opens the AnchorHistoryDrawer for whatever is focused; ``Esc``
-  // closes it (handled inside the drawer).
+  // Blame drawer (v0.24.0): ``h`` opens the AnchorHistoryDrawer for
+  // the nearest visible row / field; ``Esc`` closes it (inside the
+  // drawer). Shared with ``BackupView`` via ``useBlameHotkey``.
   const focusedAnchor = useFocusedAnchor(true);
-  const [blameAnchor, setBlameAnchor] = useState<string | null>(null);
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      const target = e.target as HTMLElement | null;
-      if (
-        target &&
-        (target.tagName === "INPUT" ||
-          target.tagName === "TEXTAREA" ||
-          target.isContentEditable)
-      ) {
-        return;
-      }
-      if (target?.closest('[role="dialog"], [role="listbox"], [role="menu"]'))
-        return;
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (e.key === "h" && focusedAnchor) {
-        e.preventDefault();
-        setBlameAnchor(focusedAnchor);
-      }
-    }
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [focusedAnchor]);
+  const { blameAnchor, openBlame, closeBlame } = useBlameHotkey({
+    enabled: true,
+    focusedAnchor,
+  });
 
   if (!Number.isFinite(id)) {
     return (
@@ -387,7 +367,7 @@ export function InstanceHistoryPage() {
       {focusedAnchor && blameAnchor === null && (
         <button
           type="button"
-          onClick={() => setBlameAnchor(focusedAnchor)}
+          onClick={() => openBlame(focusedAnchor)}
           className="fixed bottom-4 left-4 z-30 inline-flex items-center gap-1.5 rounded-full border border-border bg-bg/95 px-3 py-1.5 text-xs font-medium text-muted-fg shadow-lg backdrop-blur transition-colors hover:bg-muted/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
           title={`Blame: ${focusedAnchor}`}
         >
@@ -404,7 +384,7 @@ export function InstanceHistoryPage() {
       <AnchorHistoryDrawer
         instanceId={id}
         anchor={blameAnchor}
-        onClose={() => setBlameAnchor(null)}
+        onClose={closeBlame}
       />
     </div>
   );
