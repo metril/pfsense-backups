@@ -1,6 +1,6 @@
 [project]
 name = "pfsense-backups"
-version = "0.27.0"
+version = "0.28.0"
 description = "pfSense configuration backup + web dashboard."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -27,7 +27,11 @@ dependencies = [
 worker = [
     "requests>=2.31",
     "prometheus-client>=0.19",
-    "apscheduler>=3.10",
+    # Cap below 4.x — APScheduler 4 is an async-first rewrite with
+    # renamed APIs; our worker uses the synchronous 3.x ``BlockingScheduler``
+    # pattern. Without the cap, a future ``uv lock`` regeneration could
+    # resolve to 4.x and fail to boot.
+    "apscheduler>=3.10,<4",
     "croniter>=2.0",
 ]
 web = [

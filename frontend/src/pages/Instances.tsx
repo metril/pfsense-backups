@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { cloneElement, isValidElement, useId, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import cronstrue from "cronstrue";
 import {
@@ -536,10 +536,22 @@ function EditorDialog({
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  // Associate the <label> with the wrapped control so screen readers
+  // announce it. ``useId`` gives a stable SSR-safe identifier; we
+  // clone the child to inject ``id`` when possible, and fall back
+  // silently if the child isn't a single element (rare — most
+  // Fields wrap Input / Select / native form controls).
+  const id = useId();
+  const controlId = `${id}-control`;
+  const labelled = isValidElement(children)
+    ? cloneElement(children as React.ReactElement<{ id?: string }>, {
+        id: (children.props as { id?: string }).id ?? controlId,
+      })
+    : children;
   return (
     <div>
-      <Label>{label}</Label>
-      <div className="mt-1">{children}</div>
+      <Label htmlFor={controlId}>{label}</Label>
+      <div className="mt-1">{labelled}</div>
     </div>
   );
 }

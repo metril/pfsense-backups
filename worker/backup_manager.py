@@ -852,7 +852,18 @@ class PfSenseBackupManager:
             inst = s.get(Instance, instance_id)
             if inst is None:
                 return None
-            settings = s.query(BackupSettings).filter(BackupSettings.id == 1).one()
+            settings = s.get(BackupSettings, 1)
+            if settings is None:
+                # init_db seeds a BackupSettings(id=1) row, so this
+                # only fires if the singleton is manually removed or
+                # a migration fails mid-flight. Surface it loudly
+                # rather than crash on ``.one()``; the caller's
+                # outer ``except Exception`` will route it through
+                # the normal failure path and emit an event row.
+                raise RuntimeError(
+                    "BackupSettings singleton missing — init_db did not "
+                    "seed correctly or the row was deleted manually"
+                )
 
             # Base values come from the DB row.
             backup_area = inst.backup_area or ""
@@ -1077,7 +1088,14 @@ class PfSenseBackupManager:
         return path
 
     def _save_backup(self, content: str, snap: _InstanceSnapshot) -> _SaveResult:
-        timestamp = datetime.now().strftime(snap.timestamp_format)
+        # UTC to match ``started_at`` / ``finished_at`` stored in the
+        # DB (also UTC). Previously used ``datetime.now()`` which
+        # returns the container's local time — on non-UTC hosts this
+        # meant filenames disagreed with DB timestamps by hours and
+        # retention ordering could cross a DST boundary. The viewer
+        # renders these through ``toLocaleString()`` anyway, so
+        # operators see local time where it matters.
+        timestamp = datetime.now(UTC).strftime(snap.timestamp_format)
         filename = snap.filename_format.format(
             prefix=snap.backup_prefix, instance_name=snap.name, timestamp=timestamp
         )

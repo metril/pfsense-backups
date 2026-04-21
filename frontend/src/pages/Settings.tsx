@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { cloneElement, isValidElement, useEffect, useId, useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Label } from "@/components/ui/Label";
@@ -181,10 +181,19 @@ export function SettingsPage() {
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  // See Instances.tsx::Field — same htmlFor+id plumbing so screen
+  // readers announce each form control with its visible label.
+  const id = useId();
+  const controlId = `${id}-control`;
+  const labelled = isValidElement(children)
+    ? cloneElement(children as React.ReactElement<{ id?: string }>, {
+        id: (children.props as { id?: string }).id ?? controlId,
+      })
+    : children;
   return (
     <div>
-      <Label>{label}</Label>
-      <div className="mt-1">{children}</div>
+      <Label htmlFor={controlId}>{label}</Label>
+      <div className="mt-1">{labelled}</div>
     </div>
   );
 }

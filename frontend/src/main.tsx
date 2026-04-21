@@ -11,10 +11,10 @@ import App from "./App";
 import { ApiError } from "./api/client";
 import { ConfirmProvider } from "./components/ui/ConfirmDialog";
 import { ToastProvider, useToast } from "./components/ui/Toast";
-
-type ToastApi = ReturnType<typeof useToast>;
 import { TooltipProvider } from "./components/ui/Tooltip";
 import "./index.css";
+
+type ToastApi = ReturnType<typeof useToast>;
 
 /**
  * Extract a user-friendly message from an error. FastAPI returns either a
