@@ -142,6 +142,12 @@ export function InstanceHistoryPage() {
       }
       if (target?.closest('[role="dialog"], [role="listbox"], [role="menu"]'))
         return;
+      // v0.41.0: exempt the Tabs widget (Structured / Raw toggle).
+      // It uses the same ArrowLeft / ArrowRight keys internally and
+      // without this guard both the tab switch AND the timeline
+      // scrubber would advance on a single key press when a tab has
+      // focus.
+      if (target?.closest('[role="tablist"], [role="tab"]')) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "ArrowLeft") {
         e.preventDefault();

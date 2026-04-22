@@ -242,6 +242,65 @@ def test_filter_key_changes_on_interface_edit() -> None:
     assert k1 != k2, f"filter key should change on interface edits; got {k1!r} for both"
 
 
+def test_filter_key_changes_on_floating_toggle() -> None:
+    """Flipping a rule from per-interface to floating changes its
+    evaluation order / semantics. The key MUST change so blame
+    shows remove+add rather than silently merging two distinct
+    rulesets into one anchor."""
+    from pfsense_shared.pfsense_parser import parse
+
+    per_iface = b"""<pfsense><filter>
+      <rule>
+        <type>pass</type>
+        <interface>lan</interface>
+        <ipprotocol>inet</ipprotocol>
+        <protocol>tcp</protocol>
+      </rule>
+    </filter></pfsense>"""
+    floating = b"""<pfsense><filter>
+      <rule>
+        <type>pass</type>
+        <interface>lan</interface>
+        <ipprotocol>inet</ipprotocol>
+        <protocol>tcp</protocol>
+        <floating>yes</floating>
+        <direction>any</direction>
+      </rule>
+    </filter></pfsense>"""
+    k1 = parse(per_iface).firewall_rules[0].key
+    k2 = parse(floating).firewall_rules[0].key
+    assert k1 != k2, f"filter key should change on floating toggle; got {k1!r} for both"
+
+
+def test_filter_key_changes_on_statetype_edit() -> None:
+    """``<statetype>`` drives pf's state-tracking behaviour —
+    ``keep state`` vs ``none`` vs ``synproxy`` are functionally
+    different rules even when everything else matches."""
+    from pfsense_shared.pfsense_parser import parse
+
+    base = b"""<pfsense><filter>
+      <rule>
+        <type>pass</type>
+        <interface>lan</interface>
+        <ipprotocol>inet</ipprotocol>
+        <protocol>tcp</protocol>
+        <statetype>keep state</statetype>
+      </rule>
+    </filter></pfsense>"""
+    flipped = b"""<pfsense><filter>
+      <rule>
+        <type>pass</type>
+        <interface>lan</interface>
+        <ipprotocol>inet</ipprotocol>
+        <protocol>tcp</protocol>
+        <statetype>none</statetype>
+      </rule>
+    </filter></pfsense>"""
+    k1 = parse(base).firewall_rules[0].key
+    k2 = parse(flipped).firewall_rules[0].key
+    assert k1 != k2, f"filter key should change on statetype flip; got {k1!r} for both"
+
+
 def test_aliases(parsed: ParsedConfig) -> None:
     names = [a.name for a in parsed.aliases]
     assert names == ["WEB_PORTS", "MGMT_HOSTS"]

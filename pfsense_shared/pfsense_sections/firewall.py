@@ -82,10 +82,25 @@ def _rule_key(r: Element) -> str:
     if tracker:
         return f"tracker:{tracker}"
     # Fallback for pre-tracker configs: content-hash of the
-    # *functional* fields so editing ``<descr>`` doesn't fork the
-    # blame history into a remove+add event pair. ``<descr>`` and
-    # created/updated timestamps are deliberately EXCLUDED — same
-    # reasoning as the NAT fix (see nat._key).
+    # *functional* fields so editing ``<descr>`` (or ``<log>``, which
+    # only toggles telemetry) doesn't fork the blame history into a
+    # remove+add event pair. Fields included are those that change
+    # how the rule evaluates traffic:
+    #   - type, interface, ipprotocol, protocol: the packet-matching
+    #     filter itself.
+    #   - source / destination blobs: the match criteria.
+    #   - gateway: policy-based routing destination.
+    #   - disabled: whether the rule fires at all.
+    #   - floating + direction: whether the rule lives in per-
+    #     interface or floating ruleset, and its direction
+    #     (``in``/``out``/``any``) when floating. Toggling either
+    #     changes evaluation order meaningfully.
+    #   - statetype: ``keep state`` vs ``none`` vs ``synproxy`` —
+    #     different state-tracking behaviour is functionally a
+    #     different rule.
+    # ``<descr>``, ``<log>``, ``<created>`` / ``<updated>``, and
+    # ``<associated-rule-id>`` are deliberately EXCLUDED (cosmetic
+    # / metadata / volatile). Same reasoning as NAT (see nat._key).
     blob = "\x1f".join(
         [
             text(r, "type") or "",
@@ -96,6 +111,9 @@ def _rule_key(r: Element) -> str:
             _endpoint_blob(r.find("destination")),
             text(r, "gateway") or "",
             text(r, "disabled") or "",
+            text(r, "floating") or "",
+            text(r, "direction") or "",
+            text(r, "statetype") or "",
         ]
     )
     return "hash:" + hashlib.sha1(blob.encode(), usedforsecurity=False).hexdigest()[:12]

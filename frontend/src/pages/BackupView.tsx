@@ -193,14 +193,6 @@ export function BackupViewPage() {
   useEffect(() => {
     if (!anchorParam || !positions) return;
     const targetId = anchorParam;
-    const range = positions[targetId];
-    // Unknown anchor id: nothing to do — leave the param so the user
-    // can see it in the URL but don't loop.
-    if (!range) return;
-
-    let done = false;
-    let obs: MutationObserver | null = null;
-    const deadline = Date.now() + 3000;
 
     const stripAnchorParam = () => {
       setSearchParams(
@@ -212,6 +204,18 @@ export function BackupViewPage() {
         { replace: true },
       );
     };
+
+    const range = positions[targetId];
+    // Unknown anchor id (e.g. the anchor was deleted in this
+    // backup): strip the param so we don't retry on every re-render.
+    if (!range) {
+      stripAnchorParam();
+      return;
+    }
+
+    let done = false;
+    let obs: MutationObserver | null = null;
+    let timeoutId: number | undefined;
 
     const tryStructured = (): boolean => {
       const el = document.getElementById(targetId);
@@ -232,37 +236,26 @@ export function BackupViewPage() {
     if (!tryStructured()) {
       obs = new MutationObserver(() => {
         if (done) return;
-        if (tryStructured()) {
-          obs?.disconnect();
-        } else if (Date.now() > deadline) {
-          obs?.disconnect();
-          // Fallback: switch to Raw XML + reveal the line range's
-          // first line in Monaco. ``rawFocusLine`` is consumed by
-          // ``MonacoViewer`` on mount / prop change.
-          if (!done) {
-            done = true;
-            setTab("raw");
-            setRawFocusLine(range[0]);
-            setFocusedAnchor(targetId);
-            stripAnchorParam();
-          }
-        }
+        if (tryStructured()) obs?.disconnect();
       });
       obs.observe(document.body, { childList: true, subtree: true });
-      window.setTimeout(() => {
-        if (!done) {
-          obs?.disconnect();
-          done = true;
-          setTab("raw");
-          setRawFocusLine(range[0]);
-          setFocusedAnchor(targetId);
-          stripAnchorParam();
-        }
+      // Deadline: if no matching mutation arrives within 3s (lazy
+      // import took too long, row got filtered out, etc.) fall back
+      // to Raw XML and let Monaco reveal the enclosing line.
+      timeoutId = window.setTimeout(() => {
+        if (done) return;
+        done = true;
+        obs?.disconnect();
+        setTab("raw");
+        setRawFocusLine(range[0]);
+        setFocusedAnchor(targetId);
+        stripAnchorParam();
       }, 3000);
     }
 
     return () => {
       obs?.disconnect();
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
     };
     // Intentionally exclude ``setSearchParams`` (stable reference
     // per react-router docs) — including it triggers redundant

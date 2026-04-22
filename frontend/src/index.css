@@ -99,7 +99,8 @@
    don't hide the target under the fixed header. 5rem covers the app
    topbar plus breathing room. */
 .scroll-anchor,
-[id^="xref-"] {
+[id^="xref-"],
+[id^="field-"] {
   scroll-margin-top: 5rem;
 }
 

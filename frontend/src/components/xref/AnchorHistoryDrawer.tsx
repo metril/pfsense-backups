@@ -8,7 +8,6 @@ import {
   type AnchorHistoryChange,
 } from "@/api/queries";
 import { anchorHumanLabel } from "@/lib/anchorLabel";
-import { useBlameForAnchor } from "@/components/xref/AnchorBlame";
 
 /**
  * Per-anchor blame drawer. Opens when the operator hits ``h`` on a
@@ -58,13 +57,12 @@ export function AnchorHistoryDrawer({
   onClose: () => void;
 }) {
   const query = useAnchorHistory(instanceId, anchor);
-  // Touch the summary so the context's indexed/anchor sets stay warm
-  // for the drawer session. The blame-summary payload doesn't carry
-  // the per-anchor ``value`` dict, so we derive the human label from
-  // the first "is_change" entry of the full history instead — that
-  // always carries the row value, which includes the descr / name /
-  // refid the label helper uses.
-  useBlameForAnchor(anchor);
+  // Derive the human header label from the first "is_change" entry
+  // of the full history — that carries the row value dict
+  // (``descr`` / ``name`` / ``refid``) that the label helper uses.
+  // While the history is loading the header falls back to ``section
+  // · tail`` (still readable), then upgrades in-place once the row
+  // value is available.
   const firstChange = query.data?.entries.find((e) => e.is_change);
   const valueForLabel = firstChange?.value;
   const derivedLabel = anchor ? anchorHumanLabel(anchor, valueForLabel) : "";
