@@ -37,6 +37,7 @@ import {
   useState,
   type MouseEvent as ReactMouseEvent,
   type FocusEvent as ReactFocusEvent,
+  type ReactElement,
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
@@ -221,6 +222,7 @@ export function BlameHoverTooltip({
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<TooltipPos>({ x: 0, y: 0 });
   const enterTimerRef = useRef<number | null>(null);
+  const leaveTimerRef = useRef<number | null>(null);
   const rafRef = useRef<number | null>(null);
   const pendingPosRef = useRef<{ x: number; y: number } | null>(null);
 
@@ -232,6 +234,10 @@ export function BlameHoverTooltip({
       if (enterTimerRef.current !== null) {
         window.clearTimeout(enterTimerRef.current);
         enterTimerRef.current = null;
+      }
+      if (leaveTimerRef.current !== null) {
+        window.clearTimeout(leaveTimerRef.current);
+        leaveTimerRef.current = null;
       }
       if (rafRef.current !== null) {
         cancelAnimationFrame(rafRef.current);
@@ -252,17 +258,24 @@ export function BlameHoverTooltip({
     });
   }, []);
 
-  // Only one child; must be a valid React element so we can clone
-  // and attach event handlers directly to it. Can't wrap in a
-  // ``<div>`` because the child is a ``<tr>`` or ``<dt>`` whose
-  // parent is a table / definition-list and won't allow arbitrary
-  // wrappers.
-  const child = Children.only(children);
-  if (!isValidElement(child)) return <>{children}</>;
+  // Children may be one element (a <tr>) or several (a <dt> + <dd>
+  // pair in a Dl — its parent is a ``display: grid`` <dl> that
+  // doesn't allow a wrapper <div>, so the tooltip needs to clone
+  // each grid item individually and attach the same mouse handlers
+  // to all of them). Mouse entering any of them opens the tooltip;
+  // leaving the whole group closes it.
+  //
+  // Because ``onMouseEnter`` / ``onMouseLeave`` are non-bubbling
+  // React synthetic events, moving between sibling handler-bearing
+  // elements WOULD cause a close-then-reopen flicker. We coalesce
+  // that with an ``exitTimerRef`` debounce: ``mouseLeave`` on one
+  // element schedules a close, and a ``mouseEnter`` on the next
+  // sibling (or on the same element) cancels it.
+  const childArr = Children.toArray(children);
 
-  // No blame entry → render child untouched. Avoids every row
+  // No blame entry → render children untouched. Avoids every row
   // carrying dead event handlers.
-  if (!entry || !anchorId) return <>{child}</>;
+  if (!entry || !anchorId) return <>{childArr}</>;
 
   type ChildProps = {
     onMouseEnter?: (e: ReactMouseEvent) => void;
@@ -271,10 +284,33 @@ export function BlameHoverTooltip({
     onFocus?: (e: ReactFocusEvent) => void;
     onBlur?: (e: ReactFocusEvent) => void;
   };
-  const childProps = (child.props ?? {}) as ChildProps;
+
+  const cancelLeave = () => {
+    if (leaveTimerRef.current !== null) {
+      window.clearTimeout(leaveTimerRef.current);
+      leaveTimerRef.current = null;
+    }
+  };
 
   const onMouseEnter = (e: ReactMouseEvent) => {
+    // Moving from one handler-bearing sibling into another (e.g.
+    // <dt> → <dd>) fires mouseleave on the first AND mouseenter on
+    // the second. Cancel any pending close so the tooltip doesn't
+    // flicker as the cursor crosses the sibling boundary.
+    cancelLeave();
     pendingPosRef.current = { x: e.clientX, y: e.clientY };
+    if (open) {
+      // Already open: just update position instead of delaying.
+      setPos(
+        clampToViewport(
+          e.clientX,
+          e.clientY,
+          window.innerWidth,
+          window.innerHeight,
+        ),
+      );
+      return;
+    }
     if (enterTimerRef.current !== null) {
       window.clearTimeout(enterTimerRef.current);
     }
@@ -295,6 +331,12 @@ export function BlameHoverTooltip({
   };
 
   const onMouseLeave = () => {
+    // Short grace period before closing — if the cursor is crossing
+    // into a sibling of the same group (e.g. from <dt> to <dd>) the
+    // sibling's ``onMouseEnter`` fires almost immediately and will
+    // cancel this timer via ``cancelLeave()``. Without the grace,
+    // the tooltip closes and re-opens with the hover delay, which
+    // reads as a flicker.
     if (enterTimerRef.current !== null) {
       window.clearTimeout(enterTimerRef.current);
       enterTimerRef.current = null;
@@ -303,14 +345,19 @@ export function BlameHoverTooltip({
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     }
-    pendingPosRef.current = null;
-    setOpen(false);
+    cancelLeave();
+    leaveTimerRef.current = window.setTimeout(() => {
+      leaveTimerRef.current = null;
+      pendingPosRef.current = null;
+      setOpen(false);
+    }, 50);
   };
 
   const onFocus = (e: ReactFocusEvent) => {
     // Keyboard users don't have a cursor; anchor the tooltip to the
     // focused element's top-right corner so it still appears near
     // what they're reading. ``currentTarget`` is the cloned child.
+    cancelLeave();
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     setPos(
       clampToViewport(rect.right, rect.top, window.innerWidth, window.innerHeight),
@@ -320,26 +367,26 @@ export function BlameHoverTooltip({
 
   const onBlur = () => setOpen(false);
 
-  const clonedChild = cloneElement(child, {
-    onMouseEnter: composeHandlers<ReactMouseEvent>(
-      childProps.onMouseEnter,
-      onMouseEnter,
-    ),
-    onMouseMove: composeHandlers<ReactMouseEvent>(
-      childProps.onMouseMove,
-      onMouseMove,
-    ),
-    onMouseLeave: composeHandlers<ReactMouseEvent>(
-      childProps.onMouseLeave,
-      onMouseLeave,
-    ),
-    onFocus: composeHandlers<ReactFocusEvent>(childProps.onFocus, onFocus),
-    onBlur: composeHandlers<ReactFocusEvent>(childProps.onBlur, onBlur),
-  } as Partial<ChildProps>);
+  // Clone each valid element child, adding the shared handler set.
+  // Non-element children (strings, fragments, null) pass through
+  // unchanged.
+  const clonedChildren = childArr.map((child, idx) => {
+    if (!isValidElement(child)) return child;
+    const el = child as ReactElement<ChildProps>;
+    const cp = (el.props ?? {}) as ChildProps;
+    return cloneElement(el, {
+      key: el.key ?? `blame-child-${idx}`,
+      onMouseEnter: composeHandlers<ReactMouseEvent>(cp.onMouseEnter, onMouseEnter),
+      onMouseMove: composeHandlers<ReactMouseEvent>(cp.onMouseMove, onMouseMove),
+      onMouseLeave: composeHandlers<ReactMouseEvent>(cp.onMouseLeave, onMouseLeave),
+      onFocus: composeHandlers<ReactFocusEvent>(cp.onFocus, onFocus),
+      onBlur: composeHandlers<ReactFocusEvent>(cp.onBlur, onBlur),
+    } as Partial<ChildProps>);
+  });
 
   return (
     <>
-      {clonedChild}
+      {clonedChildren}
       {open &&
         createPortal(
           <div

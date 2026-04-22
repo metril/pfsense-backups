@@ -76,13 +76,19 @@ export function Dl({ items }: { items: DlRow[] }) {
           </dt>
         );
         return (
-          <div key={k} className="contents">
-            {/* v0.41.6: ``BlameHoverTooltip`` wraps the <dt> and
-                shows a cursor-following tooltip anywhere the mouse
-                moves over the row. No-op when no blame data. */}
-            <BlameHoverTooltip anchorId={id}>{dtNode}</BlameHoverTooltip>
+          // v0.41.7: BlameHoverTooltip now wraps BOTH the <dt>
+          // (label) and the <dd> (value). Previously only the <dt>
+          // carried mouse handlers, so hovering the wider value
+          // side didn't trigger the tooltip — the operator had to
+          // slide back over to the narrow label before anything
+          // appeared. The tooltip clones handlers onto each child
+          // and coalesces the dt↔dd boundary crossing via a 50ms
+          // close-debounce so there's no flicker as the cursor
+          // moves across the grid's gap.
+          <BlameHoverTooltip key={k} anchorId={id}>
+            {dtNode}
             <dd className="font-mono">{v}</dd>
-          </div>
+          </BlameHoverTooltip>
         );
       })}
     </dl>
