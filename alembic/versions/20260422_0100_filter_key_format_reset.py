@@ -9,8 +9,9 @@ v0.41.0 ported the v0.40.1 NAT content-hash pattern to
 pre-tracker fallback used to hash ``(descr, type, interface,
 protocol)``; editing the description would fork blame into a
 remove+add pair. The new fallback hashes functional fields
-(interface, ipprotocol, protocol, source/destination endpoint
-blobs, gateway, disabled) with ``<descr>`` deliberately excluded.
+(type, interface, ipprotocol, protocol, source/destination
+endpoint blobs, gateway, disabled, floating, direction,
+statetype) with ``<descr>`` and ``<log>`` deliberately excluded.
 
 Modern configs with ``<tracker>`` are unaffected (the primary path
 never changed). Only the minority of rules falling through to the
