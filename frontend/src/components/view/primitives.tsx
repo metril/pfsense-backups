@@ -12,9 +12,30 @@
  */
 
 import { Lock } from "lucide-react";
-import type { ReactNode } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
 import { Badge } from "@/components/ui/Badge";
-import { AnchorBlameTooltip } from "@/components/xref/AnchorBlame";
+import {
+  AnchorBlameTooltip,
+  BlameDot,
+  useAnchorBlame,
+} from "@/components/xref/AnchorBlame";
+
+/** Factory for the "Enter on focused row opens blame drawer"
+ *  keydown handler. Caller reads ``openBlame`` from context ONCE at
+ *  the top of the component; each row gets back a lightweight
+ *  closure keyed on its anchor id. No per-row hook calls.
+ */
+function makeEnterOpensBlame(
+  openBlame: ((anchor: string) => void) | undefined,
+) {
+  return (anchorId: string | undefined) => (e: KeyboardEvent) => {
+    if (!anchorId || !openBlame) return;
+    if (e.key !== "Enter") return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    e.preventDefault();
+    openBlame(anchorId);
+  };
+}
 
 /** Two-column definition list. ``items`` is a tuple of
  *  ``[label, value]`` or ``[label, value, fieldId]``. When a third
@@ -28,6 +49,8 @@ export type DlRow =
   | [string, ReactNode, string | undefined];
 
 export function Dl({ items }: { items: DlRow[] }) {
+  const ctx = useAnchorBlame();
+  const enterOpens = makeEnterOpensBlame(ctx?.openBlame);
   return (
     <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm">
       {items.map((row) => {
@@ -36,14 +59,20 @@ export function Dl({ items }: { items: DlRow[] }) {
         // Tab. Radix Tooltip opens on focus as well as hover, so
         // this gives the blame affordance keyboard parity. Only
         // applied to anchored rows — non-anchored rows stay
-        // non-focusable as before.
+        // non-focusable as before. Pressing Enter on a focused
+        // anchored row opens the blame drawer.
         const dtNode = (
           <dt
             id={id}
             tabIndex={id ? 0 : undefined}
-            className="text-muted-fg outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            onKeyDown={id ? enterOpens(id) : undefined}
+            className="relative inline-flex items-center gap-1.5 text-muted-fg outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           >
-            {k}
+            <span>{k}</span>
+            {/* BlameDot: tiny persistent click-to-open affordance.
+                Renders nothing when there's no blame data or no
+                ``openBlame`` in context. */}
+            <BlameDot anchorId={id} />
           </dt>
         );
         return (
@@ -102,6 +131,8 @@ export function Table({
    *  ``itemId(kind, key)`` from ``@/lib/xref``. */
   rowIds?: (string | undefined)[];
 }) {
+  const ctx = useAnchorBlame();
+  const enterOpens = makeEnterOpensBlame(ctx?.openBlame);
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-left text-sm">
@@ -112,6 +143,14 @@ export function Table({
                 {h}
               </th>
             ))}
+            {/* Blame-dot gutter: one narrow column at the trailing
+                edge so per-row BlameDots don't crowd the actual data.
+                Rendered as a spacer with a visually-hidden header so
+                AT users know what the column is. */}
+            <th
+              aria-label="Blame indicator"
+              className="w-6 px-1 py-1 font-normal"
+            />
           </tr>
         </thead>
         <tbody>
@@ -119,11 +158,14 @@ export function Table({
             const id = rowIds?.[i];
             // ``tabIndex=0`` on anchored rows so keyboard users can
             // tab through and fire the blame tooltip on focus.
+            // Pressing Enter on a focused anchored row opens the
+            // blame drawer (same as ``h``).
             const trNode = (
               <tr
                 key={rowKeys?.[i] ?? i}
                 id={id}
                 tabIndex={id ? 0 : undefined}
+                onKeyDown={id ? enterOpens(id) : undefined}
                 className="border-b border-border/50 last:border-0 outline-none focus-visible:bg-muted/40 focus-visible:ring-1 focus-visible:ring-accent/40"
               >
                 {row.map((cell, j) => (
@@ -131,6 +173,9 @@ export function Table({
                     {cell}
                   </td>
                 ))}
+                <td className="px-1 py-1 align-middle">
+                  <BlameDot anchorId={id} />
+                </td>
               </tr>
             );
             // v0.40.0: wrap each anchored row in a blame tooltip.

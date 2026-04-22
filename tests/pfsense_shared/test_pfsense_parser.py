@@ -176,6 +176,72 @@ def test_nat_key_changes_on_target_edit() -> None:
     )
 
 
+def test_filter_key_stable_across_description_edits() -> None:
+    """Regression: firewall rule keys must NOT change when only the
+    ``<descr>`` is edited. v0.41.0 ported the NAT content-hash
+    pattern — the pre-tracker fallback used to include ``<descr>``,
+    which forked blame on every description tweak. Modern configs
+    use ``<tracker>`` and skip the fallback entirely; this test
+    exercises the fallback by omitting the tracker."""
+    from pfsense_shared.pfsense_parser import parse
+
+    base = b"""<pfsense><filter>
+      <rule>
+        <type>pass</type>
+        <interface>lan</interface>
+        <ipprotocol>inet</ipprotocol>
+        <protocol>tcp</protocol>
+        <source><network>lan</network></source>
+        <destination><any/></destination>
+        <descr>original description</descr>
+      </rule>
+    </filter></pfsense>"""
+    edited = b"""<pfsense><filter>
+      <rule>
+        <type>pass</type>
+        <interface>lan</interface>
+        <ipprotocol>inet</ipprotocol>
+        <protocol>tcp</protocol>
+        <source><network>lan</network></source>
+        <destination><any/></destination>
+        <descr>edited description</descr>
+      </rule>
+    </filter></pfsense>"""
+    k1 = parse(base).firewall_rules[0].key
+    k2 = parse(edited).firewall_rules[0].key
+    assert k1.startswith("hash:"), f"fallback path should produce hash key; got {k1!r}"
+    assert k1 == k2, (
+        f"filter key shouldn't change on description edits; got {k1!r} -> {k2!r}"
+    )
+
+
+def test_filter_key_changes_on_interface_edit() -> None:
+    """Contrapositive: moving the rule to a different interface DOES
+    change the fallback key — that's a functionally different rule,
+    not a cosmetic edit."""
+    from pfsense_shared.pfsense_parser import parse
+
+    base = b"""<pfsense><filter>
+      <rule>
+        <type>pass</type>
+        <interface>lan</interface>
+        <ipprotocol>inet</ipprotocol>
+        <protocol>tcp</protocol>
+      </rule>
+    </filter></pfsense>"""
+    moved = b"""<pfsense><filter>
+      <rule>
+        <type>pass</type>
+        <interface>opt1</interface>
+        <ipprotocol>inet</ipprotocol>
+        <protocol>tcp</protocol>
+      </rule>
+    </filter></pfsense>"""
+    k1 = parse(base).firewall_rules[0].key
+    k2 = parse(moved).firewall_rules[0].key
+    assert k1 != k2, f"filter key should change on interface edits; got {k1!r} for both"
+
+
 def test_aliases(parsed: ParsedConfig) -> None:
     names = [a.name for a in parsed.aliases]
     assert names == ["WEB_PORTS", "MGMT_HOSTS"]

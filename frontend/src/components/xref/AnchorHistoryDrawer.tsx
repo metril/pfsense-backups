@@ -7,6 +7,8 @@ import {
   useAnchorHistory,
   type AnchorHistoryChange,
 } from "@/api/queries";
+import { anchorHumanLabel } from "@/lib/anchorLabel";
+import { useBlameForAnchor } from "@/components/xref/AnchorBlame";
 
 /**
  * Per-anchor blame drawer. Opens when the operator hits ``h`` on a
@@ -37,17 +39,36 @@ export function AnchorHistoryDrawer({
   instanceId,
   anchor,
   label,
+  currentBackupId,
   onClose,
 }: {
   instanceId: number;
   anchor: string | null;
   /** Short human label for the header (``"alias: RFC1918"`` etc.).
-   *  Supplied by the caller since the drawer itself doesn't have
-   *  access to the xref index. */
+   *  Optional override — when omitted, the drawer derives one from
+   *  the anchor id + the first change's value via
+   *  ``anchorHumanLabel`` so the header never falls back to the raw
+   *  ``xref-rule-tracker_…`` id. */
   label?: string;
+  /** The backup the drawer was opened from. When set, each
+   *  timeline-row's "open this backup" link carries ``?from={id}``
+   *  so the destination page can render a "Return to backup #N"
+   *  pill. */
+  currentBackupId?: number;
   onClose: () => void;
 }) {
   const query = useAnchorHistory(instanceId, anchor);
+  // Touch the summary so the context's indexed/anchor sets stay warm
+  // for the drawer session. The blame-summary payload doesn't carry
+  // the per-anchor ``value`` dict, so we derive the human label from
+  // the first "is_change" entry of the full history instead — that
+  // always carries the row value, which includes the descr / name /
+  // refid the label helper uses.
+  useBlameForAnchor(anchor);
+  const firstChange = query.data?.entries.find((e) => e.is_change);
+  const valueForLabel = firstChange?.value;
+  const derivedLabel = anchor ? anchorHumanLabel(anchor, valueForLabel) : "";
+  const headerLabel = label ?? derivedLabel;
 
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
@@ -140,9 +161,12 @@ export function AnchorHistoryDrawer({
               <span>Blame timeline</span>
             </div>
             <h2 className="mt-1 truncate text-sm font-semibold">
-              {label ?? anchor}
+              {headerLabel || anchor}
             </h2>
-            <p className="mt-0.5 truncate font-mono text-[10px] text-muted-fg">
+            <p
+              className="mt-0.5 truncate font-mono text-[10px] text-muted-fg"
+              title={anchor ?? undefined}
+            >
               {anchor}
             </p>
           </div>
@@ -181,7 +205,12 @@ export function AnchorHistoryDrawer({
                   <span className="h-px flex-1 bg-border" />
                 </li>
               ) : (
-                <EntryRow key={r.entry.backup_id} entry={r.entry} />
+                <EntryRow
+                  key={r.entry.backup_id}
+                  entry={r.entry}
+                  anchor={anchor}
+                  currentBackupId={currentBackupId}
+                />
               ),
             )}
           </ol>
@@ -193,8 +222,26 @@ export function AnchorHistoryDrawer({
 
 // ---------------------- internals ---------------------------------
 
-function EntryRow({ entry }: { entry: AnchorHistoryChange }) {
+function EntryRow({
+  entry,
+  anchor,
+  currentBackupId,
+}: {
+  entry: AnchorHistoryChange;
+  anchor: string | null;
+  currentBackupId?: number;
+}) {
   const when = new Date(entry.started_at);
+  // Build the target URL with the anchor (so BackupView can scroll
+  // to it) and, when we know where we came from, the ``from`` param
+  // that drives the ``ReturnToBackupPill`` on the destination.
+  const params = new URLSearchParams();
+  if (anchor) params.set("anchor", anchor);
+  if (currentBackupId !== undefined && currentBackupId !== entry.backup_id) {
+    params.set("from", String(currentBackupId));
+  }
+  const qs = params.toString();
+  const href = `/backups/${entry.backup_id}/view${qs ? `?${qs}` : ""}`;
   return (
     <li
       className={
@@ -214,9 +261,9 @@ function EntryRow({ entry }: { entry: AnchorHistoryChange }) {
             new tab. An ``onClick`` with ``preventDefault`` would
             kill both behaviours. */}
         <Link
-          to={`/backups/${entry.backup_id}/view`}
+          to={href}
           className="inline-flex items-center gap-1 text-xs text-muted-fg hover:text-accent"
-          title="Open this backup"
+          title="Open this backup and scroll to the changed row"
         >
           <ExternalLink className="h-3 w-3" />
           #{entry.backup_id}

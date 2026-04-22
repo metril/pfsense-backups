@@ -4,6 +4,7 @@ import { ArrowLeft, ChevronLeft, ChevronRight, Clock, Split } from "lucide-react
 import { Alert } from "@/components/ui/Alert";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { Tabs } from "@/components/ui/Tabs";
 import {
   useAnchorBlameSummary,
   useBackups,
@@ -15,7 +16,10 @@ import { useFocusedAnchor } from "@/lib/useFocusedAnchor";
 import { useBlameHotkey } from "@/lib/useBlameHotkey";
 import { AnchorHistoryDrawer } from "@/components/xref/AnchorHistoryDrawer";
 import { AnchorBlameProvider } from "@/components/xref/AnchorBlame";
+import { RawXmlPanel } from "@/components/view/RawXmlPanel";
 import { useToast } from "@/components/ui/Toast";
+
+type HistoryViewTab = "structured" | "raw";
 
 const ParsedBackupView = lazy(() =>
   import("@/components/ParsedBackupView").then((m) => ({
@@ -177,6 +181,11 @@ export function InstanceHistoryPage() {
     onNoAnchor: onNoAnchorToast,
   });
 
+  // Structured / Raw XML toggle for the focused backup panel —
+  // mirrors BackupView so operators can inspect the XML without
+  // leaving the scrubbable history view.
+  const [viewTab, setViewTab] = useState<HistoryViewTab>("structured");
+
   if (!Number.isFinite(id)) {
     return (
       <div className="p-6">
@@ -215,9 +224,9 @@ export function InstanceHistoryPage() {
         <div className="min-w-0">
           <Link
             to="/backups"
-            className="inline-flex items-center gap-1 text-sm text-muted-fg hover:text-accent"
+            className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2 py-1 text-sm font-medium text-fg transition-colors hover:border-accent hover:bg-accent/10 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           >
-            <ArrowLeft className="h-4 w-4" /> back to backups
+            <ArrowLeft className="h-4 w-4 text-accent" /> Back to backups
           </Link>
           <h1 className="mt-1 text-xl font-semibold">
             {instance?.name ?? `Instance ${id}`}
@@ -423,23 +432,44 @@ export function InstanceHistoryPage() {
         </div>
       </div>
 
-      {/* Focused backup's Structured view */}
-      <div className="flex-1 overflow-hidden">
-        {focused && (
-          <Suspense
-            fallback={
-              <div className="p-6 text-sm text-muted-fg">Loading view…</div>
-            }
-          >
-            <AnchorBlameProvider
-              anchors={blameAnchors}
-              indexed={blameIndexed}
+      {/* Focused backup's panel — Structured (default) or Raw XML.
+          Tab state is client-side; operators toggle per session.
+          AnchorBlameProvider wraps both so Monaco's hover provider
+          reads the same summary the Structured tooltip uses. */}
+      {focused && (
+        <>
+          <Tabs
+            className="mt-2"
+            value={viewTab}
+            onChange={(next) => setViewTab(next as HistoryViewTab)}
+            ariaLabel="Focused backup view"
+            idPrefix="history-view"
+            items={[
+              { id: "structured", label: "Structured" },
+              { id: "raw", label: "Raw XML" },
+            ]}
+          />
+          <div className="flex-1 overflow-hidden rounded-b border border-t-0 border-border">
+            <Suspense
+              fallback={
+                <div className="p-6 text-sm text-muted-fg">Loading view…</div>
+              }
             >
-              <ParsedBackupView backupId={focused.id} />
-            </AnchorBlameProvider>
-          </Suspense>
-        )}
-      </div>
+              <AnchorBlameProvider
+                anchors={blameAnchors}
+                indexed={blameIndexed}
+                openBlame={openBlame}
+              >
+                {viewTab === "structured" ? (
+                  <ParsedBackupView backupId={focused.id} />
+                ) : (
+                  <RawXmlPanel backupId={focused.id} />
+                )}
+              </AnchorBlameProvider>
+            </Suspense>
+          </div>
+        </>
+      )}
 
       {/* Floating hint: tell the operator the 'h' shortcut exists
           whenever we have a focused anchor and the drawer isn't
@@ -460,10 +490,14 @@ export function InstanceHistoryPage() {
       )}
 
       {/* Blame drawer — mounted here so it slides in over the
-          Structured view. Closed state renders nothing. */}
+          Structured view. Closed state renders nothing. The
+          ``currentBackupId`` lets the drawer's "open this backup"
+          links carry ``?from=…`` so the destination page shows a
+          Return-to-backup pill. */}
       <AnchorHistoryDrawer
         instanceId={id}
         anchor={blameAnchor}
+        currentBackupId={focused?.id}
         onClose={closeBlame}
       />
     </div>

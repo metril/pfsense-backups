@@ -1,5 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ArrowLeft,
   Check,
@@ -33,6 +33,7 @@ import {
   AnchorBlameProvider,
   blameTooltipText,
 } from "@/components/xref/AnchorBlame";
+import { ReturnToBackupPill } from "@/components/nav/ReturnToBackupPill";
 
 const MonacoViewer = lazy(() => import("@/components/MonacoViewer"));
 const ParsedBackupView = lazy(() =>
@@ -64,6 +65,13 @@ export function BackupViewPage() {
   const id = Number(idParam);
   const nav = useNavigate();
   const toast = useToast();
+  const [searchParams, setSearchParams] = useSearchParams();
+  // ``?anchor=…`` — drawer jump-to-source target (scroll + flash on
+  // mount, then stripped). ``?from=…`` — originating backup id so
+  // ``ReturnToBackupPill`` can offer a one-click return.
+  const anchorParam = searchParams.get("anchor");
+  const fromParam = searchParams.get("from");
+  const fromBackupId = fromParam ? Number(fromParam) : null;
 
   const [detail, setDetail] = useState<BackupDetail | null>(null);
   const [content, setContent] = useState<string | null>(null);
@@ -116,7 +124,7 @@ export function BackupViewPage() {
   const onNoBlameAnchor = useCallback(() => {
     toast.info("Scroll to a field and press h again");
   }, [toast]);
-  const { blameAnchor, closeBlame } = useBlameHotkey({
+  const { blameAnchor, openBlame, closeBlame } = useBlameHotkey({
     enabled: tab === "structured",
     focusedAnchor,
     onNoAnchor: onNoBlameAnchor,
@@ -176,6 +184,91 @@ export function BackupViewPage() {
     },
     [anchorForLine],
   );
+
+  // ``?anchor=…`` handling: when the operator arrives from a blame
+  // drawer's "open this backup" link, scroll + flash the target row.
+  // Structured is preferred (nicer visual), Raw XML is the fallback
+  // when the anchor isn't rendered in Structured (filtered out,
+  // collapsed section that refused to expand, etc.).
+  useEffect(() => {
+    if (!anchorParam || !positions) return;
+    const targetId = anchorParam;
+    const range = positions[targetId];
+    // Unknown anchor id: nothing to do — leave the param so the user
+    // can see it in the URL but don't loop.
+    if (!range) return;
+
+    let done = false;
+    let obs: MutationObserver | null = null;
+    const deadline = Date.now() + 3000;
+
+    const stripAnchorParam = () => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete("anchor");
+          return next;
+        },
+        { replace: true },
+      );
+    };
+
+    const tryStructured = (): boolean => {
+      const el = document.getElementById(targetId);
+      if (!el) return false;
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      el.classList.add("anchor-flash");
+      window.setTimeout(() => el.classList.remove("anchor-flash"), 2000);
+      (el as HTMLElement).focus?.({ preventScroll: true });
+      setFocusedAnchor(targetId);
+      done = true;
+      stripAnchorParam();
+      return true;
+    };
+
+    // Ensure Structured tab is active so the DOM node can appear.
+    setTab("structured");
+
+    if (!tryStructured()) {
+      obs = new MutationObserver(() => {
+        if (done) return;
+        if (tryStructured()) {
+          obs?.disconnect();
+        } else if (Date.now() > deadline) {
+          obs?.disconnect();
+          // Fallback: switch to Raw XML + reveal the line range's
+          // first line in Monaco. ``rawFocusLine`` is consumed by
+          // ``MonacoViewer`` on mount / prop change.
+          if (!done) {
+            done = true;
+            setTab("raw");
+            setRawFocusLine(range[0]);
+            setFocusedAnchor(targetId);
+            stripAnchorParam();
+          }
+        }
+      });
+      obs.observe(document.body, { childList: true, subtree: true });
+      window.setTimeout(() => {
+        if (!done) {
+          obs?.disconnect();
+          done = true;
+          setTab("raw");
+          setRawFocusLine(range[0]);
+          setFocusedAnchor(targetId);
+          stripAnchorParam();
+        }
+      }, 3000);
+    }
+
+    return () => {
+      obs?.disconnect();
+    };
+    // Intentionally exclude ``setSearchParams`` (stable reference
+    // per react-router docs) — including it triggers redundant
+    // re-runs of this effect on every URL mutation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [anchorParam, positions]);
 
   const switchTab = useCallback(
     (next: ViewTab) => {
@@ -309,9 +402,9 @@ export function BackupViewPage() {
         <div className="min-w-0">
           <Link
             to="/backups"
-            className="inline-flex items-center gap-1 text-sm text-muted-fg hover:text-accent"
+            className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2 py-1 text-sm font-medium text-fg transition-colors hover:border-accent hover:bg-accent/10 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           >
-            <ArrowLeft className="h-4 w-4" /> back to backups
+            <ArrowLeft className="h-4 w-4 text-accent" /> Back to backups
           </Link>
           <h1 className="mt-1 text-xl font-semibold">
             {instanceName}{" "}
@@ -462,7 +555,11 @@ export function BackupViewPage() {
           {/* v0.40.0: provide the blame summary so Structured rows
               can wire up tooltips. Raw XML uses the same data via
               ``monacoBlameProvider`` below. */}
-          <AnchorBlameProvider anchors={blameAnchors} indexed={blameIndexed}>
+          <AnchorBlameProvider
+            anchors={blameAnchors}
+            indexed={blameIndexed}
+            openBlame={openBlame}
+          >
             {tab === "structured" ? (
               <ParsedBackupView backupId={detail.id} />
             ) : (
@@ -480,8 +577,12 @@ export function BackupViewPage() {
       <AnchorHistoryDrawer
         instanceId={detail.instance_id}
         anchor={blameAnchor}
+        currentBackupId={detail.id}
         onClose={closeBlame}
       />
+      {fromBackupId && fromBackupId !== detail.id && (
+        <ReturnToBackupPill fromBackupId={fromBackupId} />
+      )}
     </div>
   );
 }

@@ -3,18 +3,24 @@
  *
  * - ``AnchorBlameProvider`` — page-level context that carries the
  *   per-anchor "latest event" map (fetched once via
- *   ``useAnchorBlameSummary``). Rendered by ``BackupView`` and
- *   ``InstanceHistory`` at the top of the viewer tree so every
- *   anchored row inside the parsed view can opt into the tooltip
- *   without a prop drill.
+ *   ``useAnchorBlameSummary``) plus an optional ``openBlame``
+ *   callback. Rendered by ``BackupView`` and ``InstanceHistory`` at
+ *   the top of the viewer tree so every anchored row inside the
+ *   parsed view can opt into the tooltip + click-to-open drawer.
  *
  * - ``AnchorBlameTooltip`` — wrap any anchored element
- *   (``<dt id="field-…">``, ``<tr id="xref-…">``, etc.) and it
- *   renders a Radix tooltip showing "Last modified 3 days ago ·
- *   backup #42 · press h for full history." When the anchor has no
+ *   (``<dt id="field-…">``, ``<tr id="xref-…">``, etc.). Renders a
+ *   Radix tooltip with a warn-accented card, human-readable label,
+ *   relative-time stamp, and a clickable "View full history" CTA
+ *   that invokes ``openBlame`` from context. When the anchor has no
  *   events (never changed / instance not indexed), the wrapper is a
- *   no-op — renders children unwrapped so the DOM is identical to
- *   pre-v0.40.0.
+ *   no-op — renders children unwrapped so the DOM is identical.
+ *
+ * - ``BlameDot`` — persistent, always-visible click affordance for
+ *   anchored rows whose blame data is available. Tiny warn-tinted
+ *   dot; opacity 40% at rest, 100% on hover. Acts as the
+ *   "discoverable" entry point into blame (the tooltip only appears
+ *   on hover; the dot is visible at a glance).
  */
 
 import * as RadixTooltip from "@radix-ui/react-tooltip";
@@ -25,8 +31,11 @@ import {
   useRef,
   type ReactNode,
 } from "react";
+import { Clock } from "lucide-react";
 import type { AnchorBlameSummaryEntry } from "@/api/queries";
 import { formatRelative } from "@/lib/formatRelative";
+import { anchorHumanLabel, parseAnchorId, sectionLabel } from "@/lib/anchorLabel";
+import { cn } from "@/lib/cn";
 
 interface BlameContextValue {
   /** Indexed on the anchor's ``xref-`` / ``field-`` id. ``undefined``
@@ -37,6 +46,10 @@ interface BlameContextValue {
    *  don't see "no blame" hints that actually just mean "not yet
    *  reindexed." */
   indexed: boolean;
+  /** Open the blame drawer for a given anchor. Null when no drawer
+   *  is wired (e.g. in a read-only context). Populated by pages that
+   *  render ``<AnchorHistoryDrawer>``. */
+  openBlame?: (anchorId: string) => void;
 }
 
 const BlameContext = createContext<BlameContextValue | null>(null);
@@ -44,10 +57,12 @@ const BlameContext = createContext<BlameContextValue | null>(null);
 export function AnchorBlameProvider({
   anchors,
   indexed,
+  openBlame,
   children,
 }: {
   anchors: Record<string, AnchorBlameSummaryEntry> | undefined;
   indexed: boolean;
+  openBlame?: (anchorId: string) => void;
   children: ReactNode;
 }) {
   // Reference-identity guard: TanStack background refetches hand us
@@ -65,9 +80,6 @@ export function AnchorBlameProvider({
   const stableAnchors = useMemo(() => {
     const next = anchors ?? {};
     const keys = Object.keys(next).sort();
-    // Signature: `<count>:<first>:<last>:<backupIdSum>` — cheap to
-    // compute, collision-safe enough for cache-invalidation
-    // purposes (worst case is a missed re-render, not a bug).
     let sum = 0;
     for (const k of keys) sum += next[k]?.backup_id ?? 0;
     const signature = `${keys.length}:${keys[0] ?? ""}:${keys[keys.length - 1] ?? ""}:${sum}`;
@@ -80,8 +92,8 @@ export function AnchorBlameProvider({
   }, [anchors]);
 
   const value = useMemo<BlameContextValue>(
-    () => ({ anchors: stableAnchors, indexed }),
-    [stableAnchors, indexed],
+    () => ({ anchors: stableAnchors, indexed, openBlame }),
+    [stableAnchors, indexed, openBlame],
   );
   return (
     <BlameContext.Provider value={value}>{children}</BlameContext.Provider>
@@ -135,7 +147,13 @@ export function blameTooltipText(entry: AnchorBlameSummaryEntry): string {
  *
  *  The ``Portal`` / ``Content`` only render when we have blame data,
  *  so the cost when blame isn't available is just a context provider
- *  and a pair of empty listener-bearing trigger props. */
+ *  and a pair of empty listener-bearing trigger props.
+ *
+ *  Visuals: warn-tinted left stripe + clock glyph + "Blame · {section}"
+ *  header, human-readable label, relative-time, and a clickable
+ *  "View full history →" CTA. Styled distinctively from the generic
+ *  app tooltip so operators can tell blame content apart at a
+ *  glance. */
 export function AnchorBlameTooltip({
   anchorId,
   children,
@@ -144,6 +162,16 @@ export function AnchorBlameTooltip({
   children: ReactNode;
 }) {
   const entry = useBlameForAnchor(anchorId);
+  const ctx = useAnchorBlame();
+  const parsed = anchorId ? parseAnchorId(anchorId) : null;
+  const scope = parsed?.scope ?? "";
+  // The summary endpoint doesn't carry the per-anchor ``value`` dict
+  // (that'd inflate the payload for hundreds of anchors we may never
+  // inspect). Human label falls back to ``section · tail``; the full
+  // drawer fetches the history and can show a richer label if needed.
+  const humanLabel = anchorId ? anchorHumanLabel(anchorId, null) : "";
+  const canOpen = entry != null && ctx?.openBlame != null && anchorId != null;
+
   return (
     <RadixTooltip.Root>
       <RadixTooltip.Trigger asChild>{children}</RadixTooltip.Trigger>
@@ -152,14 +180,87 @@ export function AnchorBlameTooltip({
           <RadixTooltip.Content
             side="top"
             align="center"
-            sideOffset={4}
-            className="z-50 max-w-xs rounded border border-border bg-bg px-2 py-1 text-xs text-fg shadow-lg data-[state=delayed-open]:animate-in data-[state=delayed-open]:fade-in-0"
+            sideOffset={6}
+            className={cn(
+              "z-50 max-w-sm rounded-md border border-border border-l-2 border-l-warn",
+              "bg-bg/95 px-3 py-2 text-sm text-fg shadow-xl backdrop-blur-sm",
+              "data-[state=delayed-open]:animate-in data-[state=delayed-open]:fade-in-0",
+            )}
           >
-            {blameTooltipText(entry)}
-            <RadixTooltip.Arrow className="fill-border" />
+            <div className="flex items-start gap-2">
+              <Clock
+                aria-hidden
+                className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warn"
+              />
+              <div className="min-w-0">
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-warn">
+                  Blame · {sectionLabel(scope)}
+                </div>
+                <div className="mt-0.5 truncate font-medium text-fg">
+                  {humanLabel}
+                </div>
+                <div className="mt-1 text-xs text-muted-fg">
+                  Last {kindLabel(entry.kind)} {formatRelative(entry.occurred_at)} · backup #
+                  {entry.backup_id}
+                </div>
+                {canOpen && (
+                  <button
+                    type="button"
+                    onClick={() => ctx!.openBlame!(anchorId!)}
+                    className={cn(
+                      "mt-2 inline-flex items-center gap-1 rounded",
+                      "bg-warn/10 px-2 py-0.5 text-xs font-medium text-warn",
+                      "hover:bg-warn/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-warn/40",
+                    )}
+                  >
+                    View full history →
+                  </button>
+                )}
+                <div className="mt-1 text-[10px] text-muted-fg">
+                  or press{" "}
+                  <kbd className="rounded border border-border bg-muted/40 px-1 text-[10px]">
+                    h
+                  </kbd>
+                </div>
+              </div>
+            </div>
+            <RadixTooltip.Arrow className="fill-warn" />
           </RadixTooltip.Content>
         </RadixTooltip.Portal>
       )}
     </RadixTooltip.Root>
+  );
+}
+
+/** Persistent dot indicating the row has blame data and offering a
+ *  click path to the drawer. Renders nothing when there's no blame
+ *  entry for this anchor OR no ``openBlame`` callback in context.
+ *  Tiny on purpose — discoverable without dominating. */
+export function BlameDot({
+  anchorId,
+  className,
+}: {
+  anchorId: string | null | undefined;
+  className?: string;
+}) {
+  const entry = useBlameForAnchor(anchorId);
+  const ctx = useAnchorBlame();
+  if (!entry || !ctx?.openBlame || !anchorId) return null;
+  return (
+    <button
+      type="button"
+      aria-label="Open blame history for this row"
+      title="Open blame history (or press h)"
+      onClick={(e) => {
+        e.stopPropagation();
+        ctx.openBlame?.(anchorId);
+      }}
+      className={cn(
+        "inline-block h-1.5 w-1.5 rounded-full bg-warn/60 opacity-40",
+        "transition-opacity hover:opacity-100 focus-visible:opacity-100",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-warn/40",
+        className,
+      )}
+    />
   );
 }

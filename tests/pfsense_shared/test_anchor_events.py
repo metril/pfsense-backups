@@ -448,3 +448,57 @@ def test_first_backup_seed_produces_complete_coverage():
     field_anchors = [i for i in ids if i.startswith("field-system-")]
     assert "field-system-hostname" in field_anchors
     assert "field-system-domain" in field_anchors
+
+
+def test_frontend_scope_labels_cover_section_spec() -> None:
+    """Drift guard: every anchor_kind the projector can emit must
+    appear in the frontend ``SECTION_LABELS`` table. Otherwise the
+    blame tooltip falls back to a capitalised raw scope name, which
+    reads like a bug to operators.
+
+    We parse ``frontend/src/lib/anchorLabel.ts`` as text — no need
+    to spin up a node runtime for a single regex check.
+    """
+    import re
+    from pathlib import Path
+
+    from pfsense_shared.anchor_events import (
+        PACKAGE_ROW_SPEC,
+        PACKAGE_SINGLETON_SPEC,
+        SECTION_SPEC,
+        SINGLETON_SPEC,
+    )
+
+    repo_root = Path(__file__).resolve().parents[2]
+    label_file = repo_root / "frontend" / "src" / "lib" / "anchorLabel.ts"
+    src = label_file.read_text()
+
+    # Extract the SECTION_LABELS object body and pull keys out of it.
+    m = re.search(
+        r"SECTION_LABELS:\s*Record<string,\s*string>\s*=\s*\{([^}]+)\}",
+        src,
+        re.DOTALL,
+    )
+    assert m, "Could not locate SECTION_LABELS in anchorLabel.ts"
+    body = m.group(1)
+    # Keys: bare identifier at the start of a line, followed by ``:``.
+    # Handles both ``foo_bar: "..."`` and ``"foo-bar": "..."`` forms.
+    keys = set(re.findall(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:", body, re.MULTILINE))
+
+    required = set()
+    # Row-shaped anchor kinds.
+    for _, (kind, _, _) in SECTION_SPEC.items():
+        required.add(kind)
+    # Package row kinds.
+    for _, (kind, _) in PACKAGE_ROW_SPEC.items():
+        required.add(kind)
+    # Singleton scopes (both core + package).
+    required.update(SINGLETON_SPEC.values())
+    required.update(PACKAGE_SINGLETON_SPEC.values())
+
+    missing = required - keys
+    assert not missing, (
+        f"SECTION_LABELS in anchorLabel.ts is missing entries for "
+        f"anchor scopes the backend can emit: {sorted(missing)}. "
+        f"Add them to keep the blame tooltip readable."
+    )

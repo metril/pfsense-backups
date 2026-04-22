@@ -41,6 +41,22 @@
   animation: flash 1.5s ease-out;
 }
 
+/* Blame jump-to-source flash. Used by BackupView when it scrolls to
+   an ``?anchor=…`` target from the blame drawer's "open this backup"
+   link. Uses the warn accent (same hue as the blame tooltip stripe)
+   so the landing row's highlight ties visually back to the drawer
+   the operator just came from. Fades over 2s — slightly longer than
+   the neutral accent flash so the operator has more time to eyeball
+   the target row before it returns to normal. */
+@keyframes blame-flash {
+  0%   { background-color: hsl(var(--warn) / 0.35); }
+  60%  { background-color: hsl(var(--warn) / 0.20); }
+  100% { background-color: transparent; }
+}
+.anchor-flash {
+  animation: blame-flash 2s ease-out;
+}
+
 /* Monaco line-highlight used by the Structured ↔ Raw XML tab-switch
    sync. Painted via ``editor.deltaDecorations`` with the class below
    applied as ``isWholeLine: true``; Monaco's own background still
@@ -62,6 +78,10 @@
   .monaco-xref-focus-line {
     animation: none;
     background-color: hsl(var(--accent) / 0.25);
+  }
+  .anchor-flash {
+    animation: none;
+    background-color: hsl(var(--warn) / 0.22);
   }
 }
 

@@ -58,18 +58,44 @@ def _endpoint(el: Element | None) -> Endpoint:
     )
 
 
+def _endpoint_blob(el: Element | None) -> str:
+    """Flatten a ``<source>`` / ``<destination>`` subtree into a stable
+    tuple string for use in ``_rule_key``. Mirrors
+    ``nat._endpoint_blob`` so two rules with different targets on the
+    same interface produce distinct fallback keys without leaning on
+    ``<descr>``."""
+    if el is None:
+        return ""
+    return "|".join(
+        [
+            "any" if el.find("any") is not None else "",
+            text(el, "network") or "",
+            text(el, "address") or "",
+            text(el, "port") or "",
+            "not" if el.find("not") is not None else "",
+        ]
+    )
+
+
 def _rule_key(r: Element) -> str:
     tracker = text(r, "tracker")
     if tracker:
         return f"tracker:{tracker}"
-    # Fallback: hash of the fields we care about — good enough to match
-    # "same rule, slightly tweaked" across backups on pre-tracker configs.
+    # Fallback for pre-tracker configs: content-hash of the
+    # *functional* fields so editing ``<descr>`` doesn't fork the
+    # blame history into a remove+add event pair. ``<descr>`` and
+    # created/updated timestamps are deliberately EXCLUDED — same
+    # reasoning as the NAT fix (see nat._key).
     blob = "\x1f".join(
         [
-            text(r, "descr") or "",
             text(r, "type") or "",
             text(r, "interface") or "",
+            text(r, "ipprotocol") or "",
             text(r, "protocol") or "",
+            _endpoint_blob(r.find("source")),
+            _endpoint_blob(r.find("destination")),
+            text(r, "gateway") or "",
+            text(r, "disabled") or "",
         ]
     )
     return "hash:" + hashlib.sha1(blob.encode(), usedforsecurity=False).hexdigest()[:12]
