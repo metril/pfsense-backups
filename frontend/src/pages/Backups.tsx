@@ -223,26 +223,22 @@ export function BackupsPage() {
       <table className="mt-6 w-full text-sm">
         <thead className="text-xs uppercase text-muted-fg">
           <tr>
-            <th className="w-6"></th>
-            <th className="text-left font-normal">Instance</th>
-            <SortHeader label="Started" col="started_at" current={sort} order={order} onClick={clickSort} icon={sortIcon} />
-            <SortHeader label="Duration" col="duration_seconds" current={sort} order={order} onClick={clickSort} icon={sortIcon} align="right" />
-            <SortHeader label="File" col="filename" current={sort} order={order} onClick={clickSort} icon={sortIcon} />
-            <SortHeader label="Size" col="size_bytes" current={sort} order={order} onClick={clickSort} icon={sortIcon} align="right" />
-            <th className="text-left font-normal">Tag</th>
-            <th className="text-left font-normal">Status</th>
-            <th className="w-20"></th>
+            <th className="w-6 px-2"></th>
+            <th className="px-2 text-left font-normal">Instance</th>
+            <SortHeader label="Started" col="started_at" current={sort} order={order} onClick={clickSort} icon={sortIcon} className="px-2" />
+            <SortHeader label="Duration" col="duration_seconds" current={sort} order={order} onClick={clickSort} icon={sortIcon} align="right" className="px-2" />
+            <SortHeader label="File" col="filename" current={sort} order={order} onClick={clickSort} icon={sortIcon} className="px-2" />
+            <th className="px-2 text-left font-normal">Contents</th>
+            <SortHeader label="Size" col="size_bytes" current={sort} order={order} onClick={clickSort} icon={sortIcon} align="right" className="px-2" />
+            <th className="px-2 text-left font-normal">Tag</th>
+            <th className="px-2 text-left font-normal">Status</th>
+            <th className="w-20 px-2"></th>
           </tr>
         </thead>
         <tbody>
           {rows.map((b) => (
-            // v0.41.1: ``align-middle`` on each cell so that wherever a
-            // row's content height expands (e.g. a long filename
-            // pushing ``ContentsBadges`` onto a second line), the
-            // other columns still vertically centre against the full
-            // row height instead of hugging the top.
             <tr key={b.id} className="border-t border-border align-middle">
-              <td>
+              <td className="px-2">
                 <input
                   type="checkbox"
                   // M11: ensure visible contrast on the dark theme. Default
@@ -254,51 +250,33 @@ export function BackupsPage() {
                   aria-label={`Select backup ${b.filename}`}
                 />
               </td>
-              <td className="py-2">
+              <td className="px-2 py-2">
                 <Link to="/instances" className="hover:text-accent">
                   {b.instance_name}
                 </Link>
               </td>
-              <td className="py-2 text-xs whitespace-nowrap">
+              <td className="px-2 py-2 text-xs whitespace-nowrap">
                 {new Date(b.started_at).toLocaleString()}
               </td>
-              <td className="py-2 text-xs text-right tabular-nums whitespace-nowrap">
+              <td className="px-2 py-2 text-xs text-right tabular-nums whitespace-nowrap">
                 {b.duration_seconds.toFixed(1)}s
               </td>
-              <td className="py-2 text-xs">
-                {/* v0.41.2: pin the content-flags (``gz`` / ``pkgs`` /
-                    ``ssh`` / ``encrypted`` / area) to the right edge
-                    of the cell with ``justify-between``. Previously
-                    they trailed the filename inline, so their x-
-                    position shifted with every filename length — the
-                    "zig-zag" pattern reading down the column.
-                    ``truncate`` on the filename half absorbs very
-                    long filenames without pushing the badge cluster
-                    off-column; ``shrink-0`` on the badge cluster so
-                    the badges themselves never compress. */}
-                <span className="flex items-center justify-between gap-3">
-                  <span className="truncate font-mono">
-                    {b.success ? (
-                      <Link
-                        to={`/backups/${b.id}/view`}
-                        className="hover:text-accent"
-                      >
-                        {b.filename}
-                      </Link>
-                    ) : (
-                      b.filename
-                    )}
-                  </span>
-                  <span className="inline-flex shrink-0 items-center gap-1">
-                    {b.compressed && <Badge tone="muted">gz</Badge>}
-                    <ContentsBadges b={b} />
-                  </span>
-                </span>
+              <td className="px-2 py-2 font-mono text-xs">
+                {b.success ? (
+                  <Link to={`/backups/${b.id}/view`} className="hover:text-accent">
+                    {b.filename}
+                  </Link>
+                ) : (
+                  b.filename
+                )}
               </td>
-              <td className="py-2 text-right tabular-nums whitespace-nowrap">
+              <td className="px-2 py-2">
+                <ContentsBadges b={b} />
+              </td>
+              <td className="px-2 py-2 text-right tabular-nums whitespace-nowrap">
                 {Math.round(b.size_bytes / 1024)} KB
               </td>
-              <td className="py-2">
+              <td className="px-2 py-2">
                 {b.tag ? (
                   <span className="inline-flex items-center gap-1 rounded-full border border-accent/50 bg-accent/10 px-2 py-0.5 text-xs text-accent">
                     <TagIcon className="h-3 w-3" />
@@ -308,14 +286,14 @@ export function BackupsPage() {
                   <span className="text-muted-fg">—</span>
                 )}
               </td>
-              <td className="py-2">
+              <td className="px-2 py-2">
                 {b.success ? (
                   <Badge tone="success">ok</Badge>
                 ) : (
                   <Badge tone="danger">fail</Badge>
                 )}
               </td>
-              <td className="py-2">
+              <td className="px-2 py-2">
                 <div className="flex justify-end gap-1">
                   <Button
                     variant="ghost"
@@ -343,7 +321,7 @@ export function BackupsPage() {
           {backups.isPending &&
             Array.from({ length: 5 }).map((_, i) => (
               <tr key={`sk-${i}`} className="border-t border-border">
-                <td colSpan={9} className="py-2">
+                <td colSpan={10} className="py-2">
                   <Skeleton className="h-6 w-full" />
                 </td>
               </tr>
@@ -400,39 +378,65 @@ export function BackupsPage() {
 }
 
 function ContentsBadges({ b }: { b: BackupListItem }) {
-  // Include-flags are informational, not success states — keep them
-  // muted so encrypted (warn tone) is the only thing that draws the
-  // eye on rows where it matters.
+  // v0.41.3: fixed-slot alignment. Every flag-badge is ALWAYS
+  // rendered in DOM but made visually invisible (``invisible``
+  // class — ``visibility: hidden``, preserves layout width) when
+  // the flag is false. This guarantees each badge TYPE sits at the
+  // same x-coord across every row, regardless of which flags a
+  // given backup happens to have — the "pkgs is in column A, ssh
+  // is in column B, encrypted is in column C" mental model.
   //
-  // v0.41.1: drop ``flex-wrap``. A wrapped second row pushes the
-  // row's whole height up and makes adjacent cells float mid-cell,
-  // which the operator reads as "columns are misaligned." A long
-  // filename + many badges can overflow the File column; let the
-  // cell scroll horizontally via the table's outer flow (filenames
-  // on real pfSense configs are short enough that this rarely
-  // triggers).
+  // ``area`` is rendered separately BEFORE the fixed slots: it's a
+  // variable-width string label (unlike the fixed boolean flags),
+  // so sharing a slot would collapse the alignment on rows with a
+  // short vs long area string. Most installs don't use area, so
+  // this doesn't usually compete for space.
+  const hidden = (present: boolean) => (present ? "" : "invisible");
   return (
-    <span className="inline-flex items-center gap-1 align-middle">
-      {b.area ? (
+    <span className="inline-flex items-center gap-1 align-middle whitespace-nowrap">
+      {b.area && (
         <Badge tone="muted" title={`pfSense backup area: ${b.area}`}>
           {b.area}
         </Badge>
-      ) : null}
-      {b.included_rrd && <Badge tone="muted" title="Includes RRD graph data">RRD</Badge>}
-      {b.included_packages && (
-        <Badge tone="muted" title="Includes package information">pkgs</Badge>
       )}
-      {b.included_ssh && (
-        <Badge tone="muted" title="Includes SSH host keys">ssh</Badge>
-      )}
-      {b.encrypted && (
-        <Badge tone="warn" title="Encrypted at rest — view decrypts in memory">
-          <span className="inline-flex items-center gap-1">
-            <Lock className="h-3 w-3" />
-            encrypted
-          </span>
-        </Badge>
-      )}
+      <Badge
+        tone="muted"
+        className={hidden(b.compressed)}
+        title="gzip-compressed at rest"
+      >
+        gz
+      </Badge>
+      <Badge
+        tone="muted"
+        className={hidden(b.included_rrd)}
+        title="Includes RRD graph data"
+      >
+        RRD
+      </Badge>
+      <Badge
+        tone="muted"
+        className={hidden(b.included_packages)}
+        title="Includes package information"
+      >
+        pkgs
+      </Badge>
+      <Badge
+        tone="muted"
+        className={hidden(b.included_ssh)}
+        title="Includes SSH host keys"
+      >
+        ssh
+      </Badge>
+      <Badge
+        tone="warn"
+        className={hidden(b.encrypted)}
+        title="Encrypted at rest — view decrypts in memory"
+      >
+        <span className="inline-flex items-center gap-1">
+          <Lock className="h-3 w-3" />
+          encrypted
+        </span>
+      </Badge>
     </span>
   );
 }
@@ -551,6 +555,7 @@ function SortHeader({
   onClick,
   icon,
   align = "left",
+  className,
 }: {
   label: string;
   col: BackupSort;
@@ -563,6 +568,11 @@ function SortHeader({
    *  stays ``inline-flex`` so the sort chevron travels with the
    *  label regardless of side. */
   align?: "left" | "right";
+  /** v0.41.3: horizontal padding / extra classes passed through to
+   *  the ``<th>``. Used to keep sortable headers in lockstep with
+   *  the non-sortable ones that get ``px-2`` for column breathing
+   *  room. */
+  className?: string;
 }) {
   // aria-sort belongs on the <th>, not the <button>. Correctly reflect
   // the *actual* direction (order) when this column is active; "none"
@@ -574,6 +584,7 @@ function SortHeader({
       className={cn(
         "font-normal",
         align === "right" ? "text-right" : "text-left",
+        className,
       )}
       aria-sort={ariaSort}
     >
