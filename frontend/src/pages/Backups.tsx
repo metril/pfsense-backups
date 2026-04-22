@@ -266,26 +266,33 @@ export function BackupsPage() {
                 {b.duration_seconds.toFixed(1)}s
               </td>
               <td className="py-2 text-xs">
-                {/* v0.41.1: wrap filename + badges in a single
-                    ``inline-flex items-center`` so every element in
-                    the cell shares the same vertical centreline.
-                    Previously the filename sat on the text baseline
-                    while badges (``inline-flex items-center`` with
-                    ``py-0.5``) sat slightly lower, giving the column
-                    a ragged "nothing lines up" feel. */}
-                <span className="inline-flex items-center gap-1 align-middle font-mono">
-                  {b.success ? (
-                    <Link
-                      to={`/backups/${b.id}/view`}
-                      className="hover:text-accent"
-                    >
-                      {b.filename}
-                    </Link>
-                  ) : (
-                    <span>{b.filename}</span>
-                  )}
-                  {b.compressed && <Badge tone="muted">gz</Badge>}
-                  <ContentsBadges b={b} />
+                {/* v0.41.2: pin the content-flags (``gz`` / ``pkgs`` /
+                    ``ssh`` / ``encrypted`` / area) to the right edge
+                    of the cell with ``justify-between``. Previously
+                    they trailed the filename inline, so their x-
+                    position shifted with every filename length — the
+                    "zig-zag" pattern reading down the column.
+                    ``truncate`` on the filename half absorbs very
+                    long filenames without pushing the badge cluster
+                    off-column; ``shrink-0`` on the badge cluster so
+                    the badges themselves never compress. */}
+                <span className="flex items-center justify-between gap-3">
+                  <span className="truncate font-mono">
+                    {b.success ? (
+                      <Link
+                        to={`/backups/${b.id}/view`}
+                        className="hover:text-accent"
+                      >
+                        {b.filename}
+                      </Link>
+                    ) : (
+                      b.filename
+                    )}
+                  </span>
+                  <span className="inline-flex shrink-0 items-center gap-1">
+                    {b.compressed && <Badge tone="muted">gz</Badge>}
+                    <ContentsBadges b={b} />
+                  </span>
                 </span>
               </td>
               <td className="py-2 text-right tabular-nums whitespace-nowrap">
