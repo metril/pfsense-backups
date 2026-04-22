@@ -14,7 +14,11 @@
 import { Lock } from "lucide-react";
 import type { KeyboardEvent, ReactNode } from "react";
 import { Badge } from "@/components/ui/Badge";
-import { BlameDot, useAnchorBlame } from "@/components/xref/AnchorBlame";
+import {
+  BlameDot,
+  BlameHoverTooltip,
+  useAnchorBlame,
+} from "@/components/xref/AnchorBlame";
 
 /** Factory for the "Enter on focused row opens blame drawer"
  *  keydown handler. Caller reads ``openBlame`` from context ONCE at
@@ -73,12 +77,10 @@ export function Dl({ items }: { items: DlRow[] }) {
         );
         return (
           <div key={k} className="contents">
-            {/* v0.41.5: the tooltip lives inside ``BlameDot`` now
-                (not around the whole <dt>). Radix anchors the
-                Content to the trigger's bounding rect, so rooting
-                it on the small dot puts the tooltip right under
-                the cursor when the operator hovers the dot. */}
-            {dtNode}
+            {/* v0.41.6: ``BlameHoverTooltip`` wraps the <dt> and
+                shows a cursor-following tooltip anywhere the mouse
+                moves over the row. No-op when no blame data. */}
+            <BlameHoverTooltip anchorId={id}>{dtNode}</BlameHoverTooltip>
             <dd className="font-mono">{v}</dd>
           </div>
         );
@@ -176,12 +178,15 @@ export function Table({
                 </td>
               </tr>
             );
-            // v0.41.5: the tooltip lives inside ``BlameDot`` in
-            // the row's trailing cell (not wrapping the whole <tr>).
-            // A <tr>-wide trigger caused Radix to centre the tooltip
-            // on the row — far from the cursor on wide rows. The dot
-            // is always near the cursor when hovered.
-            return trNode;
+            // v0.41.6: cursor-following tooltip wraps the <tr>.
+            // The tooltip renders in a portal pinned to the mouse
+            // position, so it appears right under the cursor
+            // regardless of how wide the row is.
+            return (
+              <BlameHoverTooltip key={rowKeys?.[i] ?? i} anchorId={id}>
+                {trNode}
+              </BlameHoverTooltip>
+            );
           })}
         </tbody>
       </table>

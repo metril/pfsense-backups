@@ -8,25 +8,38 @@
  *   the top of the viewer tree so every anchored row inside the
  *   parsed view can opt into the tooltip + click-to-open drawer.
  *
+ * - ``BlameHoverTooltip`` — wraps an anchored row (``<dt>`` /
+ *   ``<tr>``) and shows a **cursor-following** tooltip when the
+ *   mouse is over any part of the row. Implemented by hand (not
+ *   Radix Tooltip) because Radix positions its Content relative to
+ *   the trigger's bounding rect — on a wide row that puts the
+ *   tooltip at the row's midpoint, far from the cursor. v0.41.6
+ *   renders the tooltip in a portal pinned to ``clientX/clientY``
+ *   so it tracks the mouse. Keyboard focus falls back to anchoring
+ *   the tooltip at the focused element's top-right corner.
+ *
  * - ``BlameDot`` — persistent, always-visible click affordance for
- *   anchored rows whose blame data is available. Tiny warn-tinted
- *   dot; opacity 40% at rest, 100% on hover. The tooltip is rooted
- *   ON THE DOT (v0.41.5) rather than on the parent row element —
- *   Radix positions relative to the trigger's bounding rect, so a
- *   wide ``<tr>`` trigger caused the tooltip to appear far from
- *   the cursor. The dot is small and always near the cursor when
- *   the user hovers it, so the tooltip lands right under the
- *   mouse.
+ *   anchored rows whose blame data is available. No tooltip of its
+ *   own any more (``BlameHoverTooltip`` covers the whole row), just
+ *   a click target that opens the drawer.
  */
 
-import * as RadixTooltip from "@radix-ui/react-tooltip";
 import {
+  Children,
+  cloneElement,
   createContext,
+  isValidElement,
+  useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type FocusEvent as ReactFocusEvent,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import { Clock } from "lucide-react";
 import type { AnchorBlameSummaryEntry } from "@/api/queries";
 import { formatRelative } from "@/lib/formatRelative";
@@ -64,11 +77,10 @@ export function AnchorBlameProvider({
   // Reference-identity guard: TanStack background refetches hand us
   // a fresh ``anchors`` object even when the payload hasn't changed
   // in any meaningful way. Re-creating the context value on every
-  // refetch would force every ``AnchorBlameTooltip`` (hundreds in a
-  // large Structured view) to re-render unnecessarily. We snapshot
-  // the incoming anchors and compare a compact signature
-  // (entry count + a hash of sorted keys) — if nothing changed,
-  // reuse the previous reference.
+  // refetch would force every consumer (hundreds in a large
+  // Structured view) to re-render. Snapshot + compact signature
+  // (entry count + first/last key + sum of backup ids) — if
+  // unchanged, reuse the previous reference.
   const prevRef = useRef<{
     signature: string;
     anchors: Record<string, AnchorBlameSummaryEntry>;
@@ -133,17 +145,268 @@ export function blameTooltipText(entry: AnchorBlameSummaryEntry): string {
   return `Last ${kindLabel(entry.kind)} ${rel} (backup #${entry.backup_id}, ${abs}) · press h for full history`;
 }
 
-/** Persistent dot indicating the row has blame data, with the
- *  blame tooltip rooted ON THE DOT. Tiny on purpose —
- *  discoverable without dominating. Renders nothing when there's
- *  no blame entry for this anchor OR no ``openBlame`` callback in
- *  context.
+// ---------------------------------------------------------------- //
+// Cursor-following tooltip
+// ---------------------------------------------------------------- //
+
+const HOVER_DELAY_MS = 250;
+const CURSOR_OFFSET_PX = 14;
+// Conservative estimates used only for edge-flip calculations — the
+// tooltip's real size is set by content + max-width (Tailwind
+// ``max-w-sm`` = 24rem = 384px). When the real bounds go off-screen
+// we flip to the opposite side of the cursor.
+const TOOLTIP_MAX_W = 400;
+const TOOLTIP_MAX_H = 160;
+
+interface TooltipPos {
+  x: number;
+  y: number;
+}
+
+/** Compose multiple event handlers into one. Called left-to-right;
+ *  if any caller preventsDefault, subsequent ones still run — we do
+ *  NOT short-circuit because our handlers are observational. */
+function composeHandlers<E>(
+  ...handlers: (((e: E) => void) | undefined)[]
+): ((e: E) => void) | undefined {
+  const defined = handlers.filter(Boolean) as ((e: E) => void)[];
+  if (defined.length === 0) return undefined;
+  if (defined.length === 1) return defined[0];
+  return (e: E) => {
+    for (const h of defined) h(e);
+  };
+}
+
+/** Clamp a target tooltip position into the viewport, flipping to
+ *  the opposite side of the cursor if we'd otherwise go off-screen. */
+function clampToViewport(
+  cursorX: number,
+  cursorY: number,
+  viewportW: number,
+  viewportH: number,
+): TooltipPos {
+  let x = cursorX + CURSOR_OFFSET_PX;
+  let y = cursorY + CURSOR_OFFSET_PX;
+  if (x + TOOLTIP_MAX_W > viewportW) {
+    x = Math.max(CURSOR_OFFSET_PX, cursorX - CURSOR_OFFSET_PX - TOOLTIP_MAX_W);
+  }
+  if (y + TOOLTIP_MAX_H > viewportH) {
+    y = Math.max(CURSOR_OFFSET_PX, cursorY - CURSOR_OFFSET_PX - TOOLTIP_MAX_H);
+  }
+  return { x, y };
+}
+
+/** Wraps a single anchored element (``<dt>`` / ``<tr>``) and shows
+ *  a cursor-following tooltip whenever the operator hovers anywhere
+ *  inside that element. No-op when there's no blame data for the
+ *  anchor, so unchanged rows render with zero overhead.
  *
- *  Visuals: warn-tinted left stripe + clock glyph + "Blame ·
- *  {section}" header, human-readable label, relative-time, and a
- *  clickable "View full history →" CTA. Styled distinctively from
- *  the generic app tooltip so operators can tell blame content
- *  apart at a glance. */
+ *  The tooltip is rendered in a portal and uses ``pointer-events:
+ *  none`` — the cursor passes through it, so moving the mouse into
+ *  the tooltip region doesn't fire ``mouseleave`` on the trigger.
+ *  A knock-on: the tooltip itself can't host interactive elements.
+ *  That's fine because the CTAs (open drawer, press ``h``) live
+ *  elsewhere: clicking the ``BlameDot`` opens the drawer, ``h``
+ *  does too from a focused row. The tooltip's only job is to show
+ *  info under the cursor.
+ */
+export function BlameHoverTooltip({
+  anchorId,
+  children,
+}: {
+  anchorId: string | null | undefined;
+  children: ReactNode;
+}) {
+  const entry = useBlameForAnchor(anchorId);
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<TooltipPos>({ x: 0, y: 0 });
+  const enterTimerRef = useRef<number | null>(null);
+  const rafRef = useRef<number | null>(null);
+  const pendingPosRef = useRef<{ x: number; y: number } | null>(null);
+
+  // Teardown on unmount — clear any pending timers / frames so the
+  // state setters don't fire after the component is gone (React
+  // would just warn in strict mode).
+  useEffect(() => {
+    return () => {
+      if (enterTimerRef.current !== null) {
+        window.clearTimeout(enterTimerRef.current);
+        enterTimerRef.current = null;
+      }
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+    };
+  }, []);
+
+  const schedulePositionUpdate = useCallback(() => {
+    if (rafRef.current !== null) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      const p = pendingPosRef.current;
+      if (!p) return;
+      setPos(
+        clampToViewport(p.x, p.y, window.innerWidth, window.innerHeight),
+      );
+    });
+  }, []);
+
+  // Only one child; must be a valid React element so we can clone
+  // and attach event handlers directly to it. Can't wrap in a
+  // ``<div>`` because the child is a ``<tr>`` or ``<dt>`` whose
+  // parent is a table / definition-list and won't allow arbitrary
+  // wrappers.
+  const child = Children.only(children);
+  if (!isValidElement(child)) return <>{children}</>;
+
+  // No blame entry → render child untouched. Avoids every row
+  // carrying dead event handlers.
+  if (!entry || !anchorId) return <>{child}</>;
+
+  type ChildProps = {
+    onMouseEnter?: (e: ReactMouseEvent) => void;
+    onMouseMove?: (e: ReactMouseEvent) => void;
+    onMouseLeave?: (e: ReactMouseEvent) => void;
+    onFocus?: (e: ReactFocusEvent) => void;
+    onBlur?: (e: ReactFocusEvent) => void;
+  };
+  const childProps = (child.props ?? {}) as ChildProps;
+
+  const onMouseEnter = (e: ReactMouseEvent) => {
+    pendingPosRef.current = { x: e.clientX, y: e.clientY };
+    if (enterTimerRef.current !== null) {
+      window.clearTimeout(enterTimerRef.current);
+    }
+    enterTimerRef.current = window.setTimeout(() => {
+      enterTimerRef.current = null;
+      const p = pendingPosRef.current;
+      if (!p) return;
+      setPos(
+        clampToViewport(p.x, p.y, window.innerWidth, window.innerHeight),
+      );
+      setOpen(true);
+    }, HOVER_DELAY_MS);
+  };
+
+  const onMouseMove = (e: ReactMouseEvent) => {
+    pendingPosRef.current = { x: e.clientX, y: e.clientY };
+    if (open) schedulePositionUpdate();
+  };
+
+  const onMouseLeave = () => {
+    if (enterTimerRef.current !== null) {
+      window.clearTimeout(enterTimerRef.current);
+      enterTimerRef.current = null;
+    }
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    pendingPosRef.current = null;
+    setOpen(false);
+  };
+
+  const onFocus = (e: ReactFocusEvent) => {
+    // Keyboard users don't have a cursor; anchor the tooltip to the
+    // focused element's top-right corner so it still appears near
+    // what they're reading. ``currentTarget`` is the cloned child.
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    setPos(
+      clampToViewport(rect.right, rect.top, window.innerWidth, window.innerHeight),
+    );
+    setOpen(true);
+  };
+
+  const onBlur = () => setOpen(false);
+
+  const clonedChild = cloneElement(child, {
+    onMouseEnter: composeHandlers<ReactMouseEvent>(
+      childProps.onMouseEnter,
+      onMouseEnter,
+    ),
+    onMouseMove: composeHandlers<ReactMouseEvent>(
+      childProps.onMouseMove,
+      onMouseMove,
+    ),
+    onMouseLeave: composeHandlers<ReactMouseEvent>(
+      childProps.onMouseLeave,
+      onMouseLeave,
+    ),
+    onFocus: composeHandlers<ReactFocusEvent>(childProps.onFocus, onFocus),
+    onBlur: composeHandlers<ReactFocusEvent>(childProps.onBlur, onBlur),
+  } as Partial<ChildProps>);
+
+  return (
+    <>
+      {clonedChild}
+      {open &&
+        createPortal(
+          <div
+            role="tooltip"
+            style={{
+              position: "fixed",
+              left: pos.x,
+              top: pos.y,
+              pointerEvents: "none",
+              zIndex: 50,
+            }}
+            className={cn(
+              "max-w-sm rounded-md border border-border border-l-2 border-l-warn",
+              "bg-bg/95 px-3 py-2 text-sm text-fg shadow-xl backdrop-blur-sm",
+              "animate-in fade-in-0",
+            )}
+          >
+            <BlameTooltipBody entry={entry} anchorId={anchorId} />
+          </div>,
+          document.body,
+        )}
+    </>
+  );
+}
+
+/** Rendered body of the blame tooltip. Factored out so the hover
+ *  tooltip and any other caller (e.g. a follow-up focus-mode tip)
+ *  share the same markup. */
+function BlameTooltipBody({
+  entry,
+  anchorId,
+}: {
+  entry: AnchorBlameSummaryEntry;
+  anchorId: string;
+}) {
+  const parsed = parseAnchorId(anchorId);
+  const scope = parsed?.scope ?? "";
+  const humanLabel = anchorHumanLabel(anchorId, null);
+  return (
+    <div className="flex items-start gap-2">
+      <Clock aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warn" />
+      <div className="min-w-0">
+        <div className="text-[10px] font-semibold uppercase tracking-wide text-warn">
+          Blame · {sectionLabel(scope)}
+        </div>
+        <div className="mt-0.5 truncate font-medium text-fg">{humanLabel}</div>
+        <div className="mt-1 text-xs text-muted-fg">
+          Last {kindLabel(entry.kind)} {formatRelative(entry.occurred_at)} ·
+          backup #{entry.backup_id}
+        </div>
+        <div className="mt-1 text-[10px] text-muted-fg">
+          Click the dot or press{" "}
+          <kbd className="rounded border border-border bg-muted/40 px-1 text-[10px]">
+            h
+          </kbd>{" "}
+          for full history
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Persistent click affordance next to anchored rows that have
+ *  blame data. Tiny warn-tinted dot; clicking it opens the blame
+ *  drawer for that anchor. The hover tooltip now lives on the
+ *  row itself (``BlameHoverTooltip``), so the dot no longer carries
+ *  its own tooltip — it's a pure click target. */
 export function BlameDot({
   anchorId,
   className,
@@ -154,82 +417,21 @@ export function BlameDot({
   const entry = useBlameForAnchor(anchorId);
   const ctx = useAnchorBlame();
   if (!entry || !ctx?.openBlame || !anchorId) return null;
-
-  const parsed = parseAnchorId(anchorId);
-  const scope = parsed?.scope ?? "";
-  // The summary endpoint doesn't carry the per-anchor ``value`` dict
-  // (that would inflate the payload for hundreds of anchors we may
-  // never inspect). Human label falls back to ``section · tail``;
-  // the drawer fetches the full history and shows a richer label.
-  const humanLabel = anchorHumanLabel(anchorId, null);
-
   return (
-    <RadixTooltip.Root>
-      <RadixTooltip.Trigger asChild>
-        <button
-          type="button"
-          aria-label="Open blame history for this row"
-          onClick={(e) => {
-            e.stopPropagation();
-            ctx.openBlame?.(anchorId);
-          }}
-          className={cn(
-            "inline-block h-1.5 w-1.5 rounded-full bg-warn/60 opacity-40",
-            "transition-opacity hover:opacity-100 focus-visible:opacity-100",
-            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-warn/40",
-            className,
-          )}
-        />
-      </RadixTooltip.Trigger>
-      <RadixTooltip.Portal>
-        <RadixTooltip.Content
-          side="top"
-          align="center"
-          sideOffset={6}
-          className={cn(
-            "z-50 max-w-sm rounded-md border border-border border-l-2 border-l-warn",
-            "bg-bg/95 px-3 py-2 text-sm text-fg shadow-xl backdrop-blur-sm",
-            "data-[state=delayed-open]:animate-in data-[state=delayed-open]:fade-in-0",
-          )}
-        >
-          <div className="flex items-start gap-2">
-            <Clock
-              aria-hidden
-              className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warn"
-            />
-            <div className="min-w-0">
-              <div className="text-[10px] font-semibold uppercase tracking-wide text-warn">
-                Blame · {sectionLabel(scope)}
-              </div>
-              <div className="mt-0.5 truncate font-medium text-fg">
-                {humanLabel}
-              </div>
-              <div className="mt-1 text-xs text-muted-fg">
-                Last {kindLabel(entry.kind)} {formatRelative(entry.occurred_at)} · backup #
-                {entry.backup_id}
-              </div>
-              <button
-                type="button"
-                onClick={() => ctx.openBlame?.(anchorId)}
-                className={cn(
-                  "mt-2 inline-flex items-center gap-1 rounded",
-                  "bg-warn/10 px-2 py-0.5 text-xs font-medium text-warn",
-                  "hover:bg-warn/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-warn/40",
-                )}
-              >
-                View full history →
-              </button>
-              <div className="mt-1 text-[10px] text-muted-fg">
-                or press{" "}
-                <kbd className="rounded border border-border bg-muted/40 px-1 text-[10px]">
-                  h
-                </kbd>
-              </div>
-            </div>
-          </div>
-          <RadixTooltip.Arrow className="fill-warn" />
-        </RadixTooltip.Content>
-      </RadixTooltip.Portal>
-    </RadixTooltip.Root>
+    <button
+      type="button"
+      aria-label="Open blame history for this row"
+      title="Open blame history (or press h)"
+      onClick={(e) => {
+        e.stopPropagation();
+        ctx.openBlame?.(anchorId);
+      }}
+      className={cn(
+        "inline-block h-1.5 w-1.5 rounded-full bg-warn/60 opacity-40",
+        "transition-opacity hover:opacity-100 focus-visible:opacity-100",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-warn/40",
+        className,
+      )}
+    />
   );
 }
