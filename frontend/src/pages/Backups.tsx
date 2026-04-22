@@ -223,22 +223,22 @@ export function BackupsPage() {
       <table className="mt-6 w-full text-sm">
         <thead className="text-xs uppercase text-muted-fg">
           <tr>
-            <th className="w-6 px-2"></th>
-            <th className="px-2 text-left font-normal">Instance</th>
-            <SortHeader label="Started" col="started_at" current={sort} order={order} onClick={clickSort} icon={sortIcon} className="px-2" />
-            <SortHeader label="Duration" col="duration_seconds" current={sort} order={order} onClick={clickSort} icon={sortIcon} align="right" className="px-2" />
-            <SortHeader label="File" col="filename" current={sort} order={order} onClick={clickSort} icon={sortIcon} className="px-2" />
-            <th className="px-2 text-left font-normal">Contents</th>
-            <SortHeader label="Size" col="size_bytes" current={sort} order={order} onClick={clickSort} icon={sortIcon} align="right" className="px-2" />
-            <th className="px-2 text-left font-normal">Tag</th>
-            <th className="px-2 text-left font-normal">Status</th>
-            <th className="w-20 px-2"></th>
+            <th className="w-6 px-3"></th>
+            <th className="px-3 text-left font-normal">Instance</th>
+            <SortHeader label="Started" col="started_at" current={sort} order={order} onClick={clickSort} icon={sortIcon} className="px-3" />
+            <SortHeader label="Duration" col="duration_seconds" current={sort} order={order} onClick={clickSort} icon={sortIcon} className="px-3" />
+            <SortHeader label="File" col="filename" current={sort} order={order} onClick={clickSort} icon={sortIcon} className="px-3" />
+            <th className="px-3 text-left font-normal">Contents</th>
+            <SortHeader label="Size" col="size_bytes" current={sort} order={order} onClick={clickSort} icon={sortIcon} className="px-3" />
+            <th className="px-3 text-left font-normal">Tag</th>
+            <th className="px-3 text-left font-normal">Status</th>
+            <th className="w-20 px-3"></th>
           </tr>
         </thead>
         <tbody>
           {rows.map((b) => (
             <tr key={b.id} className="border-t border-border align-middle">
-              <td className="px-2">
+              <td className="px-3">
                 <input
                   type="checkbox"
                   // M11: ensure visible contrast on the dark theme. Default
@@ -250,18 +250,18 @@ export function BackupsPage() {
                   aria-label={`Select backup ${b.filename}`}
                 />
               </td>
-              <td className="px-2 py-2">
+              <td className="px-3 py-2">
                 <Link to="/instances" className="hover:text-accent">
                   {b.instance_name}
                 </Link>
               </td>
-              <td className="px-2 py-2 text-xs whitespace-nowrap">
+              <td className="px-3 py-2 text-xs whitespace-nowrap">
                 {new Date(b.started_at).toLocaleString()}
               </td>
-              <td className="px-2 py-2 text-xs text-right tabular-nums whitespace-nowrap">
+              <td className="px-3 py-2 text-xs tabular-nums whitespace-nowrap">
                 {b.duration_seconds.toFixed(1)}s
               </td>
-              <td className="px-2 py-2 font-mono text-xs">
+              <td className="px-3 py-2 font-mono text-xs">
                 {b.success ? (
                   <Link to={`/backups/${b.id}/view`} className="hover:text-accent">
                     {b.filename}
@@ -270,13 +270,13 @@ export function BackupsPage() {
                   b.filename
                 )}
               </td>
-              <td className="px-2 py-2">
+              <td className="px-3 py-2">
                 <ContentsBadges b={b} />
               </td>
-              <td className="px-2 py-2 text-right tabular-nums whitespace-nowrap">
+              <td className="px-3 py-2 tabular-nums whitespace-nowrap">
                 {Math.round(b.size_bytes / 1024)} KB
               </td>
-              <td className="px-2 py-2">
+              <td className="px-3 py-2">
                 {b.tag ? (
                   <span className="inline-flex items-center gap-1 rounded-full border border-accent/50 bg-accent/10 px-2 py-0.5 text-xs text-accent">
                     <TagIcon className="h-3 w-3" />
@@ -286,14 +286,14 @@ export function BackupsPage() {
                   <span className="text-muted-fg">—</span>
                 )}
               </td>
-              <td className="px-2 py-2">
+              <td className="px-3 py-2">
                 {b.success ? (
                   <Badge tone="success">ok</Badge>
                 ) : (
                   <Badge tone="danger">fail</Badge>
                 )}
               </td>
-              <td className="px-2 py-2">
+              <td className="px-3 py-2">
                 <div className="flex justify-end gap-1">
                   <Button
                     variant="ghost"
@@ -378,41 +378,23 @@ export function BackupsPage() {
 }
 
 function ContentsBadges({ b }: { b: BackupListItem }) {
-  // v0.41.3: fixed-slot alignment. Every flag-badge is ALWAYS
-  // rendered in DOM but made visually invisible (``invisible``
-  // class — ``visibility: hidden``, preserves layout width) when
-  // the flag is false. This guarantees each badge TYPE sits at the
-  // same x-coord across every row, regardless of which flags a
-  // given backup happens to have — the "pkgs is in column A, ssh
-  // is in column B, encrypted is in column C" mental model.
+  // v0.41.3: each flag-badge is ALWAYS rendered in DOM but the
+  // absent ones carry the ``invisible`` class (``visibility:
+  // hidden`` — preserves layout width). That keeps each badge
+  // TYPE in a fixed column position across rows — ``pkgs`` is
+  // always at slot A, ``ssh`` at slot B, etc.
   //
-  // ``area`` is rendered separately BEFORE the fixed slots: it's a
-  // variable-width string label (unlike the fixed boolean flags),
-  // so sharing a slot would collapse the alignment on rows with a
-  // short vs long area string. Most installs don't use area, so
-  // this doesn't usually compete for space.
+  // v0.41.4: slot ordering matters. The ``CONTENTS`` header is
+  // left-aligned at column-x=0, so the leftmost slot needs to
+  // match the badge operators typically see at the left of the
+  // cluster. Order is now: pkgs, ssh, encrypted (the common
+  // toggleable trio), then gz, RRD (rare). ``area`` is variable-
+  // width (string label, not a boolean flag) so it stays
+  // conditionally rendered, moved to the TRAILING position so it
+  // doesn't push the fixed slots right.
   const hidden = (present: boolean) => (present ? "" : "invisible");
   return (
     <span className="inline-flex items-center gap-1 align-middle whitespace-nowrap">
-      {b.area && (
-        <Badge tone="muted" title={`pfSense backup area: ${b.area}`}>
-          {b.area}
-        </Badge>
-      )}
-      <Badge
-        tone="muted"
-        className={hidden(b.compressed)}
-        title="gzip-compressed at rest"
-      >
-        gz
-      </Badge>
-      <Badge
-        tone="muted"
-        className={hidden(b.included_rrd)}
-        title="Includes RRD graph data"
-      >
-        RRD
-      </Badge>
       <Badge
         tone="muted"
         className={hidden(b.included_packages)}
@@ -437,6 +419,25 @@ function ContentsBadges({ b }: { b: BackupListItem }) {
           encrypted
         </span>
       </Badge>
+      <Badge
+        tone="muted"
+        className={hidden(b.compressed)}
+        title="gzip-compressed at rest"
+      >
+        gz
+      </Badge>
+      <Badge
+        tone="muted"
+        className={hidden(b.included_rrd)}
+        title="Includes RRD graph data"
+      >
+        RRD
+      </Badge>
+      {b.area && (
+        <Badge tone="muted" title={`pfSense backup area: ${b.area}`}>
+          {b.area}
+        </Badge>
+      )}
     </span>
   );
 }
@@ -554,7 +555,6 @@ function SortHeader({
   order,
   onClick,
   icon,
-  align = "left",
   className,
 }: {
   label: string;
@@ -563,14 +563,9 @@ function SortHeader({
   order: BackupOrder;
   onClick: (c: BackupSort) => void;
   icon: (c: BackupSort) => React.ReactNode;
-  /** v0.41.1: numeric columns (Duration, Size) read better
-   *  right-aligned so digits line up row-to-row. The <button>
-   *  stays ``inline-flex`` so the sort chevron travels with the
-   *  label regardless of side. */
-  align?: "left" | "right";
   /** v0.41.3: horizontal padding / extra classes passed through to
    *  the ``<th>``. Used to keep sortable headers in lockstep with
-   *  the non-sortable ones that get ``px-2`` for column breathing
+   *  the non-sortable ones that get ``px-3`` for column breathing
    *  room. */
   className?: string;
 }) {
@@ -579,15 +574,15 @@ function SortHeader({
   // otherwise — WAI-ARIA sortable column semantics.
   const ariaSort =
     col !== current ? "none" : order === "asc" ? "ascending" : "descending";
+  // v0.41.4: every header is uniformly ``text-left``. Previously
+  // Duration and Size were ``text-right`` — that pushed their
+  // short values (``1.6s``, ``272 KB``) to the column's right
+  // edge, leaving a large visual gap between the date in STARTED
+  // and the value in DURATION, and making SIZE / TAG labels
+  // converge in the middle of their gap. Left-align everywhere
+  // keeps headers over their own column's content.
   return (
-    <th
-      className={cn(
-        "font-normal",
-        align === "right" ? "text-right" : "text-left",
-        className,
-      )}
-      aria-sort={ariaSort}
-    >
+    <th className={cn("text-left font-normal", className)} aria-sort={ariaSort}>
       <button
         type="button"
         onClick={() => onClick(col)}
