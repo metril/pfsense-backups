@@ -14,11 +14,7 @@
 import { Lock } from "lucide-react";
 import type { KeyboardEvent, ReactNode } from "react";
 import { Badge } from "@/components/ui/Badge";
-import {
-  AnchorBlameTooltip,
-  BlameDot,
-  useAnchorBlame,
-} from "@/components/xref/AnchorBlame";
+import { BlameDot, useAnchorBlame } from "@/components/xref/AnchorBlame";
 
 /** Factory for the "Enter on focused row opens blame drawer"
  *  keydown handler. Caller reads ``openBlame`` from context ONCE at
@@ -77,10 +73,12 @@ export function Dl({ items }: { items: DlRow[] }) {
         );
         return (
           <div key={k} className="contents">
-            {/* v0.40.0: when ``id`` matches an anchor with blame
-                history, wrap the label in a tooltip. No-op when
-                id is undefined or no blame entry exists for it. */}
-            <AnchorBlameTooltip anchorId={id}>{dtNode}</AnchorBlameTooltip>
+            {/* v0.41.5: the tooltip lives inside ``BlameDot`` now
+                (not around the whole <dt>). Radix anchors the
+                Content to the trigger's bounding rect, so rooting
+                it on the small dot puts the tooltip right under
+                the cursor when the operator hovers the dot. */}
+            {dtNode}
             <dd className="font-mono">{v}</dd>
           </div>
         );
@@ -178,17 +176,12 @@ export function Table({
                 </td>
               </tr>
             );
-            // v0.40.0: wrap each anchored row in a blame tooltip.
-            // Fragment + explicit key because Radix's Slot clones the
-            // trigger child and React wants a key at the map level.
-            return (
-              <AnchorBlameTooltip
-                key={rowKeys?.[i] ?? i}
-                anchorId={id}
-              >
-                {trNode}
-              </AnchorBlameTooltip>
-            );
+            // v0.41.5: the tooltip lives inside ``BlameDot`` in
+            // the row's trailing cell (not wrapping the whole <tr>).
+            // A <tr>-wide trigger caused Radix to centre the tooltip
+            // on the row — far from the cursor on wide rows. The dot
+            // is always near the cursor when hovered.
+            return trNode;
           })}
         </tbody>
       </table>

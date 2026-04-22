@@ -8,19 +8,15 @@
  *   the top of the viewer tree so every anchored row inside the
  *   parsed view can opt into the tooltip + click-to-open drawer.
  *
- * - ``AnchorBlameTooltip`` — wrap any anchored element
- *   (``<dt id="field-…">``, ``<tr id="xref-…">``, etc.). Renders a
- *   Radix tooltip with a warn-accented card, human-readable label,
- *   relative-time stamp, and a clickable "View full history" CTA
- *   that invokes ``openBlame`` from context. When the anchor has no
- *   events (never changed / instance not indexed), the wrapper is a
- *   no-op — renders children unwrapped so the DOM is identical.
- *
  * - ``BlameDot`` — persistent, always-visible click affordance for
  *   anchored rows whose blame data is available. Tiny warn-tinted
- *   dot; opacity 40% at rest, 100% on hover. Acts as the
- *   "discoverable" entry point into blame (the tooltip only appears
- *   on hover; the dot is visible at a glance).
+ *   dot; opacity 40% at rest, 100% on hover. The tooltip is rooted
+ *   ON THE DOT (v0.41.5) rather than on the parent row element —
+ *   Radix positions relative to the trigger's bounding rect, so a
+ *   wide ``<tr>`` trigger caused the tooltip to appear far from
+ *   the cursor. The dot is small and always near the cursor when
+ *   the user hovers it, so the tooltip lands right under the
+ *   mouse.
  */
 
 import * as RadixTooltip from "@radix-ui/react-tooltip";
@@ -137,105 +133,17 @@ export function blameTooltipText(entry: AnchorBlameSummaryEntry): string {
   return `Last ${kindLabel(entry.kind)} ${rel} (backup #${entry.backup_id}, ${abs}) · press h for full history`;
 }
 
-/** Wraps children with a Radix tooltip that shows blame info when
- *  an entry is available. The tree shape is intentionally stable —
- *  we ALWAYS render the ``RadixTooltip.Root`` + ``Trigger asChild``
- *  so the wrapped DOM element (``<tr>`` / ``<dt>``) keeps the same
- *  identity across blame loads. If we toggled the whole wrapper on
- *  entry presence, React would unmount + remount the child on every
- *  refetch, destroying any DOM state (focus, selection) on that row.
+/** Persistent dot indicating the row has blame data, with the
+ *  blame tooltip rooted ON THE DOT. Tiny on purpose —
+ *  discoverable without dominating. Renders nothing when there's
+ *  no blame entry for this anchor OR no ``openBlame`` callback in
+ *  context.
  *
- *  The ``Portal`` / ``Content`` only render when we have blame data,
- *  so the cost when blame isn't available is just a context provider
- *  and a pair of empty listener-bearing trigger props.
- *
- *  Visuals: warn-tinted left stripe + clock glyph + "Blame · {section}"
- *  header, human-readable label, relative-time, and a clickable
- *  "View full history →" CTA. Styled distinctively from the generic
- *  app tooltip so operators can tell blame content apart at a
- *  glance. */
-export function AnchorBlameTooltip({
-  anchorId,
-  children,
-}: {
-  anchorId: string | null | undefined;
-  children: ReactNode;
-}) {
-  const entry = useBlameForAnchor(anchorId);
-  const ctx = useAnchorBlame();
-  const parsed = anchorId ? parseAnchorId(anchorId) : null;
-  const scope = parsed?.scope ?? "";
-  // The summary endpoint doesn't carry the per-anchor ``value`` dict
-  // (that'd inflate the payload for hundreds of anchors we may never
-  // inspect). Human label falls back to ``section · tail``; the full
-  // drawer fetches the history and can show a richer label if needed.
-  const humanLabel = anchorId ? anchorHumanLabel(anchorId, null) : "";
-  const canOpen = entry != null && ctx?.openBlame != null && anchorId != null;
-
-  return (
-    <RadixTooltip.Root>
-      <RadixTooltip.Trigger asChild>{children}</RadixTooltip.Trigger>
-      {entry != null && (
-        <RadixTooltip.Portal>
-          <RadixTooltip.Content
-            side="top"
-            align="center"
-            sideOffset={6}
-            className={cn(
-              "z-50 max-w-sm rounded-md border border-border border-l-2 border-l-warn",
-              "bg-bg/95 px-3 py-2 text-sm text-fg shadow-xl backdrop-blur-sm",
-              "data-[state=delayed-open]:animate-in data-[state=delayed-open]:fade-in-0",
-            )}
-          >
-            <div className="flex items-start gap-2">
-              <Clock
-                aria-hidden
-                className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warn"
-              />
-              <div className="min-w-0">
-                <div className="text-[10px] font-semibold uppercase tracking-wide text-warn">
-                  Blame · {sectionLabel(scope)}
-                </div>
-                <div className="mt-0.5 truncate font-medium text-fg">
-                  {humanLabel}
-                </div>
-                <div className="mt-1 text-xs text-muted-fg">
-                  Last {kindLabel(entry.kind)} {formatRelative(entry.occurred_at)} · backup #
-                  {entry.backup_id}
-                </div>
-                {canOpen && (
-                  <button
-                    type="button"
-                    onClick={() => ctx!.openBlame!(anchorId!)}
-                    className={cn(
-                      "mt-2 inline-flex items-center gap-1 rounded",
-                      "bg-warn/10 px-2 py-0.5 text-xs font-medium text-warn",
-                      "hover:bg-warn/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-warn/40",
-                    )}
-                  >
-                    View full history →
-                  </button>
-                )}
-                <div className="mt-1 text-[10px] text-muted-fg">
-                  or press{" "}
-                  <kbd className="rounded border border-border bg-muted/40 px-1 text-[10px]">
-                    h
-                  </kbd>
-                </div>
-              </div>
-            </div>
-            <RadixTooltip.Arrow className="fill-warn" />
-          </RadixTooltip.Content>
-        </RadixTooltip.Portal>
-      )}
-    </RadixTooltip.Root>
-  );
-}
-
-/** Persistent dot indicating the row has blame data and offering a
- *  click path to the drawer. Renders nothing when there's no blame
- *  entry for this anchor OR no ``openBlame`` callback in context.
- *  Tiny on purpose — discoverable without dominating. */
+ *  Visuals: warn-tinted left stripe + clock glyph + "Blame ·
+ *  {section}" header, human-readable label, relative-time, and a
+ *  clickable "View full history →" CTA. Styled distinctively from
+ *  the generic app tooltip so operators can tell blame content
+ *  apart at a glance. */
 export function BlameDot({
   anchorId,
   className,
@@ -246,21 +154,82 @@ export function BlameDot({
   const entry = useBlameForAnchor(anchorId);
   const ctx = useAnchorBlame();
   if (!entry || !ctx?.openBlame || !anchorId) return null;
+
+  const parsed = parseAnchorId(anchorId);
+  const scope = parsed?.scope ?? "";
+  // The summary endpoint doesn't carry the per-anchor ``value`` dict
+  // (that would inflate the payload for hundreds of anchors we may
+  // never inspect). Human label falls back to ``section · tail``;
+  // the drawer fetches the full history and shows a richer label.
+  const humanLabel = anchorHumanLabel(anchorId, null);
+
   return (
-    <button
-      type="button"
-      aria-label="Open blame history for this row"
-      title="Open blame history (or press h)"
-      onClick={(e) => {
-        e.stopPropagation();
-        ctx.openBlame?.(anchorId);
-      }}
-      className={cn(
-        "inline-block h-1.5 w-1.5 rounded-full bg-warn/60 opacity-40",
-        "transition-opacity hover:opacity-100 focus-visible:opacity-100",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-warn/40",
-        className,
-      )}
-    />
+    <RadixTooltip.Root>
+      <RadixTooltip.Trigger asChild>
+        <button
+          type="button"
+          aria-label="Open blame history for this row"
+          onClick={(e) => {
+            e.stopPropagation();
+            ctx.openBlame?.(anchorId);
+          }}
+          className={cn(
+            "inline-block h-1.5 w-1.5 rounded-full bg-warn/60 opacity-40",
+            "transition-opacity hover:opacity-100 focus-visible:opacity-100",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-warn/40",
+            className,
+          )}
+        />
+      </RadixTooltip.Trigger>
+      <RadixTooltip.Portal>
+        <RadixTooltip.Content
+          side="top"
+          align="center"
+          sideOffset={6}
+          className={cn(
+            "z-50 max-w-sm rounded-md border border-border border-l-2 border-l-warn",
+            "bg-bg/95 px-3 py-2 text-sm text-fg shadow-xl backdrop-blur-sm",
+            "data-[state=delayed-open]:animate-in data-[state=delayed-open]:fade-in-0",
+          )}
+        >
+          <div className="flex items-start gap-2">
+            <Clock
+              aria-hidden
+              className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warn"
+            />
+            <div className="min-w-0">
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-warn">
+                Blame · {sectionLabel(scope)}
+              </div>
+              <div className="mt-0.5 truncate font-medium text-fg">
+                {humanLabel}
+              </div>
+              <div className="mt-1 text-xs text-muted-fg">
+                Last {kindLabel(entry.kind)} {formatRelative(entry.occurred_at)} · backup #
+                {entry.backup_id}
+              </div>
+              <button
+                type="button"
+                onClick={() => ctx.openBlame?.(anchorId)}
+                className={cn(
+                  "mt-2 inline-flex items-center gap-1 rounded",
+                  "bg-warn/10 px-2 py-0.5 text-xs font-medium text-warn",
+                  "hover:bg-warn/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-warn/40",
+                )}
+              >
+                View full history →
+              </button>
+              <div className="mt-1 text-[10px] text-muted-fg">
+                or press{" "}
+                <kbd className="rounded border border-border bg-muted/40 px-1 text-[10px]">
+                  h
+                </kbd>
+              </div>
+            </div>
+          </div>
+          <RadixTooltip.Arrow className="fill-warn" />
+        </RadixTooltip.Content>
+      </RadixTooltip.Portal>
+    </RadixTooltip.Root>
   );
 }
