@@ -289,6 +289,91 @@ export interface AnchorHistoryResponse {
   anchor: string;
   instance_id: number;
   entries: AnchorHistoryChange[];
+  /** v0.40.0: True when served from the indexed ``anchor_event`` table,
+   *  false when the instance hasn't been backfilled yet and we fell
+   *  back to the per-request snapshot walk. */
+  indexed?: boolean;
+}
+
+// ----- v0.40.0: blame tooltip + cumulative changes ----------
+
+export interface AnchorBlameSummaryEntry {
+  backup_id: number;
+  occurred_at: string;
+  kind: "added" | "modified" | "removed" | "reordered";
+}
+
+export interface AnchorBlameSummaryResponse {
+  as_of_backup_id: number;
+  anchors: Record<string, AnchorBlameSummaryEntry>;
+  indexed: boolean;
+}
+
+/** Prefetch the whole instance's "latest event per anchor" map.
+ *  Frontend keeps it in TanStack cache for the page lifetime so the
+ *  inline tooltip (``AnchorBlameTooltip``) never makes a per-hover
+ *  request. Returns ``indexed=false`` for pre-v0.40.0 instances;
+ *  callers use that to decide whether to surface the tooltip at all. */
+export function useAnchorBlameSummary(
+  instanceId: number | null | undefined,
+  asOfBackupId?: number | null,
+) {
+  return useQuery({
+    queryKey: ["instance-anchor-blame-summary", instanceId, asOfBackupId ?? null],
+    queryFn: () => {
+      const q = asOfBackupId != null ? `?as_of_backup_id=${asOfBackupId}` : "";
+      return api.get<AnchorBlameSummaryResponse>(
+        `/api/backups/instance/${instanceId}/anchor-blame-summary${q}`,
+      );
+    },
+    enabled: Boolean(instanceId),
+    staleTime: 10 * 60 * 1000,
+  });
+}
+
+export interface CumulativeChangeRow {
+  anchor_id: string;
+  section: string | null;
+  label: string;
+  first_seen_at: string;
+  last_change_at: string;
+  change_count: number;
+  latest_kind: "added" | "modified" | "removed" | "reordered";
+  original_value: unknown;
+  current_value: unknown;
+}
+
+export interface CumulativeChangesResponse {
+  since_backup_id: number;
+  until_backup_id: number;
+  rows: CumulativeChangeRow[];
+  indexed: boolean;
+}
+
+export function useCumulativeChanges(
+  instanceId: number | null | undefined,
+  sinceBackupId?: number | null,
+  untilBackupId?: number | null,
+) {
+  return useQuery({
+    queryKey: [
+      "instance-cumulative-changes",
+      instanceId,
+      sinceBackupId ?? null,
+      untilBackupId ?? null,
+    ],
+    queryFn: () => {
+      const qs = new URLSearchParams();
+      if (sinceBackupId != null) qs.set("since_backup_id", String(sinceBackupId));
+      if (untilBackupId != null) qs.set("until_backup_id", String(untilBackupId));
+      const suffix = qs.toString() ? `?${qs.toString()}` : "";
+      return api.get<CumulativeChangesResponse>(
+        `/api/backups/instance/${instanceId}/cumulative-changes${suffix}`,
+      );
+    },
+    enabled: Boolean(instanceId),
+    staleTime: 5 * 60 * 1000,
+  });
 }
 
 /** Walk every successful backup of the given instance and resolve

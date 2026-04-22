@@ -5,6 +5,7 @@ import { Alert } from "@/components/ui/Alert";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import {
+  useAnchorBlameSummary,
   useBackups,
   useInstances,
   useParsedDiffPair,
@@ -13,6 +14,7 @@ import { collectChangedAnchors } from "@/lib/changedAnchors";
 import { useFocusedAnchor } from "@/lib/useFocusedAnchor";
 import { useBlameHotkey } from "@/lib/useBlameHotkey";
 import { AnchorHistoryDrawer } from "@/components/xref/AnchorHistoryDrawer";
+import { AnchorBlameProvider } from "@/components/xref/AnchorBlame";
 import { useToast } from "@/components/ui/Toast";
 
 const ParsedBackupView = lazy(() =>
@@ -82,6 +84,13 @@ export function InstanceHistoryPage() {
     previous?.id ?? null,
     focused?.id ?? null,
   );
+
+  // v0.40.0: blame summary keyed on the focused backup — tooltip
+  // shows "as of this backup" rather than "as of now" so scrubbing
+  // through history gives truthful rollback info.
+  const blameSummary = useAnchorBlameSummary(id, focused?.id);
+  const blameAnchors = blameSummary.data?.anchors;
+  const blameIndexed = blameSummary.data?.indexed ?? false;
   const changedAnchors = useMemo(
     () => (diffQuery.data ? collectChangedAnchors(diffQuery.data) : new Set<string>()),
     [diffQuery.data],
@@ -219,6 +228,14 @@ export function InstanceHistoryPage() {
         </div>
         {focused && (
           <div className="flex shrink-0 gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => nav(`/instances/${id}/changes`)}
+              title="Every row that has changed since the first backup"
+            >
+              Changes
+            </Button>
             <Button
               variant="secondary"
               size="sm"
@@ -414,7 +431,12 @@ export function InstanceHistoryPage() {
               <div className="p-6 text-sm text-muted-fg">Loading view…</div>
             }
           >
-            <ParsedBackupView backupId={focused.id} />
+            <AnchorBlameProvider
+              anchors={blameAnchors}
+              indexed={blameIndexed}
+            >
+              <ParsedBackupView backupId={focused.id} />
+            </AnchorBlameProvider>
           </Suspense>
         )}
       </div>

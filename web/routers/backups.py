@@ -12,9 +12,10 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from pfsense_shared.anchor_events import section_for_anchor
 from pfsense_shared.backup_diff_storage import (
     compute_diff,
     decode_diff,
@@ -22,7 +23,7 @@ from pfsense_shared.backup_diff_storage import (
     read_backup_bytes,
     summarise_diff,
 )
-from pfsense_shared.models import Backup, BackupDiff, Instance, Job
+from pfsense_shared.models import AnchorEvent, Backup, BackupDiff, Instance, Job
 from pfsense_shared.paths import BACKUPS_DIR  # noqa: F401 — used by /anchor-history
 from pfsense_shared.pfsense_anchor_values import resolve_anchor_value
 from pfsense_shared.pfsense_crypto import (
@@ -31,6 +32,7 @@ from pfsense_shared.pfsense_crypto import (
     looks_encrypted,
 )
 from pfsense_shared.pfsense_diff import ConfigDiff, diff_configs
+from pfsense_shared.pfsense_labels import label_for_section
 from pfsense_shared.pfsense_parser import ParsedConfig, PfSenseParseError
 from pfsense_shared.pfsense_parser import parse as parse_pfsense_xml
 from pfsense_shared.pfsense_positions import build_positions
@@ -996,6 +998,11 @@ class AnchorHistoryResponse(BaseModel):
     anchor: str
     instance_id: int
     entries: list[AnchorHistoryChange]
+    # True when the response came from the indexed ``anchor_event``
+    # table (v0.40.0+). False when the instance predates the v0.40.0
+    # backfill and we fell back to the per-request snapshot walk.
+    # Exposed so smoke-tests can assert the fast path kicked in.
+    indexed: bool = False
 
 
 class _WalkAbortError(Exception):
@@ -1086,28 +1093,21 @@ async def instance_anchor_history(
 ) -> AnchorHistoryResponse:
     """Per-anchor blame timeline for a pfSense instance.
 
-    Walks every successful backup for the instance in chronological
-    order, decrypts + parses each, resolves ``anchor`` to the value
-    it points at in that backup, and records transitions. Used by
-    the v0.24.0 blame drawer in the history page.
+    v0.40.0 fast path: if the instance has been indexed
+    (``Instance.anchor_events_backfilled_at`` is non-null), serve
+    the timeline directly from the ``anchor_event`` table — one
+    SELECT, no decrypt / parse at request time.
 
-    Cost: decrypts + parses every backup on each request. Backups
-    for a single instance are typically dozens to a few hundred;
-    parsing is a few-hundred-ms per config. Result is deterministic
-    and idempotent; frontend caches aggressively via TanStack Query.
+    Legacy fallback (pre-v0.40.0 instances, until ``worker
+    reindex-anchor-events`` has run): walks every successful
+    backup, decrypts + parses each, resolves ``anchor`` to the
+    value it points at in that backup, records transitions. Same
+    response shape so the frontend handles both transparently.
 
-    Connection discipline: the dependency-injected ``db`` session
-    holds a pool connection for the lifetime of this handler. For
-    instances with many backups the walk can take tens of seconds,
-    so we fetch the rows, snapshot them into plain objects, then
-    ``await db.close()`` to free the connection BEFORE entering the
-    parse thread. A fresh session is opened from the factory for
-    the trailing audit write. Under modest concurrency this is the
-    difference between pool-exhaustion under load and smooth-running.
-
-    Audited as ``view_decrypted`` once per request (not once per
-    encrypted backup) — operators reviewing blame data see only one
-    audit entry per drill-in.
+    The legacy path keeps its connection-discipline (snapshot rows,
+    close session before entering the parse thread), its LRU cache,
+    and its ``view_decrypted`` audit log. The indexed path bypasses
+    all three — no decryption happens, no long-held connection.
     """
     # Load instance + its successful backups in ascending order.
     inst_row = (
@@ -1115,6 +1115,86 @@ async def instance_anchor_history(
     ).scalar_one_or_none()
     if inst_row is None:
         raise HTTPException(status_code=404, detail="instance not found")
+
+    # Fast path — indexed query against ``anchor_event``.
+    if inst_row.anchor_events_backfilled_at is not None:
+        import json as _json
+
+        # Window-dedupe on ``(anchor_id, backup_id)`` so a firewall
+        # rule that was both edited and reordered in the same backup
+        # surfaces as ONE timeline entry rather than two rows with
+        # the same backup_id (React key collision + visual duplicate
+        # in the drawer). Kind priority prefers ``modified`` over
+        # ``reordered`` when both exist for the same backup — the
+        # operator-facing summary shows what substantively changed.
+        dedupe_subq = (
+            select(
+                AnchorEvent.id.label("event_id"),
+                AnchorEvent.backup_id,
+                AnchorEvent.occurred_at,
+                AnchorEvent.kind,
+                AnchorEvent.value_json,
+                func.row_number()
+                .over(
+                    partition_by=(
+                        AnchorEvent.anchor_id,
+                        AnchorEvent.backup_id,
+                    ),
+                    order_by=(
+                        _anchor_event_kind_priority().asc(),
+                        AnchorEvent.id.desc(),
+                    ),
+                )
+                .label("rn"),
+            )
+            .where(AnchorEvent.instance_id == instance_id)
+            .where(AnchorEvent.anchor_id == anchor)
+            .subquery()
+        )
+        event_rows_raw = (
+            await db.execute(
+                select(
+                    dedupe_subq.c.backup_id,
+                    dedupe_subq.c.occurred_at,
+                    dedupe_subq.c.kind,
+                    dedupe_subq.c.value_json,
+                ).where(dedupe_subq.c.rn == 1).order_by(dedupe_subq.c.occurred_at.asc())
+            )
+        ).all()
+        entries = [
+            AnchorHistoryChange(
+                backup_id=int(backup_id),
+                started_at=occurred_at.isoformat(),
+                value=(_json.loads(value_json) if value_json is not None else None),
+                # Every persisted event IS a change — the projector
+                # only emits on transitions. Flag stays True so the
+                # existing drawer "emphasise changes" rendering works
+                # unchanged.
+                is_change=True,
+            )
+            for backup_id, occurred_at, _kind, value_json in event_rows_raw
+        ]
+        # Audit even on the indexed path — ``value_json`` in
+        # ``anchor_event`` was derived from decrypted backup content
+        # at ingestion time, so operators with a compliance mandate
+        # still need to see "who viewed what." No runtime decryption
+        # happens here (the label changes from ``view_decrypted`` to
+        # ``view_anchor_history`` to reflect that).
+        audit.record(
+            db,
+            actor_email=user["email"],
+            action="view_anchor_history",
+            resource="anchor_history",
+            resource_id=str(instance_id),
+            details={"anchor": anchor, "entries": len(entries)},
+        )
+        await db.commit()
+        return AnchorHistoryResponse(
+            anchor=anchor,
+            instance_id=instance_id,
+            entries=entries,
+            indexed=True,
+        )
 
     rows = (
         await db.execute(
@@ -1217,9 +1297,471 @@ async def instance_anchor_history(
         anchor=anchor,
         instance_id=instance_id,
         entries=entries,
+        indexed=False,
     )
 
 
 # Sentinel so the "first iteration is always a change" pattern works
 # even when the value happens to be ``None``.
 _MISSING = object()
+
+
+def _anchor_event_kind_priority():  # type: ignore[no-untyped-def]
+    """SQLAlchemy CASE expression that ranks event kinds by
+    informativeness. Used as a secondary ORDER BY clause so that
+    when two events share an ``occurred_at`` (e.g. a firewall rule
+    both edited and repositioned in the same backup produces one
+    ``modified`` + one ``reordered`` event), the ``modified`` event
+    wins ties — operators reading blame want to know WHAT changed
+    before they know that something moved.
+
+    Lower number = higher priority (use with ``.asc()``).
+    """
+    return case(
+        (AnchorEvent.kind == "modified", 1),
+        (AnchorEvent.kind == "added", 2),
+        (AnchorEvent.kind == "removed", 3),
+        (AnchorEvent.kind == "reordered", 4),
+        else_=5,
+    )
+
+
+# --------------------------------------------------------------------- #
+# v0.40.0 — indexed surfaces that ride the ``anchor_event`` table.
+# --------------------------------------------------------------------- #
+
+
+class AnchorBlameSummaryEntry(BaseModel):
+    """Most-recent event for a single anchor, as of a given backup.
+
+    Feeds the inline hover-tooltip on Structured + Raw XML views —
+    the frontend prefetches the whole map for a page view and the
+    tooltip renders zero-latency on hover.
+    """
+
+    backup_id: int
+    occurred_at: str
+    kind: str
+
+
+class AnchorBlameSummaryResponse(BaseModel):
+    as_of_backup_id: int
+    anchors: dict[str, AnchorBlameSummaryEntry]
+    # False for instances that haven't been backfilled yet —
+    # frontend suppresses the tooltip surface in that case (no
+    # data to show). Same indexed/legacy distinction as
+    # ``AnchorHistoryResponse``.
+    indexed: bool
+
+
+@router.get(
+    "/instance/{instance_id}/anchor-blame-summary",
+    response_model=AnchorBlameSummaryResponse,
+)
+async def instance_anchor_blame_summary(
+    instance_id: int,
+    db: DbSession,
+    user: CurrentUser,
+    as_of_backup_id: int | None = Query(default=None),
+) -> AnchorBlameSummaryResponse:
+    """Latest ``AnchorEvent`` per ``anchor_id`` for an instance, at
+    or before ``as_of_backup_id`` (defaults to the instance's newest
+    successful backup).
+
+    Returns a map keyed on ``anchor_id``; payload is small (one
+    entry per changed anchor, typically ≤few hundred), so the
+    browser caches the whole thing for the page lifetime and the
+    tooltip never makes a per-hover request.
+    """
+    inst = (
+        await db.execute(select(Instance).where(Instance.id == instance_id))
+    ).scalar_one_or_none()
+    if inst is None:
+        raise HTTPException(status_code=404, detail="instance not found")
+
+    # Resolve ``as_of_backup_id`` → ``as_of_started_at``. Default to
+    # the latest successful backup for this instance.
+    if as_of_backup_id is None:
+        row = (
+            await db.execute(
+                select(Backup.id, Backup.started_at)
+                .where(Backup.instance_id == instance_id)
+                .where(Backup.success.is_(True))
+                .order_by(Backup.started_at.desc())
+                .limit(1)
+            )
+        ).first()
+        if row is None:
+            return AnchorBlameSummaryResponse(
+                as_of_backup_id=0,
+                anchors={},
+                indexed=inst.anchor_events_backfilled_at is not None,
+            )
+        as_of_backup_id_resolved = int(row[0])
+        as_of_started_at = row[1]
+    else:
+        row = (
+            await db.execute(
+                select(Backup.id, Backup.started_at)
+                .where(Backup.id == as_of_backup_id)
+                .where(Backup.instance_id == instance_id)
+            )
+        ).first()
+        if row is None:
+            raise HTTPException(
+                status_code=404, detail="backup not found for this instance"
+            )
+        as_of_backup_id_resolved = int(row[0])
+        as_of_started_at = row[1]
+
+    if inst.anchor_events_backfilled_at is None:
+        # Pre-v0.40.0 instance — no index, no tooltip data. Frontend
+        # interprets ``indexed=False`` as "hide the tooltip surface."
+        return AnchorBlameSummaryResponse(
+            as_of_backup_id=as_of_backup_id_resolved,
+            anchors={},
+            indexed=False,
+        )
+
+    # Window-function query: latest row per anchor at-or-before the
+    # cut-off. SQLite 3.25+ supports ROW_NUMBER() OVER (...).
+    subq = (
+        select(
+            AnchorEvent.anchor_id,
+            AnchorEvent.backup_id,
+            AnchorEvent.occurred_at,
+            AnchorEvent.kind,
+            func.row_number()
+            .over(
+                partition_by=AnchorEvent.anchor_id,
+                # Tie-break chain: latest ``occurred_at`` wins; on
+                # identical timestamps (modified + reordered for the
+                # same backup), the kind priority — ``modified`` >
+                # ``added`` > ``removed`` > ``reordered`` — decides
+                # which event surfaces in the tooltip. Without this
+                # the projector's emission order would always surface
+                # ``reordered``, which carries less signal than the
+                # field-level edit.
+                order_by=(
+                    AnchorEvent.occurred_at.desc(),
+                    _anchor_event_kind_priority().asc(),
+                    AnchorEvent.id.desc(),
+                ),
+            )
+            .label("rn"),
+        )
+        .where(AnchorEvent.instance_id == instance_id)
+        .where(AnchorEvent.occurred_at <= as_of_started_at)
+        .subquery()
+    )
+    result = await db.execute(
+        select(subq.c.anchor_id, subq.c.backup_id, subq.c.occurred_at, subq.c.kind)
+        .where(subq.c.rn == 1)
+    )
+    anchors: dict[str, AnchorBlameSummaryEntry] = {}
+    for anchor_id, backup_id, occurred_at, kind in result:
+        anchors[anchor_id] = AnchorBlameSummaryEntry(
+            backup_id=int(backup_id),
+            occurred_at=occurred_at.isoformat(),
+            kind=kind,
+        )
+
+    return AnchorBlameSummaryResponse(
+        as_of_backup_id=as_of_backup_id_resolved,
+        anchors=anchors,
+        indexed=True,
+    )
+
+
+class CumulativeChangeRow(BaseModel):
+    anchor_id: str
+    section: str | None
+    label: str
+    first_seen_at: str
+    last_change_at: str
+    change_count: int
+    latest_kind: str
+    original_value: Any
+    current_value: Any
+
+
+class CumulativeChangesResponse(BaseModel):
+    since_backup_id: int
+    until_backup_id: int
+    rows: list[CumulativeChangeRow]
+    indexed: bool
+
+
+@router.get(
+    "/instance/{instance_id}/cumulative-changes",
+    response_model=CumulativeChangesResponse,
+)
+async def instance_cumulative_changes(
+    instance_id: int,
+    db: DbSession,
+    user: CurrentUser,
+    since_backup_id: int | None = Query(default=None),
+    until_backup_id: int | None = Query(default=None),
+) -> CumulativeChangesResponse:
+    """Every anchor that has ≥1 event in the backup-range window,
+    collapsed to "original → current" one row per anchor, sorted
+    by most-recent change first.
+
+    Defaults: ``since`` = oldest retained backup, ``until`` =
+    newest. Operators narrow the window via the range picker in
+    the UI.
+    """
+    inst = (
+        await db.execute(select(Instance).where(Instance.id == instance_id))
+    ).scalar_one_or_none()
+    if inst is None:
+        raise HTTPException(status_code=404, detail="instance not found")
+
+    # Resolve the window endpoints to backup ids + started_at.
+    since_row = None
+    until_row = None
+    if since_backup_id is not None:
+        since_row = (
+            await db.execute(
+                select(Backup.id, Backup.started_at)
+                .where(Backup.id == since_backup_id)
+                .where(Backup.instance_id == instance_id)
+            )
+        ).first()
+        if since_row is None:
+            raise HTTPException(
+                status_code=404, detail="since-backup not found for this instance"
+            )
+    else:
+        since_row = (
+            await db.execute(
+                select(Backup.id, Backup.started_at)
+                .where(Backup.instance_id == instance_id)
+                .where(Backup.success.is_(True))
+                .order_by(Backup.started_at.asc())
+                .limit(1)
+            )
+        ).first()
+    if until_backup_id is not None:
+        until_row = (
+            await db.execute(
+                select(Backup.id, Backup.started_at)
+                .where(Backup.id == until_backup_id)
+                .where(Backup.instance_id == instance_id)
+            )
+        ).first()
+        if until_row is None:
+            raise HTTPException(
+                status_code=404, detail="until-backup not found for this instance"
+            )
+    else:
+        until_row = (
+            await db.execute(
+                select(Backup.id, Backup.started_at)
+                .where(Backup.instance_id == instance_id)
+                .where(Backup.success.is_(True))
+                .order_by(Backup.started_at.desc())
+                .limit(1)
+            )
+        ).first()
+
+    if since_row is None or until_row is None:
+        return CumulativeChangesResponse(
+            since_backup_id=0,
+            until_backup_id=0,
+            rows=[],
+            indexed=inst.anchor_events_backfilled_at is not None,
+        )
+
+    since_id = int(since_row[0])
+    since_at = since_row[1]
+    until_id = int(until_row[0])
+    until_at = until_row[1]
+
+    if inst.anchor_events_backfilled_at is None:
+        return CumulativeChangesResponse(
+            since_backup_id=since_id,
+            until_backup_id=until_id,
+            rows=[],
+            indexed=False,
+        )
+
+    if since_at > until_at:
+        since_at, until_at = until_at, since_at
+        since_id, until_id = until_id, since_id
+
+    # Window over anchor_event per anchor_id: smallest + largest
+    # occurred_at in the window; row at smallest is ``original``, row
+    # at largest is ``current``. One CTE with ROW_NUMBER() on both
+    # directions gives us both in a single scan.
+    from sqlalchemy import and_
+    from sqlalchemy.orm import aliased
+
+    # Pre-dedupe: when two events exist for the same ``(anchor_id,
+    # backup_id)`` (modified + reordered in one backup), collapse to
+    # the higher-signal event before running the first/last window.
+    # Without this the window could pick the ``reordered`` event as
+    # ``last`` and the ``modified`` event as ``first`` (both at the
+    # same timestamp), stitching a misleading original→current pair.
+    dedupe_by_backup = (
+        select(
+            AnchorEvent.id,
+            AnchorEvent.anchor_id,
+            AnchorEvent.backup_id,
+            AnchorEvent.occurred_at,
+            AnchorEvent.kind,
+            AnchorEvent.value_json,
+            func.row_number()
+            .over(
+                partition_by=(AnchorEvent.anchor_id, AnchorEvent.backup_id),
+                order_by=(
+                    _anchor_event_kind_priority().asc(),
+                    AnchorEvent.id.desc(),
+                ),
+            )
+            .label("rn_dedupe"),
+        )
+        .where(AnchorEvent.instance_id == instance_id)
+        .where(AnchorEvent.occurred_at >= since_at)
+        .where(AnchorEvent.occurred_at <= until_at)
+        .subquery()
+    )
+    windowed = (
+        select(
+            dedupe_by_backup.c.id,
+            dedupe_by_backup.c.anchor_id,
+            dedupe_by_backup.c.backup_id,
+            dedupe_by_backup.c.occurred_at,
+            dedupe_by_backup.c.kind,
+            dedupe_by_backup.c.value_json,
+            func.row_number()
+            .over(
+                partition_by=dedupe_by_backup.c.anchor_id,
+                # Tie-break on ``id`` so rn_first and rn_last agree on
+                # "which physical row is first/last" when two events
+                # share an ``occurred_at``. Without this, the self-join
+                # can stitch ``first.value_json`` from one event and
+                # ``last.value_json`` from another at the same
+                # timestamp, producing an internally-inconsistent row.
+                order_by=(
+                    dedupe_by_backup.c.occurred_at.asc(),
+                    dedupe_by_backup.c.id.asc(),
+                ),
+            )
+            .label("rn_first"),
+            func.row_number()
+            .over(
+                partition_by=dedupe_by_backup.c.anchor_id,
+                order_by=(
+                    dedupe_by_backup.c.occurred_at.desc(),
+                    dedupe_by_backup.c.id.desc(),
+                ),
+            )
+            .label("rn_last"),
+        )
+        .where(dedupe_by_backup.c.rn_dedupe == 1)
+        .subquery()
+    )
+    first_in_win = aliased(windowed, name="first_in_win")
+    last_in_win = aliased(windowed, name="last_in_win")
+    stmt = (
+        select(
+            first_in_win.c.anchor_id,
+            first_in_win.c.occurred_at.label("first_seen_at"),
+            first_in_win.c.value_json.label("original_value_json"),
+            last_in_win.c.occurred_at.label("last_change_at"),
+            last_in_win.c.kind.label("latest_kind"),
+            last_in_win.c.value_json.label("current_value_json"),
+        )
+        .select_from(
+            first_in_win.join(
+                last_in_win,
+                and_(
+                    first_in_win.c.anchor_id == last_in_win.c.anchor_id,
+                    first_in_win.c.rn_first == 1,
+                    last_in_win.c.rn_last == 1,
+                ),
+            )
+        )
+        .order_by(last_in_win.c.occurred_at.desc())
+    )
+    rows_raw = (await db.execute(stmt)).all()
+
+    # Compute change_counts in a second pass (cheap — one GROUP BY
+    # over the indexed table per instance, bounded by the window).
+    # ``COUNT(DISTINCT backup_id)`` (not ``COUNT(*)``) so a single
+    # operator action that produced multiple events for the same
+    # backup (e.g. a rule both edited and reordered → one
+    # ``modified`` + one ``reordered`` row) counts as ONE change.
+    # Without the DISTINCT the cumulative-changes heatmap would
+    # over-report frequently-shuffled rules.
+    counts_stmt = (
+        select(
+            AnchorEvent.anchor_id,
+            func.count(func.distinct(AnchorEvent.backup_id)),
+        )
+        .where(AnchorEvent.instance_id == instance_id)
+        .where(AnchorEvent.occurred_at >= since_at)
+        .where(AnchorEvent.occurred_at <= until_at)
+        .group_by(AnchorEvent.anchor_id)
+    )
+    counts_map = dict((await db.execute(counts_stmt)).all())
+
+    import json as _json
+
+    result_rows: list[CumulativeChangeRow] = []
+    for (
+        anchor_id,
+        first_seen_at,
+        original_value_json,
+        last_change_at,
+        latest_kind,
+        current_value_json,
+    ) in rows_raw:
+        section = section_for_anchor(anchor_id)
+        try:
+            current_value = (
+                _json.loads(current_value_json)
+                if current_value_json is not None
+                else None
+            )
+        except (TypeError, ValueError):
+            current_value = None
+        try:
+            original_value = (
+                _json.loads(original_value_json)
+                if original_value_json is not None
+                else None
+            )
+        except (TypeError, ValueError):
+            original_value = None
+
+        if section is not None and isinstance(current_value, dict):
+            label = label_for_section(section, current_value)
+        elif section is not None and isinstance(original_value, dict):
+            label = label_for_section(section, original_value)
+        else:
+            # Field-shaped anchor or row with a scalar value — fall
+            # back to the anchor_id tail.
+            label = anchor_id.split("-", 2)[-1] if "-" in anchor_id else anchor_id
+
+        result_rows.append(
+            CumulativeChangeRow(
+                anchor_id=anchor_id,
+                section=section,
+                label=label,
+                first_seen_at=first_seen_at.isoformat(),
+                last_change_at=last_change_at.isoformat(),
+                change_count=int(counts_map.get(anchor_id, 0)),
+                latest_kind=latest_kind,
+                original_value=original_value,
+                current_value=current_value,
+            )
+        )
+
+    return CumulativeChangesResponse(
+        since_backup_id=since_id,
+        until_backup_id=until_id,
+        rows=result_rows,
+        indexed=True,
+    )

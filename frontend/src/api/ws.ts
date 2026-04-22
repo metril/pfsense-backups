@@ -58,6 +58,17 @@ export function useEvents(): {
             case "backup.failed":
               qc.invalidateQueries({ queryKey: ["backups"] });
               qc.invalidateQueries({ queryKey: ["jobs"] });
+              // v0.40.0: new backup lands → anchor-event index
+              // grew. Refetch tooltip summary, full history, and
+              // cumulative changes so the UI reflects the new
+              // state without a manual reload.
+              qc.invalidateQueries({
+                queryKey: ["instance-anchor-blame-summary"],
+              });
+              qc.invalidateQueries({ queryKey: ["instance-anchor-history"] });
+              qc.invalidateQueries({
+                queryKey: ["instance-cumulative-changes"],
+              });
               break;
             case "schedule.reloaded":
               qc.invalidateQueries({ queryKey: ["schedule"] });

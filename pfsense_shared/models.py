@@ -4,7 +4,18 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, LargeBinary, String, Text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    LargeBinary,
+    String,
+    Text,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -57,6 +68,18 @@ class Instance(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+    # v0.40.0 — once the ``anchor_event`` log has been populated for
+    # every retained backup of this instance, the read path serves
+    # blame / history / cumulative-changes from the indexed table.
+    # NULL means "not yet backfilled" — read endpoints fall back to
+    # the legacy per-request full-history walk. Set by the ingestion
+    # path for newly-created instances (first-ever backup seeds the
+    # events), and by the ``reindex-anchor-events`` CLI for
+    # pre-existing instances.
+    anchor_events_backfilled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None, nullable=True
     )
 
     backups: Mapped[list[Backup]] = relationship(
@@ -247,4 +270,85 @@ class BackupDiff(Base):
     full_diff_gz: Mapped[bytes] = mapped_column(LargeBinary)
     computed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow
+    )
+
+
+class AnchorEvent(Base):
+    """One row per anchor value transition in an instance's history.
+
+    Populated at backup ingestion (and by the ``reindex-anchor-events``
+    CLI for pre-existing instances). Serves three read surfaces:
+
+    - ``/anchor-history`` — per-anchor timeline for the blame drawer.
+    - ``/anchor-blame-summary`` — latest event per anchor, feeds the
+      inline hover-tooltip on Structured + Raw XML views.
+    - ``/cumulative-changes`` — every anchor with ≥1 event in a
+      backup-range window, "original → current" collapsed.
+
+    Change semantics:
+
+    - ``added`` — anchor appeared in this backup (not present in
+      ``prev_backup``); or the very first backup of an instance, where
+      we seed one event per anchor present in the parsed config.
+    - ``modified`` — anchor existed before, its serialized value
+      differs now.
+    - ``removed`` — anchor was present in ``prev_backup``, absent now.
+      ``value_json`` carries the last-known value so the drawer can
+      still show "what was deleted."
+    - ``reordered`` — order-sensitive section (firewall/NAT rules)
+      moved position without other field changes. ``value_json``
+      carries the current row.
+
+    Cascade strategy:
+
+    - ``ON DELETE CASCADE`` via ``backup_id`` — retention prune drops
+      the events along with the backup they describe. Matches the
+      existing blame semantic ("history only covers retained
+      backups").
+    - ``ON DELETE SET NULL`` via ``prev_backup_id`` — pruning the
+      predecessor leaves the event intact with a NULL pointer; the
+      row's own existence is what matters for the index.
+    """
+
+    __tablename__ = "anchor_event"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    instance_id: Mapped[int] = mapped_column(
+        ForeignKey("instances.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    backup_id: Mapped[int] = mapped_column(
+        ForeignKey("backups.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    prev_backup_id: Mapped[int | None] = mapped_column(
+        ForeignKey("backups.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    anchor_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    # JSON-encoded post-change value. NULL for ``removed`` events when
+    # we don't have a last-known-value handy (rare — the projector
+    # carries ``section.removed[]`` dicts through, so ``removed``
+    # events usually have a value).
+    value_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        # Covering index for the three read queries: blame (filter
+        # by anchor_id, order by occurred_at), summary (latest per
+        # anchor_id), cumulative (scan a window per anchor_id).
+        Index(
+            "ix_anchor_event_lookup",
+            "instance_id",
+            "anchor_id",
+            "occurred_at",
+        ),
+        Index("ix_anchor_event_backup", "backup_id"),
+        CheckConstraint(
+            "kind in ('added','modified','removed','reordered')",
+            name="ck_anchor_event_kind",
+        ),
     )

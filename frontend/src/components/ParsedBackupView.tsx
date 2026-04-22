@@ -1531,6 +1531,12 @@ function DnsPanel({ d }: { d: DnsConfig }) {
             d.unbound_enabled
               ? `enabled :${d.unbound_port ?? "53"}`
               : "disabled",
+            // Anchor ids stay XML-tag-based so the Structured↔Raw
+            // XML tab-sync (via pfsense_positions.py) and the blame
+            // affordance agree on one taxonomy. ``enable`` is the
+            // child tag under ``<unbound>``; the resolver / projector
+            // map it back to ``DnsConfig.unbound_enabled`` via the
+            // v0.40.1 field-alias layer.
             fieldId("unbound", "enable"),
           ],
           [

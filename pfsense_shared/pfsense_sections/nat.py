@@ -38,13 +38,53 @@ def _endpoint(el: Element | None) -> Endpoint:
     )
 
 
+def _endpoint_blob(el: Element | None) -> str:
+    """Flatten a ``<source>`` or ``<destination>`` subtree into a
+    stable tuple string. Used by ``_key`` — including the endpoint
+    fields makes two port-forward rules on the same interface with
+    different address/port targets distinguishable without relying
+    on descriptions."""
+    if el is None:
+        return ""
+    return "|".join(
+        [
+            "any" if el.find("any") is not None else "",
+            text(el, "network") or "",
+            text(el, "address") or "",
+            text(el, "port") or "",
+            "not" if el.find("not") is not None else "",
+        ]
+    )
+
+
 def _key(r: Element, kind: str) -> str:
+    """Synthesize a stable per-rule key.
+
+    v0.40.0: derived from the fields that functionally define a NAT
+    rule — interface, protocol, source, destination, target, and
+    local port. The rule description (``<descr>``) is deliberately
+    EXCLUDED: it's a user-facing label that operators edit for
+    clarity, and including it would force every description tweak
+    to emit a bogus add+remove event pair in the blame log (each
+    tweak produces a fresh key, so the projector sees an old rule
+    disappearing and a new one appearing).
+
+    Two NAT rules that share all functional fields AND a kind but
+    differ only in description still collide under this scheme,
+    which is correct — they're the same logical rule. The rare case
+    of intentionally-duplicate rules with different descriptions
+    (a pfSense anti-pattern anyway) gets merged in blame history;
+    operators fix that by making the target or port distinct.
+    """
     blob = "\x1f".join(
         [
             kind,
-            text(r, "descr") or "",
             text(r, "interface") or "",
+            text(r, "protocol") or "",
+            _endpoint_blob(r.find("source")),
+            _endpoint_blob(r.find("destination")),
             text(r, "target") or "",
+            text(r, "external") or "",  # 1:1 NAT uses <external>
             text(r, "local-port") or "",
         ]
     )

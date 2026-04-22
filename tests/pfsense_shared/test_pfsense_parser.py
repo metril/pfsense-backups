@@ -114,6 +114,68 @@ def test_nat_rules(parsed: ParsedConfig) -> None:
     assert pf.local_port == "443"
 
 
+def test_nat_key_stable_across_description_edits() -> None:
+    """Regression: NAT rule keys must NOT change when only the
+    ``<descr>`` is edited. v0.40.0 removed descr from the key
+    derivation — otherwise every description tweak forces a bogus
+    add+remove pair in the anchor-event log, polluting blame."""
+    from pfsense_shared.pfsense_parser import parse
+
+    base = b"""<pfsense><nat>
+      <rule>
+        <interface>wan</interface>
+        <protocol>tcp</protocol>
+        <target>192.0.2.10</target>
+        <local-port>443</local-port>
+        <descr>original description</descr>
+        <destination><port>443</port></destination>
+      </rule>
+    </nat></pfsense>"""
+    edited = b"""<pfsense><nat>
+      <rule>
+        <interface>wan</interface>
+        <protocol>tcp</protocol>
+        <target>192.0.2.10</target>
+        <local-port>443</local-port>
+        <descr>edited description</descr>
+        <destination><port>443</port></destination>
+      </rule>
+    </nat></pfsense>"""
+    k1 = parse(base).nat_rules[0].key
+    k2 = parse(edited).nat_rules[0].key
+    assert k1 == k2, (
+        f"NAT key shouldn't change on description edits; got {k1!r} -> {k2!r}"
+    )
+
+
+def test_nat_key_changes_on_target_edit() -> None:
+    """Contrapositive: when a functionally-significant field (target
+    IP, port, interface, protocol) changes, the NAT key MUST change
+    so the projector emits an add+remove pair — a rule retargeted
+    to a different internal host is effectively a new rule."""
+    from pfsense_shared.pfsense_parser import parse
+
+    base = b"""<pfsense><nat>
+      <rule>
+        <interface>wan</interface>
+        <target>192.0.2.10</target>
+        <local-port>443</local-port>
+      </rule>
+    </nat></pfsense>"""
+    retargeted = b"""<pfsense><nat>
+      <rule>
+        <interface>wan</interface>
+        <target>192.0.2.11</target>
+        <local-port>443</local-port>
+      </rule>
+    </nat></pfsense>"""
+    k1 = parse(base).nat_rules[0].key
+    k2 = parse(retargeted).nat_rules[0].key
+    assert k1 != k2, (
+        f"NAT key should change on target edits; got {k1!r} for both"
+    )
+
+
 def test_aliases(parsed: ParsedConfig) -> None:
     names = [a.name for a in parsed.aliases]
     assert names == ["WEB_PORTS", "MGMT_HOSTS"]

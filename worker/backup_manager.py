@@ -27,6 +27,10 @@ import requests
 import urllib3
 from sqlalchemy.orm import sessionmaker
 
+from pfsense_shared.anchor_events import (
+    diff_to_anchor_events,
+    enumerate_anchors,
+)
 from pfsense_shared.backup_diff_storage import (
     compute_diff,
     encode_diff,
@@ -34,8 +38,17 @@ from pfsense_shared.backup_diff_storage import (
     summarise_diff,
 )
 from pfsense_shared.crypto import Crypto
-from pfsense_shared.models import Backup, BackupDiff, BackupSettings, Instance, Job
+from pfsense_shared.models import (
+    AnchorEvent,
+    Backup,
+    BackupDiff,
+    BackupSettings,
+    Instance,
+    Job,
+)
 from pfsense_shared.pfsense_crypto import looks_encrypted
+from pfsense_shared.pfsense_parser import PfSenseParseError
+from pfsense_shared.pfsense_parser import parse as parse_pfsense_xml
 from pfsense_shared.pfsense_probe import (
     BROWSER_HEADERS,
     DASHBOARD_MARKERS,
@@ -1345,15 +1358,26 @@ class PfSenseBackupManager:
 
     def _compute_and_persist_diffs(self, new_backup_id: int, instance_id: int) -> None:
         """Compute ``(previous, first)`` diffs for a newly-landed
-        backup and upsert ``backup_diff`` rows. Runs post-commit of
-        the ``Backup`` row and after the host semaphore has released,
-        so this is latency that operators see in "backup complete"
-        but not in "connected to pfSense".
+        backup and upsert ``backup_diff`` rows; emit per-anchor
+        ``AnchorEvent`` rows against the immediate predecessor (or
+        seed them for the first-ever backup).
+
+        Runs post-commit of the ``Backup`` row and after the host
+        semaphore has released, so this is latency that operators see
+        in "backup complete" but not in "connected to pfSense".
 
         Skip rules:
           - No previous/first backup exists → skip that kind.
           - File unreadable / XML malformed → skip that kind,
             log at warning. No user-facing surface for these.
+
+        Anchor events are emitted from the same ``new_parsed`` we
+        already have in memory for the ``previous`` diff — no extra
+        parse cost. On the very first backup of an instance the
+        projector has no diff to walk; instead we seed one event per
+        anchor present in ``new_parsed`` (kind=added,
+        ``prev_backup_id=NULL``) so blame for never-changed fields
+        still shows creation.
         """
         from sqlalchemy import select
 
@@ -1369,6 +1393,18 @@ class PfSenseBackupManager:
                 crypto=self._crypto,
             )
             if new_bytes is None:
+                return
+
+            # Parse new side once — used for both diff computation
+            # and anchor-event emission below.
+            try:
+                new_parsed = parse_pfsense_xml(new_bytes)
+            except PfSenseParseError as exc:
+                log.warning(
+                    "failed to parse new backup id=%d for diff/events: %s",
+                    new_backup_id,
+                    exc,
+                )
                 return
 
             # Previous: immediate predecessor (most recent successful
@@ -1436,7 +1472,95 @@ class PfSenseBackupManager:
                         full_diff_gz=blob,
                     )
                 )
+
+                if kind == "previous":
+                    # Emit one AnchorEvent per projected change vs the
+                    # immediate predecessor. ``diff_to_anchor_events``
+                    # produces (anchor_id, kind, value) tuples; we JSON-
+                    # encode the value because it can be a dict (rows)
+                    # or a scalar (singleton fields).
+                    self._emit_anchor_events(
+                        s,
+                        instance_id=instance_id,
+                        backup_id=new_backup_id,
+                        prev_backup_id=base.id,
+                        occurred_at=new_row.started_at,
+                        diff=diff,
+                        new_parsed=new_parsed,
+                    )
+
+            if previous is None and first is None:
+                # First-ever backup of this instance — no diff to
+                # walk. Seed one event per anchor present in
+                # ``new_parsed`` so the blame drawer can show "set at
+                # instance creation" for never-changed fields.
+                self._seed_anchor_events(
+                    s,
+                    instance_id=instance_id,
+                    backup_id=new_backup_id,
+                    occurred_at=new_row.started_at,
+                    new_parsed=new_parsed,
+                )
+                # Mark the instance as backfilled — new instances
+                # never need a separate reindex pass.
+                inst = s.get(Instance, instance_id)
+                if inst is not None:
+                    inst.anchor_events_backfilled_at = datetime.now(UTC)
             s.commit()
+
+    @staticmethod
+    def _emit_anchor_events(
+        session,
+        *,
+        instance_id: int,
+        backup_id: int,
+        prev_backup_id: int,
+        occurred_at: datetime,
+        diff,
+        new_parsed,
+    ) -> None:
+        import json as _json
+
+        for anchor_id, event_kind, value in diff_to_anchor_events(diff, new_parsed):
+            session.add(
+                AnchorEvent(
+                    instance_id=instance_id,
+                    backup_id=backup_id,
+                    prev_backup_id=prev_backup_id,
+                    anchor_id=anchor_id,
+                    occurred_at=occurred_at,
+                    kind=event_kind,
+                    value_json=(
+                        _json.dumps(value, default=str) if value is not None else None
+                    ),
+                )
+            )
+
+    @staticmethod
+    def _seed_anchor_events(
+        session,
+        *,
+        instance_id: int,
+        backup_id: int,
+        occurred_at: datetime,
+        new_parsed,
+    ) -> None:
+        import json as _json
+
+        for anchor_id, value in enumerate_anchors(new_parsed):
+            session.add(
+                AnchorEvent(
+                    instance_id=instance_id,
+                    backup_id=backup_id,
+                    prev_backup_id=None,
+                    anchor_id=anchor_id,
+                    occurred_at=occurred_at,
+                    kind="added",
+                    value_json=(
+                        _json.dumps(value, default=str) if value is not None else None
+                    ),
+                )
+            )
 
     def _mark_job(
         self,

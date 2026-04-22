@@ -74,6 +74,29 @@ _ROW_SCOPES: dict[str, tuple[str, str]] = {
     "haproxy_backend": ("installedpackages.haproxy.backends", "name"),
 }
 
+# Field-level aliases: ``{(scope, xml_tag): pydantic_field_name}``.
+#
+# The anchor-id taxonomy is tag-based (drives the positions map + the
+# frontend's ``fieldId`` calls), but some Pydantic sections flatten
+# two XML subtrees into a single model — ``DnsConfig`` merges
+# ``<dnsmasq>`` and ``<unbound>`` into one record with prefixed
+# fields. When the resolver sees ``field-dns-enable`` it has to
+# translate ``enable`` → ``dnsmasq_enabled`` on the scope's target
+# model; ``field-unbound-enable`` → ``unbound_enabled``. Without this
+# table both anchor ids resolve to None because ``DnsConfig`` has no
+# literal ``enable`` field.
+#
+# New aliases land here AND in
+# ``pfsense_shared/anchor_events._SINGLETON_FIELD_ALIASES`` so the
+# projector emits the same ids the resolver can look up.
+_FIELD_ALIASES: dict[tuple[str, str], str] = {
+    ("dns", "enable"): "dnsmasq_enabled",
+    ("dns", "port"): "dnsmasq_port",
+    ("unbound", "enable"): "unbound_enabled",
+    ("unbound", "port"): "unbound_port",
+}
+
+
 # Singleton sections — ``field-{section}-{name}`` reads
 # ``getattr(getattr(cfg, SINGLETON_PATH[section]), name)``. The value
 # may be a dotted attribute path (``installedpackages.avahi``) so
@@ -172,8 +195,12 @@ def resolve_anchor_value(
             return None
         # Direct attribute lookup on the Pydantic model. The field
         # names on the model mirror the XML tag names one-to-one for
-        # everything the frontend emits a ``fieldId`` for.
-        return _stringify(getattr(section, tail, None))
+        # most scopes; the ``_FIELD_ALIASES`` table handles the
+        # scopes where the parser merges two XML subtrees into one
+        # Pydantic record (e.g. ``DnsConfig`` holds both dnsmasq and
+        # unbound fields under prefixed names).
+        effective_tail = _FIELD_ALIASES.get((scope, tail), tail)
+        return _stringify(getattr(section, effective_tail, None))
 
     # namespace == "xref"
     if tail is None:

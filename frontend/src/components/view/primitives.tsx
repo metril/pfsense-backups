@@ -14,6 +14,7 @@
 import { Lock } from "lucide-react";
 import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/Badge";
+import { AnchorBlameTooltip } from "@/components/xref/AnchorBlame";
 
 /** Two-column definition list. ``items`` is a tuple of
  *  ``[label, value]`` or ``[label, value, fieldId]``. When a third
@@ -31,11 +32,26 @@ export function Dl({ items }: { items: DlRow[] }) {
     <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm">
       {items.map((row) => {
         const [k, v, id] = row;
+        // ``tabIndex=0`` so keyboard users reach the tooltip via
+        // Tab. Radix Tooltip opens on focus as well as hover, so
+        // this gives the blame affordance keyboard parity. Only
+        // applied to anchored rows — non-anchored rows stay
+        // non-focusable as before.
+        const dtNode = (
+          <dt
+            id={id}
+            tabIndex={id ? 0 : undefined}
+            className="text-muted-fg outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          >
+            {k}
+          </dt>
+        );
         return (
           <div key={k} className="contents">
-            <dt id={id} className="text-muted-fg">
-              {k}
-            </dt>
+            {/* v0.40.0: when ``id`` matches an anchor with blame
+                history, wrap the label in a tooltip. No-op when
+                id is undefined or no blame entry exists for it. */}
+            <AnchorBlameTooltip anchorId={id}>{dtNode}</AnchorBlameTooltip>
             <dd className="font-mono">{v}</dd>
           </div>
         );
@@ -99,19 +115,36 @@ export function Table({
           </tr>
         </thead>
         <tbody>
-          {rows.map((row, i) => (
-            <tr
-              key={rowKeys?.[i] ?? i}
-              id={rowIds?.[i]}
-              className="border-b border-border/50 last:border-0"
-            >
-              {row.map((cell, j) => (
-                <td key={j} className="px-2 py-1 align-top">
-                  {cell}
-                </td>
-              ))}
-            </tr>
-          ))}
+          {rows.map((row, i) => {
+            const id = rowIds?.[i];
+            // ``tabIndex=0`` on anchored rows so keyboard users can
+            // tab through and fire the blame tooltip on focus.
+            const trNode = (
+              <tr
+                key={rowKeys?.[i] ?? i}
+                id={id}
+                tabIndex={id ? 0 : undefined}
+                className="border-b border-border/50 last:border-0 outline-none focus-visible:bg-muted/40 focus-visible:ring-1 focus-visible:ring-accent/40"
+              >
+                {row.map((cell, j) => (
+                  <td key={j} className="px-2 py-1 align-top">
+                    {cell}
+                  </td>
+                ))}
+              </tr>
+            );
+            // v0.40.0: wrap each anchored row in a blame tooltip.
+            // Fragment + explicit key because Radix's Slot clones the
+            // trigger child and React wants a key at the map level.
+            return (
+              <AnchorBlameTooltip
+                key={rowKeys?.[i] ?? i}
+                anchorId={id}
+              >
+                {trNode}
+              </AnchorBlameTooltip>
+            );
+          })}
         </tbody>
       </table>
     </div>

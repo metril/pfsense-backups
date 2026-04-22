@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/Input";
 import { Tabs } from "@/components/ui/Tabs";
 import { useToast } from "@/components/ui/Toast";
 import {
+  useAnchorBlameSummary,
   useBackups,
   useInstances,
   useParsedBackup,
@@ -28,6 +29,10 @@ import { useFocusedAnchor } from "@/lib/useFocusedAnchor";
 import { useBlameHotkey } from "@/lib/useBlameHotkey";
 import { expandThenScrollToHash } from "@/lib/xref";
 import { AnchorHistoryDrawer } from "@/components/xref/AnchorHistoryDrawer";
+import {
+  AnchorBlameProvider,
+  blameTooltipText,
+} from "@/components/xref/AnchorBlame";
 
 const MonacoViewer = lazy(() => import("@/components/MonacoViewer"));
 const ParsedBackupView = lazy(() =>
@@ -139,6 +144,29 @@ export function BackupViewPage() {
       return best;
     },
     [positions],
+  );
+
+  // v0.40.0: blame summary prefetch. Passing ``detail?.id`` as the
+  // ``as_of_backup_id`` cutoff so the tooltip reflects "what had
+  // changed by the time this backup was taken" — hovering on an
+  // old backup shows blame up to that point, not up to now.
+  const blameSummary = useAnchorBlameSummary(detail?.instance_id, detail?.id);
+  const blameAnchors = blameSummary.data?.anchors;
+  const blameIndexed = blameSummary.data?.indexed ?? false;
+
+  // Monaco hover provider: map hovered line → anchor via
+  // ``positions``, then look up the anchor in the blame summary.
+  // Returns markdown (plain text here) or null to suppress.
+  const monacoBlameProvider = useCallback(
+    (line: number): string | null => {
+      if (!blameIndexed || !blameAnchors) return null;
+      const anchor = anchorForLine(line);
+      if (!anchor) return null;
+      const entry = blameAnchors[anchor];
+      if (!entry) return null;
+      return blameTooltipText(entry);
+    },
+    [anchorForLine, blameAnchors, blameIndexed],
   );
 
   const onMonacoCursorLine = useCallback(
@@ -431,15 +459,21 @@ export function BackupViewPage() {
         <Suspense
           fallback={<div className="p-6 text-sm text-muted-fg">Loading view…</div>}
         >
-          {tab === "structured" ? (
-            <ParsedBackupView backupId={detail.id} />
-          ) : (
-            <MonacoViewer
-              content={content}
-              focusLine={rawFocusLine}
-              onCursorLineChange={onMonacoCursorLine}
-            />
-          )}
+          {/* v0.40.0: provide the blame summary so Structured rows
+              can wire up tooltips. Raw XML uses the same data via
+              ``monacoBlameProvider`` below. */}
+          <AnchorBlameProvider anchors={blameAnchors} indexed={blameIndexed}>
+            {tab === "structured" ? (
+              <ParsedBackupView backupId={detail.id} />
+            ) : (
+              <MonacoViewer
+                content={content}
+                focusLine={rawFocusLine}
+                onCursorLineChange={onMonacoCursorLine}
+                blameProvider={monacoBlameProvider}
+              />
+            )}
+          </AnchorBlameProvider>
         </Suspense>
       </div>
 

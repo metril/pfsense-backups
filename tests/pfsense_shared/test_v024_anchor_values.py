@@ -153,6 +153,34 @@ def test_every_row_scope_resolves():
         )
 
 
+def test_dns_anchor_ids_resolve_via_field_alias():
+    """Regression: pre-v0.40.1 the DNS panel emitted
+    ``field-unbound-enable`` and ``field-dns-enable`` as anchor ids
+    (matching the XML tag taxonomy + positions map), but the
+    Pydantic ``DnsConfig`` model exposes these fields as
+    ``unbound_enabled`` and ``dnsmasq_enabled``. Both ids silently
+    resolved to ``None`` because ``DnsConfig`` has no literal
+    ``enable`` field.
+
+    v0.40.1 adds ``_FIELD_ALIASES`` to translate the tag-based
+    anchor into the Pydantic field name on lookup. The anchor-id
+    taxonomy stays stable so the positions map and the frontend's
+    ``fieldId`` calls continue to agree."""
+    xml = """
+    <pfsense>
+      <dnsmasq><enable>on</enable><port>5353</port></dnsmasq>
+      <unbound><enable>on</enable><port>5354</port></unbound>
+    </pfsense>
+    """
+    cfg = _cfg(xml)
+    # Tag-based anchors from the frontend / positions map resolve to
+    # the aliased Pydantic fields now.
+    assert resolve_anchor_value(cfg, "field-dns-enable") == "yes"
+    assert resolve_anchor_value(cfg, "field-unbound-enable") == "yes"
+    assert resolve_anchor_value(cfg, "field-dns-port") == "5353"
+    assert resolve_anchor_value(cfg, "field-unbound-port") == "5354"
+
+
 def test_missing_anchor_returns_none():
     """Rows that don't exist in this backup (deleted later, created
     earlier, etc.) resolve to None so the blame drawer can label
