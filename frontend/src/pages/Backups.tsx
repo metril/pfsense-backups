@@ -226,9 +226,9 @@ export function BackupsPage() {
             <th className="w-6"></th>
             <th className="text-left font-normal">Instance</th>
             <SortHeader label="Started" col="started_at" current={sort} order={order} onClick={clickSort} icon={sortIcon} />
-            <SortHeader label="Duration" col="duration_seconds" current={sort} order={order} onClick={clickSort} icon={sortIcon} />
+            <SortHeader label="Duration" col="duration_seconds" current={sort} order={order} onClick={clickSort} icon={sortIcon} align="right" />
             <SortHeader label="File" col="filename" current={sort} order={order} onClick={clickSort} icon={sortIcon} />
-            <SortHeader label="Size" col="size_bytes" current={sort} order={order} onClick={clickSort} icon={sortIcon} />
+            <SortHeader label="Size" col="size_bytes" current={sort} order={order} onClick={clickSort} icon={sortIcon} align="right" />
             <th className="text-left font-normal">Tag</th>
             <th className="text-left font-normal">Status</th>
             <th className="w-20"></th>
@@ -236,7 +236,12 @@ export function BackupsPage() {
         </thead>
         <tbody>
           {rows.map((b) => (
-            <tr key={b.id} className="border-t border-border">
+            // v0.41.1: ``align-middle`` on each cell so that wherever a
+            // row's content height expands (e.g. a long filename
+            // pushing ``ContentsBadges`` onto a second line), the
+            // other columns still vertically centre against the full
+            // row height instead of hugging the top.
+            <tr key={b.id} className="border-t border-border align-middle">
               <td>
                 <input
                   type="checkbox"
@@ -254,20 +259,38 @@ export function BackupsPage() {
                   {b.instance_name}
                 </Link>
               </td>
-              <td className="py-2 text-xs">{new Date(b.started_at).toLocaleString()}</td>
-              <td className="py-2 text-xs">{b.duration_seconds.toFixed(1)}s</td>
-              <td className="py-2 font-mono text-xs">
-                {b.success ? (
-                  <Link to={`/backups/${b.id}/view`} className="hover:text-accent">
-                    {b.filename}
-                  </Link>
-                ) : (
-                  b.filename
-                )}{" "}
-                {b.compressed && <Badge tone="muted">gz</Badge>}
-                <ContentsBadges b={b} />
+              <td className="py-2 text-xs whitespace-nowrap">
+                {new Date(b.started_at).toLocaleString()}
               </td>
-              <td className="py-2">{Math.round(b.size_bytes / 1024)} KB</td>
+              <td className="py-2 text-xs text-right tabular-nums whitespace-nowrap">
+                {b.duration_seconds.toFixed(1)}s
+              </td>
+              <td className="py-2 text-xs">
+                {/* v0.41.1: wrap filename + badges in a single
+                    ``inline-flex items-center`` so every element in
+                    the cell shares the same vertical centreline.
+                    Previously the filename sat on the text baseline
+                    while badges (``inline-flex items-center`` with
+                    ``py-0.5``) sat slightly lower, giving the column
+                    a ragged "nothing lines up" feel. */}
+                <span className="inline-flex items-center gap-1 align-middle font-mono">
+                  {b.success ? (
+                    <Link
+                      to={`/backups/${b.id}/view`}
+                      className="hover:text-accent"
+                    >
+                      {b.filename}
+                    </Link>
+                  ) : (
+                    <span>{b.filename}</span>
+                  )}
+                  {b.compressed && <Badge tone="muted">gz</Badge>}
+                  <ContentsBadges b={b} />
+                </span>
+              </td>
+              <td className="py-2 text-right tabular-nums whitespace-nowrap">
+                {Math.round(b.size_bytes / 1024)} KB
+              </td>
               <td className="py-2">
                 {b.tag ? (
                   <span className="inline-flex items-center gap-1 rounded-full border border-accent/50 bg-accent/10 px-2 py-0.5 text-xs text-accent">
@@ -373,8 +396,16 @@ function ContentsBadges({ b }: { b: BackupListItem }) {
   // Include-flags are informational, not success states — keep them
   // muted so encrypted (warn tone) is the only thing that draws the
   // eye on rows where it matters.
+  //
+  // v0.41.1: drop ``flex-wrap``. A wrapped second row pushes the
+  // row's whole height up and makes adjacent cells float mid-cell,
+  // which the operator reads as "columns are misaligned." A long
+  // filename + many badges can overflow the File column; let the
+  // cell scroll horizontally via the table's outer flow (filenames
+  // on real pfSense configs are short enough that this rarely
+  // triggers).
   return (
-    <span className="ml-1 inline-flex flex-wrap items-center gap-1 align-middle">
+    <span className="inline-flex items-center gap-1 align-middle">
       {b.area ? (
         <Badge tone="muted" title={`pfSense backup area: ${b.area}`}>
           {b.area}
@@ -512,6 +543,7 @@ function SortHeader({
   order,
   onClick,
   icon,
+  align = "left",
 }: {
   label: string;
   col: BackupSort;
@@ -519,6 +551,11 @@ function SortHeader({
   order: BackupOrder;
   onClick: (c: BackupSort) => void;
   icon: (c: BackupSort) => React.ReactNode;
+  /** v0.41.1: numeric columns (Duration, Size) read better
+   *  right-aligned so digits line up row-to-row. The <button>
+   *  stays ``inline-flex`` so the sort chevron travels with the
+   *  label regardless of side. */
+  align?: "left" | "right";
 }) {
   // aria-sort belongs on the <th>, not the <button>. Correctly reflect
   // the *actual* direction (order) when this column is active; "none"
@@ -526,7 +563,13 @@ function SortHeader({
   const ariaSort =
     col !== current ? "none" : order === "asc" ? "ascending" : "descending";
   return (
-    <th className="text-left font-normal" aria-sort={ariaSort}>
+    <th
+      className={cn(
+        "font-normal",
+        align === "right" ? "text-right" : "text-left",
+      )}
+      aria-sort={ariaSort}
+    >
       <button
         type="button"
         onClick={() => onClick(col)}
