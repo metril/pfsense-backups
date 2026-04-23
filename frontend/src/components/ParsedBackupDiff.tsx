@@ -854,6 +854,16 @@ function FieldChanges({
   // v0.41.9: explicit table ARIA roles restore screen-reader table
   // navigation (JAWS / VoiceOver "next cell in column" etc.) that
   // was lost when the <table> markup became a <div> grid.
+  //
+  // v0.41.13: long mono values (``JSON.stringify``-d package entries
+  // like ``{"name":"…","internal_name":"…",…}`` have no natural
+  // break characters that CSS's default ``word-break: normal``
+  // will break at, so the text overflowed its cell and bled into
+  // the neighbouring column. ``break-all`` on each cell lets the
+  // browser wrap at any character, and ``min-w-0`` defeats the
+  // grid child's default ``min-width: auto`` so the 1fr track
+  // actually shrinks to 1fr instead of growing to its content.
+  const cellBase = "font-mono min-w-0 break-all";
   return (
     <div role="table" className="text-xs">
       <div
@@ -870,10 +880,10 @@ function FieldChanges({
           role="row"
           className="grid grid-cols-[10rem_minmax(0,1fr)_minmax(0,1fr)] gap-x-4 border-t border-border/30 py-0.5"
         >
-          <div role="cell" className="font-mono">
+          <div role="cell" className={cellBase}>
             {c.field}
           </div>
-          <div role="cell" className="font-mono text-danger">
+          <div role="cell" className={`${cellBase} text-danger`}>
             <ValueChip
               sectionKey={sectionKey}
               field={c.field}
@@ -881,7 +891,7 @@ function FieldChanges({
               side="old"
             />
           </div>
-          <div role="cell" className="font-mono text-ok">
+          <div role="cell" className={`${cellBase} text-ok`}>
             <ValueChip
               sectionKey={sectionKey}
               field={c.field}
