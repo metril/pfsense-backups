@@ -263,6 +263,33 @@ export function BlameHoverTooltip({
     };
   }, []);
 
+  // v0.41.12: when blame data disappears mid-interaction (TanStack
+  // background refetch returns an ``entry`` of ``null`` for this
+  // anchor, or the anchorId prop changes), close the tooltip and
+  // cancel any pending timers. Without this, a timer could fire
+  // after we've entered the no-handler branch, latching ``open``
+  // to ``true`` — the tooltip would then pop up instantly (no 250ms
+  // delay) the next time ``entry`` is restored.
+  const hasEntry = Boolean(entry && anchorId);
+  useEffect(() => {
+    if (hasEntry) return;
+    if (enterTimerRef.current !== null) {
+      window.clearTimeout(enterTimerRef.current);
+      enterTimerRef.current = null;
+    }
+    if (leaveTimerRef.current !== null) {
+      window.clearTimeout(leaveTimerRef.current);
+      leaveTimerRef.current = null;
+    }
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    pendingPosRef.current = null;
+    openRef.current = false;
+    setOpen(false);
+  }, [hasEntry]);
+
   const schedulePositionUpdate = useCallback(() => {
     if (rafRef.current !== null) return;
     rafRef.current = requestAnimationFrame(() => {
