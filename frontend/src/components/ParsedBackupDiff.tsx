@@ -841,40 +841,46 @@ function FieldChanges({
   changes: FieldChange[];
   sectionKey: string;
 }) {
+  // v0.41.8: switched from auto-sized <table> to a fixed CSS grid
+  // template so every modified-item card across every section
+  // resolves to identical Field/Before/After column starts. With
+  // the old <table>, each card's columns were sized by its own
+  // content, so wide IP values pushed Before/After left on one
+  // card and short values kept them right on the next — visually
+  // impossible to scan down the diff. ``minmax(0, 1fr)`` disables
+  // the default ``min-width: auto`` so long mono tokens wrap inside
+  // their cell rather than inflating the track.
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-xs">
-        <thead>
-          <tr className="text-muted-fg">
-            <th className="py-0.5 text-left font-normal">Field</th>
-            <th className="py-0.5 text-left font-normal">Before</th>
-            <th className="py-0.5 text-left font-normal">After</th>
-          </tr>
-        </thead>
-        <tbody>
-          {changes.map((c) => (
-            <tr key={c.field} className="border-t border-border/30">
-              <td className="py-0.5 pr-2 font-mono">{c.field}</td>
-              <td className="py-0.5 pr-2 font-mono text-danger">
-                <ValueChip
-                  sectionKey={sectionKey}
-                  field={c.field}
-                  value={c.before}
-                  side="old"
-                />
-              </td>
-              <td className="py-0.5 font-mono text-ok">
-                <ValueChip
-                  sectionKey={sectionKey}
-                  field={c.field}
-                  value={c.after}
-                  side="new"
-                />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div className="text-xs">
+      <div className="grid grid-cols-[10rem_minmax(0,1fr)_minmax(0,1fr)] gap-x-4 py-0.5 text-muted-fg">
+        <div>Field</div>
+        <div>Before</div>
+        <div>After</div>
+      </div>
+      {changes.map((c) => (
+        <div
+          key={c.field}
+          className="grid grid-cols-[10rem_minmax(0,1fr)_minmax(0,1fr)] gap-x-4 border-t border-border/30 py-0.5"
+        >
+          <div className="font-mono">{c.field}</div>
+          <div className="font-mono text-danger">
+            <ValueChip
+              sectionKey={sectionKey}
+              field={c.field}
+              value={c.before}
+              side="old"
+            />
+          </div>
+          <div className="font-mono text-ok">
+            <ValueChip
+              sectionKey={sectionKey}
+              field={c.field}
+              value={c.after}
+              side="new"
+            />
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
