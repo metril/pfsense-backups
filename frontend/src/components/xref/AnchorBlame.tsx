@@ -234,10 +234,14 @@ export function BlameHoverTooltip({
   // cloneElement returns new props → every cloned child
   // re-renders. On a <dl> with hundreds of rows, that's hundreds
   // of re-renders per mousemove. Refs sidestep the whole thing.
+  //
+  // v0.41.10: the ref is kept in sync INLINE at every ``setOpen``
+  // call site — we used to mirror it in a ``useEffect(…, [open])``
+  // but effects run after paint, leaving a ~16ms gap where
+  // ``openRef.current`` is stale. That caused ``onMouseEnter`` to
+  // fall into the 250ms hover-delay branch on fast sibling
+  // transitions right after the tooltip opened.
   const openRef = useRef(open);
-  useEffect(() => {
-    openRef.current = open;
-  }, [open]);
 
   // Teardown on unmount — clear any pending timers / frames so the
   // state setters don't fire after the component is gone (React
@@ -314,6 +318,7 @@ export function BlameHoverTooltip({
         setPos(
           clampToViewport(p.x, p.y, window.innerWidth, window.innerHeight),
         );
+        openRef.current = true;
         setOpen(true);
       }, HOVER_DELAY_MS);
     },
@@ -347,6 +352,7 @@ export function BlameHoverTooltip({
     leaveTimerRef.current = window.setTimeout(() => {
       leaveTimerRef.current = null;
       pendingPosRef.current = null;
+      openRef.current = false;
       setOpen(false);
     }, 50);
   }, [cancelLeave]);
@@ -367,12 +373,16 @@ export function BlameHoverTooltip({
           window.innerHeight,
         ),
       );
+      openRef.current = true;
       setOpen(true);
     },
     [cancelLeave],
   );
 
-  const onBlur = useCallback(() => setOpen(false), []);
+  const onBlur = useCallback(() => {
+    openRef.current = false;
+    setOpen(false);
+  }, []);
 
   // Children may be one element (a <tr>) or several (a <dt> + <dd>
   // pair in a Dl — its parent is a ``display: grid`` <dl> that
