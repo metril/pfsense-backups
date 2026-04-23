@@ -380,6 +380,16 @@ export function BlameHoverTooltip({
   );
 
   const onBlur = useCallback(() => {
+    // Cancel any pending hover-delay timer so a focus-then-blur
+    // sequence under 250ms doesn't let the enter timer fire later
+    // and re-open the tooltip on an element the user has left.
+    // (onMouseLeave already does this for its own path; onBlur
+    // needs the same guard because a tab-navigating user can
+    // hover AND focus the same element, triggering both timers.)
+    if (enterTimerRef.current !== null) {
+      window.clearTimeout(enterTimerRef.current);
+      enterTimerRef.current = null;
+    }
     openRef.current = false;
     setOpen(false);
   }, []);
