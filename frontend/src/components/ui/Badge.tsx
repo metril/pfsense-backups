@@ -6,15 +6,22 @@ export function Badge({
   children,
   className,
   title,
+  ariaHidden,
 }: {
   tone?: "default" | "success" | "danger" | "muted" | "warn";
   children: ReactNode;
   className?: string;
   title?: string;
+  /** When true, sets ``aria-hidden`` on the rendered span AND
+   *  suppresses the native title tooltip. Used by layout-reserving
+   *  placeholders (``visibility: hidden``) that participate in
+   *  layout but must not be announced by screen readers. */
+  ariaHidden?: boolean;
 }) {
   return (
     <span
-      title={title}
+      title={ariaHidden ? undefined : title}
+      aria-hidden={ariaHidden || undefined}
       className={cn(
         "inline-flex items-center rounded px-2 py-0.5 text-xs font-medium",
         tone === "success" && "bg-ok/20 text-ok",

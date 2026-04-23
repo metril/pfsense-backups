@@ -392,6 +392,15 @@ function ContentsBadges({ b }: { b: BackupListItem }) {
   // width (string label, not a boolean flag) so it stays
   // conditionally rendered, moved to the TRAILING position so it
   // doesn't push the fixed slots right.
+  // v0.41.9: ``visibility: hidden`` (from the ``invisible`` class)
+  // preserves layout but does NOT remove the element from the
+  // accessibility tree. Without ``aria-hidden``, screen readers
+  // would still announce every placeholder's ``title`` text (e.g.
+  // "Includes SSH host keys") on rows that DON'T include SSH keys
+  // — exactly the opposite of what the layout claims. ``ariaHidden``
+  // on the placeholders also suppresses the native browser title
+  // tooltip, so a sighted mouse user can't accidentally hover up an
+  // incorrect hint on a hidden chip.
   const hidden = (present: boolean) => (present ? "" : "invisible");
   return (
     <span className="inline-flex items-center gap-1 align-middle whitespace-nowrap">
@@ -399,6 +408,7 @@ function ContentsBadges({ b }: { b: BackupListItem }) {
         tone="muted"
         className={hidden(b.included_packages)}
         title="Includes package information"
+        ariaHidden={!b.included_packages}
       >
         pkgs
       </Badge>
@@ -406,6 +416,7 @@ function ContentsBadges({ b }: { b: BackupListItem }) {
         tone="muted"
         className={hidden(b.included_ssh)}
         title="Includes SSH host keys"
+        ariaHidden={!b.included_ssh}
       >
         ssh
       </Badge>
@@ -413,6 +424,7 @@ function ContentsBadges({ b }: { b: BackupListItem }) {
         tone="warn"
         className={hidden(b.encrypted)}
         title="Encrypted at rest — view decrypts in memory"
+        ariaHidden={!b.encrypted}
       >
         <span className="inline-flex items-center gap-1">
           <Lock className="h-3 w-3" />
@@ -423,6 +435,7 @@ function ContentsBadges({ b }: { b: BackupListItem }) {
         tone="muted"
         className={hidden(b.compressed)}
         title="gzip-compressed at rest"
+        ariaHidden={!b.compressed}
       >
         gz
       </Badge>
@@ -430,6 +443,7 @@ function ContentsBadges({ b }: { b: BackupListItem }) {
         tone="muted"
         className={hidden(b.included_rrd)}
         title="Includes RRD graph data"
+        ariaHidden={!b.included_rrd}
       >
         RRD
       </Badge>

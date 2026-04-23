@@ -850,20 +850,30 @@ function FieldChanges({
   // impossible to scan down the diff. ``minmax(0, 1fr)`` disables
   // the default ``min-width: auto`` so long mono tokens wrap inside
   // their cell rather than inflating the track.
+  //
+  // v0.41.9: explicit table ARIA roles restore screen-reader table
+  // navigation (JAWS / VoiceOver "next cell in column" etc.) that
+  // was lost when the <table> markup became a <div> grid.
   return (
-    <div className="text-xs">
-      <div className="grid grid-cols-[10rem_minmax(0,1fr)_minmax(0,1fr)] gap-x-4 py-0.5 text-muted-fg">
-        <div>Field</div>
-        <div>Before</div>
-        <div>After</div>
+    <div role="table" className="text-xs">
+      <div
+        role="row"
+        className="grid grid-cols-[10rem_minmax(0,1fr)_minmax(0,1fr)] gap-x-4 py-0.5 text-muted-fg"
+      >
+        <div role="columnheader">Field</div>
+        <div role="columnheader">Before</div>
+        <div role="columnheader">After</div>
       </div>
       {changes.map((c) => (
         <div
           key={c.field}
+          role="row"
           className="grid grid-cols-[10rem_minmax(0,1fr)_minmax(0,1fr)] gap-x-4 border-t border-border/30 py-0.5"
         >
-          <div className="font-mono">{c.field}</div>
-          <div className="font-mono text-danger">
+          <div role="cell" className="font-mono">
+            {c.field}
+          </div>
+          <div role="cell" className="font-mono text-danger">
             <ValueChip
               sectionKey={sectionKey}
               field={c.field}
@@ -871,7 +881,7 @@ function FieldChanges({
               side="old"
             />
           </div>
-          <div className="font-mono text-ok">
+          <div role="cell" className="font-mono text-ok">
             <ValueChip
               sectionKey={sectionKey}
               field={c.field}

@@ -225,6 +225,19 @@ export function BlameHoverTooltip({
   const leaveTimerRef = useRef<number | null>(null);
   const rafRef = useRef<number | null>(null);
   const pendingPosRef = useRef<{ x: number; y: number } | null>(null);
+  // v0.41.9: ``openRef`` shadows ``open`` so the mouse handlers
+  // below can read the current open state without closing over
+  // ``open`` as a dep. Without this, ``onMouseEnter`` / ``onMouseMove``
+  // would need ``[open]`` in their useCallback deps, which would
+  // recreate them every time ``setOpen`` fires — which happens on
+  // every cursor-follow position update. New handler identities →
+  // cloneElement returns new props → every cloned child
+  // re-renders. On a <dl> with hundreds of rows, that's hundreds
+  // of re-renders per mousemove. Refs sidestep the whole thing.
+  const openRef = useRef(open);
+  useEffect(() => {
+    openRef.current = open;
+  }, [open]);
 
   // Teardown on unmount — clear any pending timers / frames so the
   // state setters don't fire after the component is gone (React
@@ -258,79 +271,64 @@ export function BlameHoverTooltip({
     });
   }, []);
 
-  // Children may be one element (a <tr>) or several (a <dt> + <dd>
-  // pair in a Dl — its parent is a ``display: grid`` <dl> that
-  // doesn't allow a wrapper <div>, so the tooltip needs to clone
-  // each grid item individually and attach the same mouse handlers
-  // to all of them). Mouse entering any of them opens the tooltip;
-  // leaving the whole group closes it.
-  //
-  // Because ``onMouseEnter`` / ``onMouseLeave`` are non-bubbling
-  // React synthetic events, moving between sibling handler-bearing
-  // elements WOULD cause a close-then-reopen flicker. We coalesce
-  // that with an ``exitTimerRef`` debounce: ``mouseLeave`` on one
-  // element schedules a close, and a ``mouseEnter`` on the next
-  // sibling (or on the same element) cancels it.
-  const childArr = Children.toArray(children);
-
-  // No blame entry → render children untouched. Avoids every row
-  // carrying dead event handlers.
-  if (!entry || !anchorId) return <>{childArr}</>;
-
-  type ChildProps = {
-    onMouseEnter?: (e: ReactMouseEvent) => void;
-    onMouseMove?: (e: ReactMouseEvent) => void;
-    onMouseLeave?: (e: ReactMouseEvent) => void;
-    onFocus?: (e: ReactFocusEvent) => void;
-    onBlur?: (e: ReactFocusEvent) => void;
-  };
-
-  const cancelLeave = () => {
+  // All six handlers are useCallback'd with stable deps so the
+  // ``cloneElement`` pass below returns identical prop identities
+  // render-to-render. That lets React bail out of re-rendering the
+  // cloned children (e.g. hundreds of <dt>s in a large Dl) as the
+  // cursor moves. The handlers read the current open state via
+  // ``openRef`` instead of closing over ``open``.
+  const cancelLeave = useCallback(() => {
     if (leaveTimerRef.current !== null) {
       window.clearTimeout(leaveTimerRef.current);
       leaveTimerRef.current = null;
     }
-  };
+  }, []);
 
-  const onMouseEnter = (e: ReactMouseEvent) => {
-    // Moving from one handler-bearing sibling into another (e.g.
-    // <dt> → <dd>) fires mouseleave on the first AND mouseenter on
-    // the second. Cancel any pending close so the tooltip doesn't
-    // flicker as the cursor crosses the sibling boundary.
-    cancelLeave();
-    pendingPosRef.current = { x: e.clientX, y: e.clientY };
-    if (open) {
-      // Already open: just update position instead of delaying.
-      setPos(
-        clampToViewport(
-          e.clientX,
-          e.clientY,
-          window.innerWidth,
-          window.innerHeight,
-        ),
-      );
-      return;
-    }
-    if (enterTimerRef.current !== null) {
-      window.clearTimeout(enterTimerRef.current);
-    }
-    enterTimerRef.current = window.setTimeout(() => {
-      enterTimerRef.current = null;
-      const p = pendingPosRef.current;
-      if (!p) return;
-      setPos(
-        clampToViewport(p.x, p.y, window.innerWidth, window.innerHeight),
-      );
-      setOpen(true);
-    }, HOVER_DELAY_MS);
-  };
+  const onMouseEnter = useCallback(
+    (e: ReactMouseEvent) => {
+      // Moving from one handler-bearing sibling into another (e.g.
+      // <dt> → <dd>) fires mouseleave on the first AND mouseenter
+      // on the second. Cancel any pending close so the tooltip
+      // doesn't flicker as the cursor crosses the boundary.
+      cancelLeave();
+      pendingPosRef.current = { x: e.clientX, y: e.clientY };
+      if (openRef.current) {
+        // Already open: just update position instead of delaying.
+        setPos(
+          clampToViewport(
+            e.clientX,
+            e.clientY,
+            window.innerWidth,
+            window.innerHeight,
+          ),
+        );
+        return;
+      }
+      if (enterTimerRef.current !== null) {
+        window.clearTimeout(enterTimerRef.current);
+      }
+      enterTimerRef.current = window.setTimeout(() => {
+        enterTimerRef.current = null;
+        const p = pendingPosRef.current;
+        if (!p) return;
+        setPos(
+          clampToViewport(p.x, p.y, window.innerWidth, window.innerHeight),
+        );
+        setOpen(true);
+      }, HOVER_DELAY_MS);
+    },
+    [cancelLeave],
+  );
 
-  const onMouseMove = (e: ReactMouseEvent) => {
-    pendingPosRef.current = { x: e.clientX, y: e.clientY };
-    if (open) schedulePositionUpdate();
-  };
+  const onMouseMove = useCallback(
+    (e: ReactMouseEvent) => {
+      pendingPosRef.current = { x: e.clientX, y: e.clientY };
+      if (openRef.current) schedulePositionUpdate();
+    },
+    [schedulePositionUpdate],
+  );
 
-  const onMouseLeave = () => {
+  const onMouseLeave = useCallback(() => {
     // Short grace period before closing — if the cursor is crossing
     // into a sibling of the same group (e.g. from <dt> to <dd>) the
     // sibling's ``onMouseEnter`` fires almost immediately and will
@@ -351,21 +349,57 @@ export function BlameHoverTooltip({
       pendingPosRef.current = null;
       setOpen(false);
     }, 50);
-  };
+  }, [cancelLeave]);
 
-  const onFocus = (e: ReactFocusEvent) => {
-    // Keyboard users don't have a cursor; anchor the tooltip to the
-    // focused element's top-right corner so it still appears near
-    // what they're reading. ``currentTarget`` is the cloned child.
-    cancelLeave();
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    setPos(
-      clampToViewport(rect.right, rect.top, window.innerWidth, window.innerHeight),
-    );
-    setOpen(true);
-  };
+  const onFocus = useCallback(
+    (e: ReactFocusEvent) => {
+      // Keyboard users don't have a cursor; anchor the tooltip to
+      // the focused element's top-right corner so it still appears
+      // near what they're reading. ``currentTarget`` is the cloned
+      // child.
+      cancelLeave();
+      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      setPos(
+        clampToViewport(
+          rect.right,
+          rect.top,
+          window.innerWidth,
+          window.innerHeight,
+        ),
+      );
+      setOpen(true);
+    },
+    [cancelLeave],
+  );
 
-  const onBlur = () => setOpen(false);
+  const onBlur = useCallback(() => setOpen(false), []);
+
+  // Children may be one element (a <tr>) or several (a <dt> + <dd>
+  // pair in a Dl — its parent is a ``display: grid`` <dl> that
+  // doesn't allow a wrapper <div>, so the tooltip needs to clone
+  // each grid item individually and attach the same mouse handlers
+  // to all of them). Mouse entering any of them opens the tooltip;
+  // leaving the whole group closes it.
+  //
+  // Because ``onMouseEnter`` / ``onMouseLeave`` are non-bubbling
+  // React synthetic events, moving between sibling handler-bearing
+  // elements WOULD cause a close-then-reopen flicker. We coalesce
+  // that with a ``leaveTimerRef`` debounce: ``mouseLeave`` on one
+  // element schedules a close, and a ``mouseEnter`` on the next
+  // sibling (or on the same element) cancels it.
+  const childArr = Children.toArray(children);
+
+  // No blame entry → render children untouched. Avoids every row
+  // carrying dead event handlers.
+  if (!entry || !anchorId) return <>{childArr}</>;
+
+  type ChildProps = {
+    onMouseEnter?: (e: ReactMouseEvent) => void;
+    onMouseMove?: (e: ReactMouseEvent) => void;
+    onMouseLeave?: (e: ReactMouseEvent) => void;
+    onFocus?: (e: ReactFocusEvent) => void;
+    onBlur?: (e: ReactFocusEvent) => void;
+  };
 
   // Clone each valid element child, adding the shared handler set.
   // Non-element children (strings, fragments, null) pass through
