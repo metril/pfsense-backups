@@ -11,6 +11,7 @@ import { FilterHiddenAnchorBanner } from "@/components/ui/FilterHiddenAnchorBann
 import { Xref } from "@/components/ui/Xref";
 import { CardGroupProvider } from "@/components/CardGroupContext";
 import { XrefProvider, type XrefSide } from "@/components/xref/XrefContext";
+import { Dl, type DlRow } from "@/components/view/primitives";
 import { DeepLinkBridge } from "@/components/xref/DeepLinkBridge";
 import { useParsedBackup, useParsedDiffPair } from "@/api/queries";
 import type { ParsedConfig } from "@/api/parsedTypes";
@@ -652,41 +653,26 @@ function DiffSectionCard({
   group: SectionGroup;
   section: SectionDiff;
 }) {
-  // Memoized so Card doesn't see a fresh JSX element on every parent
-  // render. Deps are just the four delta counts — stable across
-  // unrelated state updates (tab switches, collapse toggles elsewhere).
-  const headerExtra = useMemo(
-    () => (
-      <>
-        {section.added.length > 0 && (
-          <Badge tone="success">+{section.added.length}</Badge>
-        )}
-        {section.removed.length > 0 && (
-          <Badge tone="danger">−{section.removed.length}</Badge>
-        )}
-        {section.modified.length > 0 && (
-          <Badge tone="warn">~{section.modified.length}</Badge>
-        )}
-        {section.reordered.length > 0 && (
-          <Badge tone="muted">↕{section.reordered.length}</Badge>
-        )}
-      </>
-    ),
-    [
-      section.added.length,
-      section.removed.length,
-      section.modified.length,
-      section.reordered.length,
-    ],
-  );
+  // Delta counts render as a muted subtitle at the top of the card
+  // body instead of badge chips in the clickable header. That keeps
+  // the section silhouette (`[▾] title [count]`) identical to every
+  // structured-view Card.
+  const summaryParts: string[] = [];
+  if (section.added.length) summaryParts.push(`${section.added.length} added`);
+  if (section.removed.length)
+    summaryParts.push(`${section.removed.length} removed`);
+  if (section.modified.length)
+    summaryParts.push(`${section.modified.length} modified`);
+  if (section.reordered.length)
+    summaryParts.push(`${section.reordered.length} reordered`);
   return (
-    <Card
-      id={id}
-      title={label}
-      group={group}
-      headerExtra={headerExtra}
-    >
+    <Card id={id} title={label} group={group}>
       <div className="space-y-3 text-sm">
+        {summaryParts.length > 0 && (
+          <div className="text-xs text-muted-fg">
+            {summaryParts.join(" · ")}
+          </div>
+        )}
         {section.added.length > 0 && (
           <DiffGroup
             title="Added"
@@ -766,12 +752,7 @@ function DiffGroup({
         {items.map((it) => (
           <li
             key={it.id}
-            className={cn(
-              "rounded border p-2",
-              tone === "success"
-                ? "border-ok/30 bg-ok/5"
-                : "border-danger/30 bg-danger/5",
-            )}
+            className="rounded border border-border/70 bg-muted/20 p-2"
           >
             <div className="font-medium">{it.label}</div>
             <ItemJson item={it.item} sectionKey={sectionKey} side={side} />
@@ -798,7 +779,7 @@ function ModifiedGroup({
         {rows.map((r) => (
           <li
             key={r.key}
-            className="rounded border border-warn/30 bg-warn/5 p-2"
+            className="rounded border border-border/70 bg-muted/20 p-2"
           >
             <div className="mb-1 font-medium">{r.label}</div>
             <FieldChanges changes={r.changes} sectionKey={sectionKey} />
@@ -821,8 +802,8 @@ function ReorderedGroup({ rows }: { rows: ReorderEvent[] }) {
       </p>
       <ul className="space-y-1">
         {rows.map((r) => (
-          <li key={r.key} className="rounded border border-info/30 bg-info/5 p-1.5 font-mono text-xs">
-            <span className="text-info">
+          <li key={r.key} className="rounded border border-border/70 bg-muted/20 p-1.5 font-mono text-xs">
+            <span className="text-muted-fg">
               #{r.old_index + 1} → #{r.new_index + 1}
             </span>
             &nbsp;&nbsp;
@@ -868,7 +849,7 @@ function FieldChanges({
     <div role="table" className="text-xs">
       <div
         role="row"
-        className="grid grid-cols-[10rem_minmax(0,1fr)_minmax(0,1fr)] gap-x-4 py-0.5 text-muted-fg"
+        className="grid grid-cols-[10rem_minmax(0,1fr)_minmax(0,1fr)] gap-x-4 py-0.5 uppercase text-muted-fg"
       >
         <div role="columnheader">Field</div>
         <div role="columnheader">Before</div>
@@ -927,9 +908,13 @@ function ItemJson({
   sectionKey: string;
   side: XrefSide;
 }) {
-  // Compact inline summary of the added/removed item. Show a small set
-  // of the most informative fields; the full object is available via
-  // the raw XML tab if the operator needs exhaustive detail.
+  // v0.41.14: was a bespoke <table> with its own typography. Swapped
+  // for the shared ``Dl`` primitive so added/removed item fields
+  // render with identical label/value spacing to the structured view
+  // (Interfaces, OpenVPN, …). The side-tone color stays on the
+  // value only — the structured view's Dl uses ``text-muted-fg`` on
+  // labels, which we preserve so the side's red/green doesn't
+  // shout across the whole row.
   const entries = Object.entries(item)
     .filter(([k, v]) => {
       if (k === "key" || k === "label") return false;
@@ -939,25 +924,11 @@ function ItemJson({
     })
     .slice(0, 12);
   if (entries.length === 0) return null;
-  return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-xs">
-        <tbody>
-          {entries.map(([k, v]) => (
-            <tr key={k} className="border-t border-border/30">
-              <td className="py-0.5 pr-2 font-mono text-muted-fg">{k}</td>
-              <td className="py-0.5 font-mono">
-                <ValueChip
-                  sectionKey={sectionKey}
-                  field={k}
-                  value={v}
-                  side={side}
-                />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
+  const rows: DlRow[] = entries.map(([k, v]) => [
+    k,
+    <span className={side === "new" ? "text-ok" : "text-danger"}>
+      <ValueChip sectionKey={sectionKey} field={k} value={v} side={side} />
+    </span>,
+  ]);
+  return <Dl items={rows} />;
 }

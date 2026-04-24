@@ -471,7 +471,12 @@ export function BackupViewPage() {
           <Button
             variant="secondary"
             size="sm"
-            onClick={() => previous && nav(`/backups/diff/${previous.id}/${detail.id}`)}
+            onClick={() =>
+              previous &&
+              nav(
+                `/backups/diff/${previous.id}/${detail.id}?from=${detail.id}`,
+              )
+            }
             disabled={!previous}
             title={
               previous

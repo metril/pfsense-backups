@@ -264,7 +264,9 @@ export function InstanceHistoryPage() {
                 variant="secondary"
                 size="sm"
                 onClick={() =>
-                  nav(`/backups/diff/${previous.id}/${focused.id}`)
+                  nav(
+                    `/backups/diff/${previous.id}/${focused.id}?from=${focused.id}`,
+                  )
                 }
               >
                 <Split className="h-4 w-4" />
@@ -400,7 +402,9 @@ export function InstanceHistoryPage() {
                   // backend used for changes_since_first.
                   const first = backups[0];
                   if (first && first.id !== focused.id) {
-                    nav(`/backups/diff/${first.id}/${focused.id}`);
+                    nav(
+                      `/backups/diff/${first.id}/${focused.id}?from=${focused.id}`,
+                    );
                   }
                 }}
                 className="inline-flex items-center gap-1.5 rounded-md border border-border bg-bg/50 px-2 py-0.5 text-xs text-muted-fg transition-colors hover:bg-muted/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
