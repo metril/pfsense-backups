@@ -1,4 +1,4 @@
-import { useCallback, useMemo, type ReactNode } from "react";
+import { Fragment, useCallback, useMemo, type ReactNode } from "react";
 import { Lock } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { Badge } from "@/components/ui/Badge";
@@ -886,7 +886,7 @@ function FieldChanges({
   );
 }
 
-function formatValue(v: unknown): React.ReactNode {
+function formatValue(v: unknown): ReactNode {
   if (v === null || v === undefined) return <span className="text-muted-fg">—</span>;
   if (v === "***redacted***")
     return (
@@ -894,9 +894,48 @@ function formatValue(v: unknown): React.ReactNode {
         <Lock aria-hidden="true" className="h-3 w-3" /> redacted
       </span>
     );
-  if (Array.isArray(v)) return JSON.stringify(v);
-  if (typeof v === "object") return JSON.stringify(v);
+  if (Array.isArray(v)) return formatArray(v);
+  if (typeof v === "object") return formatObject(v as Record<string, unknown>);
   return String(v);
+}
+
+// v0.41.15: previously ``formatValue`` called ``JSON.stringify`` for
+// objects + arrays, which dumped raw ``{"name":"…","descr":"…",…}``
+// strings into the diff's Before/After cells — the opposite of the
+// "structured view" look. Now we render the same shape the
+// structured view does: objects become a 2-col label/value grid
+// (Dl-shape), arrays become a vertical list, and each nested value
+// recurses back into ``formatValue`` so deeply-nested content still
+// reads as structured data.
+function formatObject(o: Record<string, unknown>): ReactNode {
+  const entries = Object.entries(o).filter(
+    ([, val]) =>
+      val !== null && val !== undefined && val !== "" && val !== false,
+  );
+  if (entries.length === 0) return <span className="text-muted-fg">—</span>;
+  return (
+    <div className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-0.5">
+      {entries.map(([k, val]) => (
+        <Fragment key={k}>
+          <span className="text-muted-fg">{k}</span>
+          <span className="min-w-0 break-all">{formatValue(val)}</span>
+        </Fragment>
+      ))}
+    </div>
+  );
+}
+
+function formatArray(a: unknown[]): ReactNode {
+  if (a.length === 0) return <span className="text-muted-fg">—</span>;
+  return (
+    <ul className="space-y-0.5">
+      {a.map((v, i) => (
+        <li key={i} className="min-w-0 break-all">
+          {formatValue(v)}
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 function ItemJson({
