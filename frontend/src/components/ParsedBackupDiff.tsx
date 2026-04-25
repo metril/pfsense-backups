@@ -861,33 +861,92 @@ function FieldChanges({
         <div role="columnheader">Before</div>
         <div role="columnheader">After</div>
       </div>
-      {changes.map((c) => (
-        <div
-          key={c.field}
-          role="row"
-          className="grid grid-cols-[10rem_minmax(0,1fr)_minmax(0,1fr)] gap-x-4 border-t border-border/30 py-0.5"
-        >
-          <div role="cell" className={cellBase}>
-            {c.field}
+      {changes.map((c) => {
+        // v0.41.20: when both sides are arrays (e.g. DHCP
+        // ``static_mappings``: 30+ devices each with
+        // ``{mac, ipaddr, descr, …}``) the BEFORE and AFTER cells
+        // used to render their lists independently — entries with
+        // different field counts drifted out of row alignment so
+        // device[0] BEFORE didn't sit next to device[0] AFTER, and
+        // the gap grew with every subsequent index. Detect the
+        // double-array case and render it as paired rows: index
+        // ``i`` of BEFORE and AFTER live in the same outer grid
+        // row (CSS Grid sizes the row to the taller cell) with a
+        // ``divide-y`` line between indices.
+        if (Array.isArray(c.before) && Array.isArray(c.after)) {
+          const before = c.before as unknown[];
+          const after = c.after as unknown[];
+          const n = Math.max(before.length, after.length);
+          return (
+            <div
+              key={c.field}
+              role="row"
+              className="grid grid-cols-[10rem_minmax(0,1fr)_minmax(0,1fr)] gap-x-4 border-t border-border/30 py-0.5"
+            >
+              <div role="cell" className={cellBase}>
+                {c.field}
+              </div>
+              <div className="col-span-2 grid grid-cols-2 gap-x-4 divide-y divide-border/30">
+                {Array.from({ length: n }).map((_, i) => (
+                  <Fragment key={i}>
+                    <div className={`${cellBase} py-1 text-danger`}>
+                      {i < before.length ? (
+                        <ValueChip
+                          sectionKey={sectionKey}
+                          field={c.field}
+                          value={before[i]}
+                          side="old"
+                        />
+                      ) : (
+                        <span className="text-muted-fg">—</span>
+                      )}
+                    </div>
+                    <div className={`${cellBase} py-1 text-ok`}>
+                      {i < after.length ? (
+                        <ValueChip
+                          sectionKey={sectionKey}
+                          field={c.field}
+                          value={after[i]}
+                          side="new"
+                        />
+                      ) : (
+                        <span className="text-muted-fg">—</span>
+                      )}
+                    </div>
+                  </Fragment>
+                ))}
+              </div>
+            </div>
+          );
+        }
+        return (
+          <div
+            key={c.field}
+            role="row"
+            className="grid grid-cols-[10rem_minmax(0,1fr)_minmax(0,1fr)] gap-x-4 border-t border-border/30 py-0.5"
+          >
+            <div role="cell" className={cellBase}>
+              {c.field}
+            </div>
+            <div role="cell" className={`${cellBase} text-danger`}>
+              <ValueChip
+                sectionKey={sectionKey}
+                field={c.field}
+                value={c.before}
+                side="old"
+              />
+            </div>
+            <div role="cell" className={`${cellBase} text-ok`}>
+              <ValueChip
+                sectionKey={sectionKey}
+                field={c.field}
+                value={c.after}
+                side="new"
+              />
+            </div>
           </div>
-          <div role="cell" className={`${cellBase} text-danger`}>
-            <ValueChip
-              sectionKey={sectionKey}
-              field={c.field}
-              value={c.before}
-              side="old"
-            />
-          </div>
-          <div role="cell" className={`${cellBase} text-ok`}>
-            <ValueChip
-              sectionKey={sectionKey}
-              field={c.field}
-              value={c.after}
-              side="new"
-            />
-          </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
