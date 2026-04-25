@@ -85,7 +85,15 @@ export function Layout() {
             backups are paused until it reconnects.
           </div>
         )}
-        <div className="grid flex-1 grid-cols-[1fr_320px] overflow-hidden">
+        {/* v0.41.17: the 320px EventFeed track was reserved in the
+            grid template unconditionally, so even on narrow viewports
+            (where EventFeed itself was ``hidden lg:flex``) the track
+            still consumed 320px of horizontal space — squeezing the
+            diff view's FIELD/BEFORE/AFTER columns down to char-by-char
+            wrapping. The template is now 1-col at ``<lg`` and only
+            promotes to the 2-col ``1fr 320px`` layout at ``lg`` and
+            up, matching EventFeed's own visibility breakpoint. */}
+        <div className="grid flex-1 grid-cols-[1fr] overflow-hidden lg:grid-cols-[1fr_320px]">
           <div className="overflow-y-auto px-8 py-6">
             <Outlet />
           </div>

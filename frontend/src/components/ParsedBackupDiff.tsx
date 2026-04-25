@@ -840,11 +840,17 @@ function FieldChanges({
   // like ``{"name":"…","internal_name":"…",…}`` have no natural
   // break characters that CSS's default ``word-break: normal``
   // will break at, so the text overflowed its cell and bled into
-  // the neighbouring column. ``break-all`` on each cell lets the
-  // browser wrap at any character, and ``min-w-0`` defeats the
-  // grid child's default ``min-width: auto`` so the 1fr track
-  // actually shrinks to 1fr instead of growing to its content.
-  const cellBase = "font-mono min-w-0 break-all";
+  // the neighbouring column. ``min-w-0`` defeats the grid child's
+  // default ``min-width: auto`` so the 1fr track actually shrinks
+  // to 1fr instead of growing to its content.
+  //
+  // v0.41.17: switched from ``break-all`` (``word-break: break-all``,
+  // which splits prose mid-word) to ``overflow-wrap: anywhere``.
+  // Same "break when nothing else saves us" safety for unbreakable
+  // mono tokens, but prose values (``description: (system): [pfSense-pkg-WireGuard]
+  // Enabled all WireGuard gateways.``) now prefer space-based
+  // breaks and stay readable.
+  const cellBase = "font-mono min-w-0 [overflow-wrap:anywhere]";
   return (
     <div role="table" className="text-xs">
       <div
@@ -918,7 +924,7 @@ function formatObject(o: Record<string, unknown>): ReactNode {
       {entries.map(([k, val]) => (
         <Fragment key={k}>
           <span className="text-muted-fg">{k}</span>
-          <span className="min-w-0 break-all">{formatValue(val)}</span>
+          <span className="min-w-0 [overflow-wrap:anywhere]">{formatValue(val)}</span>
         </Fragment>
       ))}
     </div>
@@ -930,7 +936,7 @@ function formatArray(a: unknown[]): ReactNode {
   return (
     <ul className="space-y-0.5">
       {a.map((v, i) => (
-        <li key={i} className="min-w-0 break-all">
+        <li key={i} className="min-w-0 [overflow-wrap:anywhere]">
           {formatValue(v)}
         </li>
       ))}
