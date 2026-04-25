@@ -228,11 +228,17 @@ export function InstanceHistoryPage() {
       {/* Header */}
       <div className="flex items-start justify-between gap-4 border-b border-border pb-3">
         <div className="min-w-0">
+          {/* v0.41.18: previously pointed to ``/backups`` with a
+              "Back to backups" label, but the natural entry into
+              this page is ``/instances/:id`` → "Scrub through
+              history", so the back link now returns the operator
+              to that instance's detail page. */}
           <Link
-            to="/backups"
+            to={`/instances/${id}`}
             className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2 py-1 text-sm font-medium text-fg transition-colors hover:border-accent hover:bg-accent/10 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           >
-            <ArrowLeft className="h-4 w-4 text-accent" /> Back to backups
+            <ArrowLeft className="h-4 w-4 text-accent" /> Back to{" "}
+            {instance?.name ?? `instance ${id}`}
           </Link>
           <h1 className="mt-1 text-xl font-semibold">
             {instance?.name ?? `Instance ${id}`}

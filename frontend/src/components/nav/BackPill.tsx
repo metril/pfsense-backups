@@ -44,10 +44,15 @@ export function BackPill({
   title?: string;
 }) {
   return (
+    // v0.41.18: ``position="left"`` previously pinned to ``left-4``
+    // which put the pill directly on top of the 14rem-wide sidebar's
+    // Sign-out / user-email row at the bottom of Layout.tsx. Bumped
+    // to ``left-60`` (15rem = sidebar width 14rem + 1rem gap) so the
+    // pill lives in the main content column where it belongs.
     <div
       className={cn(
         "pointer-events-none fixed bottom-4 z-40 flex",
-        position === "right" ? "right-4 justify-end" : "left-4 justify-start",
+        position === "right" ? "right-4 justify-end" : "left-60 justify-start",
       )}
     >
       <button

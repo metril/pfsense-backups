@@ -68,7 +68,7 @@ export function BackupDiffPage() {
               to="/backups"
               className="inline-flex items-center gap-1 text-sm text-muted-fg hover:text-accent"
             >
-              <ArrowLeft className="h-4 w-4" /> back to backups
+              <ArrowLeft className="h-4 w-4" /> Back to backups
             </Link>
             {fromId !== null && (
               <Link

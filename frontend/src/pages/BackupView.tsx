@@ -405,8 +405,16 @@ export function BackupViewPage() {
               · {new Date(detail.started_at).toLocaleString()}
             </span>
           </h1>
+          {/* v0.41.18: filename span has ``truncate`` (white-space:nowrap
+              + text-overflow:ellipsis) but without ``min-w-0`` on the
+              flex child the default ``min-width: auto`` resolves to
+              the full filename width — flex refuses to shrink it, so
+              the ``· 1012 KB · 7.2s`` tokens got pushed onto extra
+              lines at ~1600px viewports. Add ``min-w-0`` so the span
+              shrinks to its allotted track and ``truncate`` kicks in
+              with an ellipsis, keeping the metadata row on one line. */}
           <div className="mt-1 flex items-center gap-2 font-mono text-xs text-muted-fg">
-            <span className="truncate">{detail.filename}</span>
+            <span className="min-w-0 truncate">{detail.filename}</span>
             {detail.compressed && <Badge tone="muted">gz</Badge>}
             <span>·</span>
             <span>{Math.round(detail.size_bytes / 1024)} KB</span>
