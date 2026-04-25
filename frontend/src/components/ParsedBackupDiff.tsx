@@ -902,7 +902,61 @@ function formatValue(v: unknown): ReactNode {
     );
   if (Array.isArray(v)) return formatArray(v);
   if (typeof v === "object") return formatObject(v as Record<string, unknown>);
+  // v0.41.19: pfSense package configs embed XML *strings* that the
+  // parser doesn't decode further (e.g. ``installedpackages.unknown``
+  // entries hold a raw ``<tab><name>…</name><tabgroup>…</tabgroup>…</tab>``
+  // blob). Detect XML-shaped strings and pretty-print with one tag
+  // per line + indentation so the nested structure is visible at a
+  // glance instead of one wrapping run-on of mono characters.
+  if (typeof v === "string" && isXmlLike(v)) {
+    return (
+      <pre className="whitespace-pre-wrap font-mono">{prettyXml(v)}</pre>
+    );
+  }
   return String(v);
+}
+
+function isXmlLike(s: string): boolean {
+  // Heuristic: starts with ``<`` followed by a name char (not ``?`` so
+  // we skip ``<?xml ...?>`` headers, not ``!`` so we skip comments and
+  // doctype). Must contain at least one closing tag so a stray
+  // ``<value/>`` alone doesn't trip it. A trimmed-leading-whitespace
+  // form so values like ``"  <tab>…"`` still match.
+  const trimmed = s.trimStart();
+  return (
+    trimmed.length > 1 &&
+    trimmed[0] === "<" &&
+    trimmed[1] !== "?" &&
+    trimmed[1] !== "!" &&
+    /<\/[\w:.-]+>/.test(s)
+  );
+}
+
+function prettyXml(s: string): string {
+  // Tokenize at every ``><`` boundary so each tag (and the text
+  // between tags) lands on its own line. Then indent based on a
+  // running ``depth`` counter — increment on opening tags, decrement
+  // on closing tags, leave self-closing (``<foo/>``) alone. We do
+  // *not* try to be a real XML parser; pfSense's embedded XML is
+  // small and well-formed enough that a token-counter is sufficient
+  // and 100% safe (no eval, no DOMParser, no allocation surprises).
+  const tokens = s
+    .replace(/>\s+</g, "><")
+    .replace(/></g, ">\n<")
+    .split("\n");
+  let depth = 0;
+  const out: string[] = [];
+  for (const raw of tokens) {
+    const line = raw.trim();
+    if (!line) continue;
+    const isClose = /^<\/[\w:.-]+\s*>$/.test(line);
+    const isSelfClose = /\/>\s*$/.test(line);
+    const isOpen = /^<[\w:.-][^>]*[^/]>$/.test(line) && !isClose;
+    if (isClose) depth = Math.max(0, depth - 1);
+    out.push("  ".repeat(depth) + line);
+    if (isOpen && !isSelfClose) depth += 1;
+  }
+  return out.join("\n");
 }
 
 // v0.41.15: previously ``formatValue`` called ``JSON.stringify`` for
@@ -933,10 +987,18 @@ function formatObject(o: Record<string, unknown>): ReactNode {
 
 function formatArray(a: unknown[]): ReactNode {
   if (a.length === 0) return <span className="text-muted-fg">—</span>;
+  // v0.41.19: switched from ``space-y-0.5`` to ``divide-y`` because
+  // an array of objects (e.g. DHCP ``static_mappings`` with 30+
+  // entries, each ``{mac, ipaddr, descr, …}``) ran together with no
+  // visual delimiter — operators saw one continuous stream of
+  // ``mac ea:da:… ipaddr 10.10.76.3 descr Serapis mac 48:21:… …``
+  // and couldn't tell where one entry ended and the next started.
+  // A thin divider per item makes each array element a distinct
+  // block; ``py-1`` gives the divider room to breathe.
   return (
-    <ul className="space-y-0.5">
+    <ul className="divide-y divide-border/30">
       {a.map((v, i) => (
-        <li key={i} className="min-w-0 [overflow-wrap:anywhere]">
+        <li key={i} className="min-w-0 py-1 [overflow-wrap:anywhere]">
           {formatValue(v)}
         </li>
       ))}
