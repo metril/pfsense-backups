@@ -1,6 +1,6 @@
 [project]
 name = "pfsense-backups"
-version = "0.41.20"
+version = "0.41.21"
 description = "pfSense configuration backup + web dashboard."
 readme = "README.md"
 requires-python = ">=3.11"

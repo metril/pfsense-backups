@@ -1,4 +1,10 @@
-import { Fragment, useCallback, useMemo, type ReactNode } from "react";
+import {
+  Fragment,
+  useCallback,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import { Lock } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { Badge } from "@/components/ui/Badge";
@@ -874,9 +880,6 @@ function FieldChanges({
         // row (CSS Grid sizes the row to the taller cell) with a
         // ``divide-y`` line between indices.
         if (Array.isArray(c.before) && Array.isArray(c.after)) {
-          const before = c.before as unknown[];
-          const after = c.after as unknown[];
-          const n = Math.max(before.length, after.length);
           return (
             <div
               key={c.field}
@@ -886,36 +889,13 @@ function FieldChanges({
               <div role="cell" className={cellBase}>
                 {c.field}
               </div>
-              <div className="col-span-2 grid grid-cols-2 gap-x-4 divide-y divide-border/30">
-                {Array.from({ length: n }).map((_, i) => (
-                  <Fragment key={i}>
-                    <div className={`${cellBase} py-1 text-danger`}>
-                      {i < before.length ? (
-                        <ValueChip
-                          sectionKey={sectionKey}
-                          field={c.field}
-                          value={before[i]}
-                          side="old"
-                        />
-                      ) : (
-                        <span className="text-muted-fg">—</span>
-                      )}
-                    </div>
-                    <div className={`${cellBase} py-1 text-ok`}>
-                      {i < after.length ? (
-                        <ValueChip
-                          sectionKey={sectionKey}
-                          field={c.field}
-                          value={after[i]}
-                          side="new"
-                        />
-                      ) : (
-                        <span className="text-muted-fg">—</span>
-                      )}
-                    </div>
-                  </Fragment>
-                ))}
-              </div>
+              <PairedArrayCell
+                before={c.before}
+                after={c.after}
+                sectionKey={sectionKey}
+                field={c.field}
+                cellBase={cellBase}
+              />
             </div>
           );
         }
@@ -949,6 +929,155 @@ function FieldChanges({
       })}
     </div>
   );
+}
+
+// v0.41.21: arrays come from the backend as whole BEFORE/AFTER blobs
+// even when only 1-2 entries differ (e.g. DHCP ``static_mappings``
+// has 121 devices, edit one MAC, the field reports a 121-entry
+// array on each side). Rendering every pair in red/green made
+// identical entries look like changes — operators couldn't spot
+// the actual diff. ``PairedArrayCell`` walks the index pairs,
+// groups consecutive identical pairs into a "N identical entries"
+// placeholder, and keeps differing pairs in full red/green. A
+// per-cell ``Show all`` toggle expands the collapse for context.
+function PairedArrayCell({
+  before,
+  after,
+  sectionKey,
+  field,
+  cellBase,
+}: {
+  before: unknown[];
+  after: unknown[];
+  sectionKey: string;
+  field: string;
+  cellBase: string;
+}) {
+  const [showAll, setShowAll] = useState(false);
+  const n = Math.max(before.length, after.length);
+  const items = useMemo(() => {
+    const out: Array<
+      { kind: "diff"; i: number } | { kind: "skip"; from: number; to: number }
+    > = [];
+    let skipStart: number | null = null;
+    for (let i = 0; i < n; i++) {
+      const same =
+        i < before.length && i < after.length && deepEq(before[i], after[i]);
+      if (same) {
+        if (skipStart === null) skipStart = i;
+      } else {
+        if (skipStart !== null) {
+          out.push({ kind: "skip", from: skipStart, to: i - 1 });
+          skipStart = null;
+        }
+        out.push({ kind: "diff", i });
+      }
+    }
+    if (skipStart !== null) {
+      out.push({ kind: "skip", from: skipStart, to: n - 1 });
+    }
+    return out;
+  }, [before, after, n]);
+
+  const collapsedCount = useMemo(
+    () =>
+      items
+        .filter((it) => it.kind === "skip")
+        .reduce((s, it) => s + (it.to - it.from + 1), 0),
+    [items],
+  );
+
+  const visibleItems = showAll
+    ? Array.from({ length: n }).map(
+        (_, i) => ({ kind: "diff", i }) as const,
+      )
+    : items;
+
+  return (
+    <div className="col-span-2">
+      <div className="grid grid-cols-2 gap-x-4 divide-y divide-border/30">
+        {visibleItems.map((item) =>
+          item.kind === "diff" ? (
+            <Fragment key={`d${item.i}`}>
+              <div className={`${cellBase} py-1 text-danger`}>
+                {item.i < before.length ? (
+                  <ValueChip
+                    sectionKey={sectionKey}
+                    field={field}
+                    value={before[item.i]}
+                    side="old"
+                  />
+                ) : (
+                  <span className="text-muted-fg">—</span>
+                )}
+              </div>
+              <div className={`${cellBase} py-1 text-ok`}>
+                {item.i < after.length ? (
+                  <ValueChip
+                    sectionKey={sectionKey}
+                    field={field}
+                    value={after[item.i]}
+                    side="new"
+                  />
+                ) : (
+                  <span className="text-muted-fg">—</span>
+                )}
+              </div>
+            </Fragment>
+          ) : (
+            <div
+              key={`s${item.from}`}
+              className="col-span-2 py-1 text-xs italic text-muted-fg"
+            >
+              {item.to === item.from
+                ? `1 identical entry (#${item.from + 1})`
+                : `${item.to - item.from + 1} identical entries (#${item.from + 1}–#${item.to + 1})`}
+            </div>
+          ),
+        )}
+      </div>
+      {collapsedCount > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowAll((s) => !s)}
+          className="mt-1 text-xs text-accent hover:underline"
+        >
+          {showAll
+            ? "Collapse identical entries"
+            : `Show all ${n} entries`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function deepEq(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (a === null || b === null) return a === b;
+  if (typeof a !== typeof b) return false;
+  if (typeof a !== "object") return false;
+  const aArr = Array.isArray(a);
+  const bArr = Array.isArray(b);
+  if (aArr !== bArr) return false;
+  if (aArr) {
+    const aa = a as unknown[];
+    const ba = b as unknown[];
+    if (aa.length !== ba.length) return false;
+    for (let i = 0; i < aa.length; i++) {
+      if (!deepEq(aa[i], ba[i])) return false;
+    }
+    return true;
+  }
+  const ao = a as Record<string, unknown>;
+  const bo = b as Record<string, unknown>;
+  const ka = Object.keys(ao);
+  const kb = Object.keys(bo);
+  if (ka.length !== kb.length) return false;
+  for (const k of ka) {
+    if (!Object.prototype.hasOwnProperty.call(bo, k)) return false;
+    if (!deepEq(ao[k], bo[k])) return false;
+  }
+  return true;
 }
 
 function formatValue(v: unknown): ReactNode {
