@@ -931,15 +931,67 @@ function FieldChanges({
   );
 }
 
-// v0.41.21: arrays come from the backend as whole BEFORE/AFTER blobs
-// even when only 1-2 entries differ (e.g. DHCP ``static_mappings``
-// has 121 devices, edit one MAC, the field reports a 121-entry
-// array on each side). Rendering every pair in red/green made
-// identical entries look like changes — operators couldn't spot
-// the actual diff. ``PairedArrayCell`` walks the index pairs,
-// groups consecutive identical pairs into a "N identical entries"
-// placeholder, and keeps differing pairs in full red/green. A
-// per-cell ``Show all`` toggle expands the collapse for context.
+// v0.41.21 / v0.41.22: arrays come from the backend as whole
+// BEFORE/AFTER blobs even when only 1-2 entries differ (e.g. DHCP
+// ``static_mappings`` has 121 devices, edit one MAC, the field
+// reports a 121-entry array on each side). Index-pairing breaks
+// the moment an entry is added or removed mid-list — the
+// reordered tail makes every subsequent index look "modified"
+// even though all entries are unchanged. v0.41.22 pairs by
+// natural key (``host`` for DNS host_overrides, ``mac`` for DHCP
+// static mappings, ``tracker`` / ``refid`` / ``name`` for rule
+// lists) when one is detectable; identical pairs collapse to a
+// "N identical entries" placeholder and only true changes (added,
+// removed, modified) render in full color. Falls back to
+// index-pairing when no key is detectable (string arrays,
+// shape-irregular arrays).
+const KEY_CANDIDATES = [
+  "tracker",
+  "refid",
+  "id",
+  "uuid",
+  "name",
+  "host",
+  "mac",
+  "hostname",
+  "key",
+];
+
+function detectKey(entries: unknown[]): string | null {
+  if (entries.length === 0) return null;
+  for (const cand of KEY_CANDIDATES) {
+    let usable = true;
+    const seen = new Set<string>();
+    for (const e of entries) {
+      if (!e || typeof e !== "object" || Array.isArray(e)) {
+        usable = false;
+        break;
+      }
+      const v = (e as Record<string, unknown>)[cand];
+      if (v === undefined || v === null || v === "") {
+        usable = false;
+        break;
+      }
+      const k = String(v);
+      if (seen.has(k)) {
+        usable = false; // duplicate keys defeat key-pairing
+        break;
+      }
+      seen.add(k);
+    }
+    if (usable) return cand;
+  }
+  return null;
+}
+
+type PairItem = {
+  kind: "pair";
+  before: unknown | null;
+  after: unknown | null;
+  label?: string;
+};
+type SkipItem = { kind: "skip"; count: number };
+
 function PairedArrayCell({
   before,
   after,
@@ -954,57 +1006,86 @@ function PairedArrayCell({
   cellBase: string;
 }) {
   const [showAll, setShowAll] = useState(false);
-  const n = Math.max(before.length, after.length);
-  const items = useMemo(() => {
-    const out: Array<
-      { kind: "diff"; i: number } | { kind: "skip"; from: number; to: number }
-    > = [];
-    let skipStart: number | null = null;
-    for (let i = 0; i < n; i++) {
-      const same =
-        i < before.length && i < after.length && deepEq(before[i], after[i]);
-      if (same) {
-        if (skipStart === null) skipStart = i;
-      } else {
-        if (skipStart !== null) {
-          out.push({ kind: "skip", from: skipStart, to: i - 1 });
-          skipStart = null;
+
+  const allPairs = useMemo<PairItem[]>(() => {
+    const key = detectKey(before) ?? detectKey(after);
+    if (key) {
+      const afterMap = new Map<string, unknown>();
+      for (const e of after) {
+        afterMap.set(String((e as Record<string, unknown>)[key]), e);
+      }
+      const out: PairItem[] = [];
+      const seen = new Set<string>();
+      for (const e of before) {
+        const k = String((e as Record<string, unknown>)[key]);
+        seen.add(k);
+        out.push({
+          kind: "pair",
+          before: e,
+          after: afterMap.get(k) ?? null,
+          label: k,
+        });
+      }
+      for (const e of after) {
+        const k = String((e as Record<string, unknown>)[key]);
+        if (!seen.has(k)) {
+          seen.add(k);
+          out.push({ kind: "pair", before: null, after: e, label: k });
         }
-        out.push({ kind: "diff", i });
+      }
+      return out;
+    }
+    // No detectable key — fall back to index-pairing.
+    const n = Math.max(before.length, after.length);
+    return Array.from({ length: n }).map<PairItem>((_, i) => ({
+      kind: "pair",
+      before: i < before.length ? before[i] : null,
+      after: i < after.length ? after[i] : null,
+    }));
+  }, [before, after]);
+
+  const collapsedItems = useMemo<(PairItem | SkipItem)[]>(() => {
+    const out: (PairItem | SkipItem)[] = [];
+    let runCount = 0;
+    for (const p of allPairs) {
+      const same =
+        p.before !== null && p.after !== null && deepEq(p.before, p.after);
+      if (same) {
+        runCount += 1;
+      } else {
+        if (runCount > 0) {
+          out.push({ kind: "skip", count: runCount });
+          runCount = 0;
+        }
+        out.push(p);
       }
     }
-    if (skipStart !== null) {
-      out.push({ kind: "skip", from: skipStart, to: n - 1 });
-    }
+    if (runCount > 0) out.push({ kind: "skip", count: runCount });
     return out;
-  }, [before, after, n]);
+  }, [allPairs]);
 
   const collapsedCount = useMemo(
     () =>
-      items
-        .filter((it) => it.kind === "skip")
-        .reduce((s, it) => s + (it.to - it.from + 1), 0),
-    [items],
+      collapsedItems
+        .filter((it): it is SkipItem => it.kind === "skip")
+        .reduce((s, it) => s + it.count, 0),
+    [collapsedItems],
   );
 
-  const visibleItems = showAll
-    ? Array.from({ length: n }).map(
-        (_, i) => ({ kind: "diff", i }) as const,
-      )
-    : items;
+  const items: (PairItem | SkipItem)[] = showAll ? allPairs : collapsedItems;
 
   return (
     <div className="col-span-2">
       <div className="grid grid-cols-2 gap-x-4 divide-y divide-border/30">
-        {visibleItems.map((item) =>
-          item.kind === "diff" ? (
-            <Fragment key={`d${item.i}`}>
+        {items.map((item, idx) =>
+          item.kind === "pair" ? (
+            <Fragment key={`p${idx}`}>
               <div className={`${cellBase} py-1 text-danger`}>
-                {item.i < before.length ? (
+                {item.before !== null ? (
                   <ValueChip
                     sectionKey={sectionKey}
                     field={field}
-                    value={before[item.i]}
+                    value={item.before}
                     side="old"
                   />
                 ) : (
@@ -1012,11 +1093,11 @@ function PairedArrayCell({
                 )}
               </div>
               <div className={`${cellBase} py-1 text-ok`}>
-                {item.i < after.length ? (
+                {item.after !== null ? (
                   <ValueChip
                     sectionKey={sectionKey}
                     field={field}
-                    value={after[item.i]}
+                    value={item.after}
                     side="new"
                   />
                 ) : (
@@ -1026,12 +1107,12 @@ function PairedArrayCell({
             </Fragment>
           ) : (
             <div
-              key={`s${item.from}`}
+              key={`s${idx}`}
               className="col-span-2 py-1 text-xs italic text-muted-fg"
             >
-              {item.to === item.from
-                ? `1 identical entry (#${item.from + 1})`
-                : `${item.to - item.from + 1} identical entries (#${item.from + 1}–#${item.to + 1})`}
+              {item.count === 1
+                ? "1 identical entry"
+                : `${item.count} identical entries`}
             </div>
           ),
         )}
@@ -1044,7 +1125,7 @@ function PairedArrayCell({
         >
           {showAll
             ? "Collapse identical entries"
-            : `Show all ${n} entries`}
+            : `Show all ${allPairs.length} entries`}
         </button>
       )}
     </div>
