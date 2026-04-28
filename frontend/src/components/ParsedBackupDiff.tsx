@@ -945,6 +945,13 @@ function FieldChanges({
 // removed, modified) render in full color. Falls back to
 // index-pairing when no key is detectable (string arrays,
 // shape-irregular arrays).
+// Field candidates checked first as single-field keys, then in
+// pairs for compound-key detection. Order matters — narrower /
+// rarer identifiers go first so e.g. ``tracker`` wins over the
+// less-distinctive ``name``. ``domain`` and ``interface`` round
+// out the list as common second-half partners (``host`` +
+// ``domain`` for DNS, ``name`` + ``interface`` for some rule
+// shapes, etc.).
 const KEY_CANDIDATES = [
   "tracker",
   "refid",
@@ -955,32 +962,67 @@ const KEY_CANDIDATES = [
   "mac",
   "hostname",
   "key",
+  "domain",
+  "type",
+  "interface",
 ];
 
-function detectKey(entries: unknown[]): string | null {
+function entryKey(e: unknown, fields: string[]): string | null {
+  if (!e || typeof e !== "object" || Array.isArray(e)) return null;
+  const obj = e as Record<string, unknown>;
+  const parts: string[] = [];
+  for (const f of fields) {
+    const v = obj[f];
+    if (v === undefined || v === null || v === "") return null;
+    parts.push(String(v));
+  }
+  // ``\x00`` separator avoids collisions like ``"a"+"b"`` colliding
+  // with ``"ab"+""``.
+  return parts.join("\x00");
+}
+
+function isUniqueKey(entries: unknown[], fields: string[]): boolean {
+  if (entries.length === 0) return false;
+  const seen = new Set<string>();
+  for (const e of entries) {
+    const k = entryKey(e, fields);
+    if (k === null) return false;
+    if (seen.has(k)) return false;
+    seen.add(k);
+  }
+  return true;
+}
+
+// v0.41.23: extended ``detectKey`` to try COMPOUND keys when no
+// single field is unique. DNS ``host_overrides`` for example may
+// have multiple entries with ``host: "pikvm"`` differing only by
+// ``domain`` — single ``host`` is rejected, but ``host`` +
+// ``domain`` is unique. Without this, the cell falls back to
+// index-pairing and reorders look like cascading "modifications".
+function detectKey(entries: unknown[]): string[] | null {
   if (entries.length === 0) return null;
   for (const cand of KEY_CANDIDATES) {
-    let usable = true;
-    const seen = new Set<string>();
-    for (const e of entries) {
-      if (!e || typeof e !== "object" || Array.isArray(e)) {
-        usable = false;
-        break;
-      }
-      const v = (e as Record<string, unknown>)[cand];
-      if (v === undefined || v === null || v === "") {
-        usable = false;
-        break;
-      }
-      const k = String(v);
-      if (seen.has(k)) {
-        usable = false; // duplicate keys defeat key-pairing
-        break;
-      }
-      seen.add(k);
-    }
-    if (usable) return cand;
+    if (isUniqueKey(entries, [cand])) return [cand];
   }
+  for (let i = 0; i < KEY_CANDIDATES.length; i++) {
+    for (let j = i + 1; j < KEY_CANDIDATES.length; j++) {
+      const combo = [KEY_CANDIDATES[i], KEY_CANDIDATES[j]];
+      if (isUniqueKey(entries, combo)) return combo;
+    }
+  }
+  return null;
+}
+
+// Pick a key that's unique on BOTH sides (so we can pair). Try
+// detection on each side and verify it works on the other.
+function detectSharedKey(
+  before: unknown[],
+  after: unknown[],
+): string[] | null {
+  const k1 = detectKey(before);
+  if (k1 && isUniqueKey(after, k1)) return k1;
+  const k2 = detectKey(after);
+  if (k2 && isUniqueKey(before, k2)) return k2;
   return null;
 }
 
@@ -1008,16 +1050,18 @@ function PairedArrayCell({
   const [showAll, setShowAll] = useState(false);
 
   const allPairs = useMemo<PairItem[]>(() => {
-    const key = detectKey(before) ?? detectKey(after);
-    if (key) {
+    const keyFields = detectSharedKey(before, after);
+    if (keyFields) {
       const afterMap = new Map<string, unknown>();
       for (const e of after) {
-        afterMap.set(String((e as Record<string, unknown>)[key]), e);
+        const k = entryKey(e, keyFields);
+        if (k !== null) afterMap.set(k, e);
       }
       const out: PairItem[] = [];
       const seen = new Set<string>();
       for (const e of before) {
-        const k = String((e as Record<string, unknown>)[key]);
+        const k = entryKey(e, keyFields);
+        if (k === null) continue; // shouldn't happen — detectSharedKey verified
         seen.add(k);
         out.push({
           kind: "pair",
@@ -1027,7 +1071,8 @@ function PairedArrayCell({
         });
       }
       for (const e of after) {
-        const k = String((e as Record<string, unknown>)[key]);
+        const k = entryKey(e, keyFields);
+        if (k === null) continue;
         if (!seen.has(k)) {
           seen.add(k);
           out.push({ kind: "pair", before: null, after: e, label: k });
