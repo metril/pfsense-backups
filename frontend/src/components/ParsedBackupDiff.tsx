@@ -1043,6 +1043,83 @@ type PairItem = {
 };
 type SkipItem = { kind: "skip"; count: number };
 
+// Anchor fields used by ``mergeBySharedAnchor`` to fold add+remove
+// pairs that target the same "slot" into a single modified pair.
+// Order doesn't matter — we accept any single shared non-empty
+// value among these as evidence the entries describe the same
+// thing. Kept narrow on purpose: false positives are worse than
+// missed merges, since false positives bury actually-different
+// entries inside a "modified" pair.
+const ANCHOR_FIELDS = [
+  "ipaddr",
+  "ip",
+  "address",
+  "subnet",
+  "tracker",
+  "refid",
+  "id",
+  "uuid",
+];
+
+function sharedAnchorValue(a: unknown, b: unknown): string | null {
+  if (
+    !a ||
+    typeof a !== "object" ||
+    Array.isArray(a) ||
+    !b ||
+    typeof b !== "object" ||
+    Array.isArray(b)
+  )
+    return null;
+  const ao = a as Record<string, unknown>;
+  const bo = b as Record<string, unknown>;
+  for (const f of ANCHOR_FIELDS) {
+    const av = ao[f];
+    const bv = bo[f];
+    if (av && bv && av === bv && typeof av === "string" && av !== "") {
+      return `${f}=${av}`;
+    }
+  }
+  return null;
+}
+
+// Mutates ``items`` in place: collapses pairs of (before-only)
+// and (after-only) entries that share an anchor field value into
+// a single modified pair. The before-only is updated with the
+// after value; the after-only entry is removed from the list. We
+// preserve list order by editing in place and splicing.
+function mergeBySharedAnchor(items: PairItem[]): void {
+  for (let i = 0; i < items.length; i++) {
+    const ib = items[i];
+    if (ib.kind !== "pair" || ib.before === null || ib.after !== null) continue;
+    let bestJ = -1;
+    for (let j = 0; j < items.length; j++) {
+      if (j === i) continue;
+      const ja = items[j];
+      if (ja.kind !== "pair" || ja.before !== null || ja.after === null)
+        continue;
+      if (sharedAnchorValue(ib.before, ja.after) !== null) {
+        if (bestJ === -1) bestJ = j;
+        else {
+          // Multiple potential matches — ambiguous, abandon merge.
+          bestJ = -2;
+          break;
+        }
+      }
+    }
+    if (bestJ >= 0) {
+      items[i] = {
+        kind: "pair",
+        before: ib.before,
+        after: items[bestJ].after,
+        label: ib.label,
+      };
+      items.splice(bestJ, 1);
+      if (bestJ < i) i -= 1;
+    }
+  }
+}
+
 function PairedArrayCell({
   before,
   after,
@@ -1125,6 +1202,18 @@ function PairedArrayCell({
           out.push({ kind: "pair", before: null, after: afterUnkeyed[i] });
         }
       }
+      // v0.41.25: secondary anchor pass. After primary key
+      // pairing, any leftover BEFORE-only or AFTER-only entries
+      // that share a "slot" field (ipaddr / ip / address / …)
+      // get merged into a single modified pair. This handles the
+      // common operator pattern of "I replaced the device at
+      // 10.10.77.14" — different mac, same IP — which the
+      // primary key pass would otherwise show as one removed +
+      // one added even though the operator thinks of it as one
+      // edit. We require an EXACT shared anchor value (no fuzzy
+      // matching) and only pair when there's no ambiguity, so
+      // entries unrelated to the renamed slot stay add/remove.
+      mergeBySharedAnchor(out);
       return out;
     }
     // No detectable key — fall back to index-pairing.
