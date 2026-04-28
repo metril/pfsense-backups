@@ -981,16 +981,25 @@ function entryKey(e: unknown, fields: string[]): string | null {
   return parts.join("\x00");
 }
 
+// v0.41.24: tolerate null/empty key values. ``static_mappings``
+// often has a single entry with an empty ``mac`` (DHCP-pool-only
+// row, no static reservation) — strict isUniqueKey rejected
+// ``mac`` for the whole 121-entry array because of that one
+// outlier, falling back to index pairing for everything. Now we
+// skip null-key entries during uniqueness checking and let the
+// caller fall those entries through to deepEq matching at the
+// tail. Require at least one non-null match so we don't pick a
+// candidate where every entry is null.
 function isUniqueKey(entries: unknown[], fields: string[]): boolean {
   if (entries.length === 0) return false;
   const seen = new Set<string>();
   for (const e of entries) {
     const k = entryKey(e, fields);
-    if (k === null) return false;
+    if (k === null) continue;
     if (seen.has(k)) return false;
     seen.add(k);
   }
-  return true;
+  return seen.size > 0;
 }
 
 // v0.41.23: extended ``detectKey`` to try COMPOUND keys when no
@@ -1052,30 +1061,68 @@ function PairedArrayCell({
   const allPairs = useMemo<PairItem[]>(() => {
     const keyFields = detectSharedKey(before, after);
     if (keyFields) {
-      const afterMap = new Map<string, unknown>();
-      for (const e of after) {
-        const k = entryKey(e, keyFields);
-        if (k !== null) afterMap.set(k, e);
-      }
-      const out: PairItem[] = [];
-      const seen = new Set<string>();
+      // Split each side into keyed (has all key fields) and
+      // unkeyed (missing or empty in at least one key field).
+      // Keyed entries pair by key. Unkeyed entries pair by
+      // greedy deepEq scan as a fallback so e.g. a ``mac=""``
+      // DHCP-range-only row that exists identically on both
+      // sides still collapses to identical instead of looking
+      // like one removed + one added.
+      const beforeKeyed: { k: string; v: unknown }[] = [];
+      const beforeUnkeyed: unknown[] = [];
       for (const e of before) {
         const k = entryKey(e, keyFields);
-        if (k === null) continue; // shouldn't happen — detectSharedKey verified
+        if (k !== null) beforeKeyed.push({ k, v: e });
+        else beforeUnkeyed.push(e);
+      }
+      const afterKeyed: { k: string; v: unknown }[] = [];
+      const afterUnkeyed: unknown[] = [];
+      for (const e of after) {
+        const k = entryKey(e, keyFields);
+        if (k !== null) afterKeyed.push({ k, v: e });
+        else afterUnkeyed.push(e);
+      }
+      const afterMap = new Map<string, unknown>();
+      for (const { k, v } of afterKeyed) afterMap.set(k, v);
+
+      const out: PairItem[] = [];
+      const seen = new Set<string>();
+      for (const { k, v } of beforeKeyed) {
         seen.add(k);
         out.push({
           kind: "pair",
-          before: e,
+          before: v,
           after: afterMap.get(k) ?? null,
           label: k,
         });
       }
-      for (const e of after) {
-        const k = entryKey(e, keyFields);
-        if (k === null) continue;
+      for (const { k, v } of afterKeyed) {
         if (!seen.has(k)) {
           seen.add(k);
-          out.push({ kind: "pair", before: null, after: e, label: k });
+          out.push({ kind: "pair", before: null, after: v, label: k });
+        }
+      }
+      // Greedy deepEq matching for the unkeyed remainder.
+      const afterTaken = new Array<boolean>(afterUnkeyed.length).fill(false);
+      for (const b of beforeUnkeyed) {
+        let matched = -1;
+        for (let i = 0; i < afterUnkeyed.length; i++) {
+          if (afterTaken[i]) continue;
+          if (deepEq(b, afterUnkeyed[i])) {
+            matched = i;
+            break;
+          }
+        }
+        if (matched >= 0) {
+          afterTaken[matched] = true;
+          out.push({ kind: "pair", before: b, after: afterUnkeyed[matched] });
+        } else {
+          out.push({ kind: "pair", before: b, after: null });
+        }
+      }
+      for (let i = 0; i < afterUnkeyed.length; i++) {
+        if (!afterTaken[i]) {
+          out.push({ kind: "pair", before: null, after: afterUnkeyed[i] });
         }
       }
       return out;
