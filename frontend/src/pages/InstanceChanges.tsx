@@ -27,6 +27,7 @@ import {
   type CumulativeChangeRow,
 } from "@/api/queries";
 import { AnchorHistoryDrawer } from "@/components/xref/AnchorHistoryDrawer";
+import { formatLocal } from "@/lib/datetime";
 import { formatRelative } from "@/lib/formatRelative";
 
 // Radix Select refuses empty-string values (v1.x emits a console
@@ -150,7 +151,7 @@ export function InstanceChangesPage() {
     () =>
       backups.map((b) => ({
         value: String(b.id),
-        label: new Date(b.started_at).toLocaleString(),
+        label: formatLocal(b.started_at),
         hint: b.tag ?? undefined,
       })),
     [backups],

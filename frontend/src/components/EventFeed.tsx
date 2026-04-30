@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { useInstances } from "@/api/queries";
 import { cn } from "@/lib/cn";
+import { formatTimeOnly } from "@/lib/datetime";
 import type { EventEnvelope } from "@/api/types";
 
 type NameLookup = (id: number | null | undefined) => string;
@@ -91,7 +92,7 @@ export function EventFeed({ events }: { events: EventEnvelope[] }) {
             const { line, tone } = format(e, nameOf);
             return (
               <div key={i} className="flex gap-2 py-1">
-                <span className="text-muted-fg">{e.ts.substring(11, 19)}</span>
+                <span className="text-muted-fg">{formatTimeOnly(e.ts)}</span>
                 <span className={cn("flex-1", tone)}>{line}</span>
               </div>
             );

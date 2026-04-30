@@ -8,6 +8,7 @@ import {
   type AnchorHistoryChange,
 } from "@/api/queries";
 import { anchorHumanLabel } from "@/lib/anchorLabel";
+import { formatLocal } from "@/lib/datetime";
 
 /**
  * Per-anchor blame drawer. Opens when the operator hits ``h`` on a
@@ -229,7 +230,6 @@ function EntryRow({
   anchor: string | null;
   currentBackupId?: number;
 }) {
-  const when = new Date(entry.started_at);
   // Build the target URL with the anchor (so BackupView can scroll
   // to it) and, when we know where we came from, the ``from`` param
   // that drives the ``ReturnToBackupPill`` on the destination.
@@ -250,7 +250,7 @@ function EntryRow({
     >
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 text-xs">
-          <span className="font-mono">{when.toLocaleString()}</span>
+          <span className="font-mono">{formatLocal(entry.started_at)}</span>
           {entry.is_change && <Badge tone="warn">changed</Badge>}
           {entry.value === null && <Badge tone="muted">missing</Badge>}
         </div>

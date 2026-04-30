@@ -25,6 +25,7 @@ import {
   useUpdateBackup,
 } from "@/api/queries";
 import { api, triggerDownload } from "@/api/client";
+import { formatLocal } from "@/lib/datetime";
 import { useFocusedAnchor } from "@/lib/useFocusedAnchor";
 import { useBlameHotkey } from "@/lib/useBlameHotkey";
 import { expandThenScrollToHash } from "@/lib/xref";
@@ -402,7 +403,7 @@ export function BackupViewPage() {
           <h1 className="mt-1 text-xl font-semibold">
             {instanceName}{" "}
             <span className="text-muted-fg font-normal">
-              · {new Date(detail.started_at).toLocaleString()}
+              · {formatLocal(detail.started_at)}
             </span>
           </h1>
           {/* v0.41.18: filename span has ``truncate`` (white-space:nowrap
@@ -488,7 +489,7 @@ export function BackupViewPage() {
             disabled={!previous}
             title={
               previous
-                ? `Diff against ${new Date(previous.started_at).toLocaleString()}`
+                ? `Diff against ${formatLocal(previous.started_at)}`
                 : "No prior successful backup for this instance"
             }
           >

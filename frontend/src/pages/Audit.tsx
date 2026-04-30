@@ -1,6 +1,7 @@
 import { Fragment, useState } from "react";
 import { ChevronDown, ChevronRight, X } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { formatLocal } from "@/lib/datetime";
 import { useAuditFacets, useAuditLog, type AuditFilter } from "@/api/queries";
 
 const ACTION_TONE: Record<string, string> = {
@@ -185,7 +186,7 @@ export function AuditPage() {
                     ) : null}
                   </td>
                   <td className="py-2 text-xs tabular-nums">
-                    {new Date(e.ts).toLocaleString()}
+                    {formatLocal(e.ts)}
                   </td>
                   <td className="py-2">{e.actor_email}</td>
                   <td

@@ -43,6 +43,7 @@ import {
 import { createPortal } from "react-dom";
 import { Clock } from "lucide-react";
 import type { AnchorBlameSummaryEntry } from "@/api/queries";
+import { formatLocal } from "@/lib/datetime";
 import { formatRelative } from "@/lib/formatRelative";
 import { anchorHumanLabel, parseAnchorId, sectionLabel } from "@/lib/anchorLabel";
 import { cn } from "@/lib/cn";
@@ -142,7 +143,7 @@ function kindLabel(kind: AnchorBlameSummaryEntry["kind"]): string {
  *  hover provider can reuse the same phrasing in a markdown string. */
 export function blameTooltipText(entry: AnchorBlameSummaryEntry): string {
   const rel = formatRelative(entry.occurred_at);
-  const abs = new Date(entry.occurred_at).toLocaleString();
+  const abs = formatLocal(entry.occurred_at);
   return `Last ${kindLabel(entry.kind)} ${rel} (backup #${entry.backup_id}, ${abs}) · press h for full history`;
 }
 

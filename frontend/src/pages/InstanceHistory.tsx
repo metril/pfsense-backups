@@ -12,6 +12,7 @@ import {
   useParsedDiffPair,
 } from "@/api/queries";
 import { collectChangedAnchors } from "@/lib/changedAnchors";
+import { formatLocal, formatLocalDate } from "@/lib/datetime";
 import { useFocusedAnchor } from "@/lib/useFocusedAnchor";
 import { useBlameHotkey } from "@/lib/useBlameHotkey";
 import { AnchorHistoryDrawer } from "@/components/xref/AnchorHistoryDrawer";
@@ -306,14 +307,14 @@ export function InstanceHistoryPage() {
               aria-label="Backup timeline"
               aria-valuetext={
                 focused
-                  ? new Date(focused.started_at).toLocaleString()
+                  ? formatLocal(focused.started_at)
                   : undefined
               }
               className="w-full"
             />
             <div className="mt-1 flex justify-between text-xs text-muted-fg">
               <span title={backups[0]?.started_at}>
-                {new Date(backups[0].started_at).toLocaleDateString()}
+                {formatLocalDate(backups[0].started_at)}
               </span>
               {/* Visual position counter. The slider's own
                   ``aria-valuetext`` already drives the screen-reader
@@ -327,9 +328,7 @@ export function InstanceHistoryPage() {
                 #{focusIdx + 1} / {backups.length}
               </span>
               <span title={backups[backups.length - 1]?.started_at}>
-                {new Date(
-                  backups[backups.length - 1].started_at,
-                ).toLocaleDateString()}
+                {formatLocalDate(backups[backups.length - 1].started_at)}
               </span>
             </div>
           </div>
@@ -352,7 +351,7 @@ export function InstanceHistoryPage() {
             <>
               <span className="text-muted-fg">Focused:</span>
               <span className="font-mono">
-                {new Date(focused.started_at).toLocaleString()}
+                {formatLocal(focused.started_at)}
               </span>
               {focused.tag && <Badge tone="muted">{focused.tag}</Badge>}
               <span className="text-muted-fg">·</span>
@@ -416,9 +415,7 @@ export function InstanceHistoryPage() {
                 className="inline-flex items-center gap-1.5 rounded-md border border-border bg-bg/50 px-2 py-0.5 text-xs text-muted-fg transition-colors hover:bg-muted/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
                 title={
                   backups[0]
-                    ? `Open full diff vs ${new Date(
-                        backups[0].started_at,
-                      ).toLocaleString()}`
+                    ? `Open full diff vs ${formatLocal(backups[0].started_at)}`
                     : "Open full diff vs first backup"
                 }
               >

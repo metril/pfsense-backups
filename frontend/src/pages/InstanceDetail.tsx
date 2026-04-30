@@ -14,6 +14,7 @@ import {
   useSchedules,
   useTestConnection,
 } from "@/api/queries";
+import { formatLocal } from "@/lib/datetime";
 
 const STATUS_TONE: Record<string, string> = {
   success: "text-ok",
@@ -181,7 +182,7 @@ export function InstanceDetailPage() {
         <Stat
           label="Last success"
           value={
-            stats.lastSuccess ? new Date(stats.lastSuccess).toLocaleString() : "never"
+            stats.lastSuccess ? formatLocal(stats.lastSuccess) : "never"
           }
         />
       </div>
@@ -251,7 +252,7 @@ export function InstanceDetailPage() {
           <tbody>
             {(backups.data ?? []).slice(0, 15).map((b) => (
               <tr key={b.id} className="border-t border-border">
-                <td className="py-2 text-xs">{new Date(b.started_at).toLocaleString()}</td>
+                <td className="py-2 text-xs">{formatLocal(b.started_at)}</td>
                 <td className="py-2 font-mono text-xs">{b.filename}</td>
                 <td className="py-2">
                   <span className="inline-flex flex-wrap items-center gap-1">
@@ -341,7 +342,7 @@ export function InstanceDetailPage() {
           <tbody>
             {(jobs.data ?? []).slice(0, 10).map((j) => (
               <tr key={j.id} className="border-t border-border">
-                <td className="py-2 text-xs">{new Date(j.requested_at).toLocaleString()}</td>
+                <td className="py-2 text-xs">{formatLocal(j.requested_at)}</td>
                 <td className="py-2 text-xs">{j.kind}</td>
                 <td className="py-2 text-xs text-muted-fg">{j.requested_by ?? "—"}</td>
                 <td className={`py-2 text-xs font-medium ${STATUS_TONE[j.status] ?? ""}`}>

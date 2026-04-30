@@ -16,6 +16,7 @@ import {
   useTestConnection,
 } from "@/api/queries";
 import type { BackupOverridesRequest, Instance, ScheduleRow } from "@/api/types";
+import { formatLocal } from "@/lib/datetime";
 
 export function Dashboard() {
   const instances = useInstances();
@@ -174,7 +175,7 @@ function Tile({
         <Row label="Last backup">
           {lastBackup ? (
             <span className={lastBackup.success ? "text-ok" : "text-danger"}>
-              {new Date(lastBackup.started_at).toLocaleString()} ·{" "}
+              {formatLocal(lastBackup.started_at)} ·{" "}
               {Math.round(lastBackup.size_bytes / 1024)} KB
             </span>
           ) : (

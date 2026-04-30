@@ -35,6 +35,7 @@ import {
 import { api, triggerDownload } from "@/api/client";
 import type { BackupListItem } from "@/api/types";
 import { cn } from "@/lib/cn";
+import { formatLocal } from "@/lib/datetime";
 
 // Convert a <input type="date"> value (YYYY-MM-DD, local) into an ISO-8601
 // boundary suitable for the started_from / started_to query params. "from"
@@ -256,7 +257,7 @@ export function BackupsPage() {
                 </Link>
               </td>
               <td className="px-3 py-2 text-xs whitespace-nowrap">
-                {new Date(b.started_at).toLocaleString()}
+                {formatLocal(b.started_at)}
               </td>
               <td className="px-3 py-2 text-xs tabular-nums whitespace-nowrap">
                 {b.duration_seconds.toFixed(1)}s
