@@ -482,7 +482,7 @@ export function BlameHoverTooltip({
             }}
             className={cn(
               "max-w-sm rounded-md border border-border border-l-2 border-l-warn",
-              "bg-bg/95 px-3 py-2 text-sm text-fg shadow-xl backdrop-blur-sm",
+              "bg-bg px-3 py-2 text-sm text-fg shadow-xl",
               "animate-in fade-in-0",
             )}
           >

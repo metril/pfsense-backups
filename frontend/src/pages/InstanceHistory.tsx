@@ -491,7 +491,7 @@ export function InstanceHistoryPage() {
         <button
           type="button"
           onClick={() => openBlame(focusedAnchor)}
-          className="fixed bottom-4 left-4 z-30 inline-flex items-center gap-1.5 rounded-full border border-border bg-bg/95 px-3 py-1.5 text-xs font-medium text-muted-fg shadow-lg backdrop-blur transition-colors hover:bg-muted/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+          className="fixed bottom-4 left-4 z-30 inline-flex items-center gap-1.5 rounded-full border border-border bg-bg px-3 py-1.5 text-xs font-medium text-muted-fg shadow-lg transition-colors hover:bg-muted/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
           title={`Blame: ${focusedAnchor}`}
         >
           <Clock aria-hidden="true" className="h-3.5 w-3.5" />

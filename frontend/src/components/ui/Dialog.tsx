@@ -47,11 +47,16 @@ export function Dialog({
   return (
     <RD.Root open={open} onOpenChange={onOpenChange}>
       <RD.Portal>
-        <RD.Overlay className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm" />
+        {/* Plain scrim — no backdrop-filter. A full-viewport
+            ``backdrop-blur`` keeps the compositor busy re-evaluating the
+            blur every frame, which makes any animation inside the dialog
+            (e.g. the toggle switches) drop frames. A slightly darker
+            opaque scrim reads the same and costs nothing. */}
+        <RD.Overlay className="fixed inset-0 z-40 bg-black/60" />
         <RD.Content
           className={cn(
             "fixed left-1/2 top-1/2 z-50 w-full max-w-2xl -translate-x-1/2 -translate-y-1/2",
-            "rounded-lg border border-border bg-bg p-6 shadow-2xl",
+            "rounded-lg border border-border bg-bg p-6 shadow-xl",
             "max-h-[85vh] overflow-y-auto",
             className,
           )}
