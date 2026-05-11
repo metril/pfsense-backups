@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { Controller, useForm, useWatch } from "react-hook-form";
 import {
   Archive,
   ArrowDown,
@@ -19,10 +20,11 @@ import { Button } from "@/components/ui/Button";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { Dialog } from "@/components/ui/Dialog";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { Input } from "@/components/ui/Input";
 import { Label } from "@/components/ui/Label";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
+import { FormCheckbox, FormInput } from "@/components/ui/form";
+import { useDebouncedValue } from "@/lib/useDebouncedValue";
 import {
   useBackups,
   useDeleteBackup,
@@ -49,17 +51,35 @@ function boundary(d: string, end: boolean): string | undefined {
   return date.toISOString();
 }
 
+type BackupsFilterForm = {
+  instanceId: string;
+  fromDate: string;
+  toDate: string;
+};
+
 export function BackupsPage() {
-  const [instanceId, setInstanceId] = useState<number | undefined>(undefined);
-  const [fromDate, setFromDate] = useState<string>("");
-  const [toDate, setToDate] = useState<string>("");
+  const { control, setValue } = useForm<BackupsFilterForm>({
+    defaultValues: { instanceId: "", fromDate: "", toDate: "" },
+  });
+  // Per-field subscriptions: BackupsPage only re-renders when an
+  // individual filter value actually changes (not on every keystroke
+  // into an unrelated field).
+  const instanceIdStr = useWatch({ control, name: "instanceId" });
+  const fromDate = useWatch({ control, name: "fromDate" });
+  const toDate = useWatch({ control, name: "toDate" });
   const [sort, setSort] = useState<BackupSort>("started_at");
   const [order, setOrder] = useState<BackupOrder>("desc");
 
+  // Debounce the date inputs so each keystroke doesn't fire an API call.
+  const debouncedFromDate = useDebouncedValue(fromDate, 300);
+  const debouncedToDate = useDebouncedValue(toDate, 300);
+
+  const instanceId =
+    instanceIdStr === "" ? undefined : Number(instanceIdStr);
   const filter: BackupFilter = {
     instanceId,
-    startedFrom: boundary(fromDate, false),
-    startedTo: boundary(toDate, true),
+    startedFrom: boundary(debouncedFromDate, false),
+    startedTo: boundary(debouncedToDate, true),
     sort,
     order,
   };
@@ -142,42 +162,60 @@ export function BackupsPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Backups</h1>
         <div className="flex flex-wrap gap-2">
-          <select
-            value={instanceId ?? ""}
-            onChange={(e) => setInstanceId(e.target.value ? Number(e.target.value) : undefined)}
-            className="h-9 rounded-md border border-border bg-bg px-2 text-sm"
-            aria-label="Instance filter"
-          >
-            <option value="">All instances</option>
-            {instances.data?.map((i) => (
-              <option key={i.id} value={i.id}>
-                {i.name}
-              </option>
-            ))}
-          </select>
+          <Controller
+            control={control}
+            name="instanceId"
+            render={({ field }) => (
+              <select
+                value={field.value}
+                onChange={field.onChange}
+                className="h-9 rounded-md border border-border bg-bg px-2 text-sm"
+                aria-label="Instance filter"
+              >
+                <option value="">All instances</option>
+                {instances.data?.map((i) => (
+                  <option key={i.id} value={i.id}>
+                    {i.name}
+                  </option>
+                ))}
+              </select>
+            )}
+          />
           <div className="flex items-center gap-1 rounded-md border border-border bg-bg px-2 text-sm">
             <span className="text-muted-fg">from</span>
-            <input
-              type="date"
-              value={fromDate}
-              onChange={(e) => setFromDate(e.target.value)}
-              className="h-9 bg-transparent text-sm outline-none"
-              aria-label="Started from"
+            <Controller
+              control={control}
+              name="fromDate"
+              render={({ field }) => (
+                <input
+                  type="date"
+                  value={field.value}
+                  onChange={field.onChange}
+                  className="h-9 bg-transparent text-sm outline-none"
+                  aria-label="Started from"
+                />
+              )}
             />
             <span className="text-muted-fg">to</span>
-            <input
-              type="date"
-              value={toDate}
-              onChange={(e) => setToDate(e.target.value)}
-              className="h-9 bg-transparent text-sm outline-none"
-              aria-label="Started to"
+            <Controller
+              control={control}
+              name="toDate"
+              render={({ field }) => (
+                <input
+                  type="date"
+                  value={field.value}
+                  onChange={field.onChange}
+                  className="h-9 bg-transparent text-sm outline-none"
+                  aria-label="Started to"
+                />
+              )}
             />
             {hasDateFilter && (
               <button
                 type="button"
                 onClick={() => {
-                  setFromDate("");
-                  setToDate("");
+                  setValue("fromDate", "");
+                  setValue("toDate", "");
                 }}
                 className="rounded p-1 text-muted-fg hover:text-fg"
                 aria-label="Clear date filter"
@@ -345,8 +383,8 @@ export function BackupsPage() {
                   variant="secondary"
                   size="sm"
                   onClick={() => {
-                    setFromDate("");
-                    setToDate("");
+                    setValue("fromDate", "");
+                    setValue("toDate", "");
                   }}
                 >
                   Clear date filter
@@ -457,6 +495,12 @@ function ContentsBadges({ b }: { b: BackupListItem }) {
   );
 }
 
+type ReencryptForm = {
+  pw: string;
+  confirmPw: string;
+  alsoUpdate: boolean;
+};
+
 function ReencryptAllDialog({
   encryptedCount,
   instanceCount,
@@ -472,32 +516,34 @@ function ReencryptAllDialog({
     also_update_instance_passwords: boolean;
   }) => Promise<void>;
 }) {
-  const [pw, setPw] = useState("");
-  const [confirmPw, setConfirmPw] = useState("");
-  const [alsoUpdate, setAlsoUpdate] = useState(true);
+  const { control, handleSubmit, watch } = useForm<ReencryptForm>({
+    defaultValues: { pw: "", confirmPw: "", alsoUpdate: true },
+  });
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  const pw = watch("pw");
+  const confirmPw = watch("confirmPw");
   const mismatch = pw !== confirmPw && confirmPw.length > 0;
   const canSubmit =
     pw.length > 0 && !mismatch && pw === confirmPw && !submitting;
 
-  async function submit() {
+  const onSubmit = handleSubmit(async (data) => {
     if (!canSubmit) return;
     setErr(null);
     setSubmitting(true);
     try {
       await onConfirm({
-        new_password: pw,
-        confirm_password: confirmPw,
-        also_update_instance_passwords: alsoUpdate,
+        new_password: data.pw,
+        confirm_password: data.confirmPw,
+        also_update_instance_passwords: data.alsoUpdate,
       });
     } catch (e) {
       setErr(String(e));
     } finally {
       setSubmitting(false);
     }
-  }
+  });
 
   return (
     <Dialog
@@ -506,59 +552,43 @@ function ReencryptAllDialog({
       title="Re-encrypt all backups"
       tone="warn"
     >
-      <div className="space-y-3">
-        <p className="text-sm text-muted-fg">
-          {encryptedCount === 0
-            ? "No encrypted backups are visible in the current filter, but the worker re-encrypts every encrypted row it finds across the entire fleet."
-            : `${encryptedCount} visible encrypted backup(s) across ${instanceCount} instance(s) will be re-encrypted with the new password.`}
-          {" "}
-          The old password will no longer decrypt those files. This cannot be undone by the app.
-        </p>
-        <div>
-          <Label>New encryption password</Label>
-          <Input
-            type="password"
-            value={pw}
-            onChange={(e) => setPw(e.target.value)}
-            autoFocus
+      <form onSubmit={onSubmit} noValidate>
+        <div className="space-y-3">
+          <p className="text-sm text-muted-fg">
+            {encryptedCount === 0
+              ? "No encrypted backups are visible in the current filter, but the worker re-encrypts every encrypted row it finds across the entire fleet."
+              : `${encryptedCount} visible encrypted backup(s) across ${instanceCount} instance(s) will be re-encrypted with the new password.`}
+            {" "}
+            The old password will no longer decrypt those files. This cannot be undone by the app.
+          </p>
+          <div>
+            <Label>New encryption password</Label>
+            <FormInput control={control} name="pw" type="password" />
+          </div>
+          <div>
+            <Label>Confirm password</Label>
+            <FormInput control={control} name="confirmPw" type="password" />
+            {mismatch && (
+              <p className="mt-1 text-xs text-danger">Passwords don't match.</p>
+            )}
+          </div>
+          <FormCheckbox
+            control={control}
+            name="alsoUpdate"
+            label="Also update every instance's stored password to this one."
+            className="items-start"
           />
-        </div>
-        <div>
-          <Label>Confirm password</Label>
-          <Input
-            type="password"
-            value={confirmPw}
-            onChange={(e) => setConfirmPw(e.target.value)}
-          />
-          {mismatch && (
-            <p className="mt-1 text-xs text-danger">Passwords don't match.</p>
+          {err && (
+            <p className="text-xs text-danger">{err}</p>
           )}
         </div>
-        <label className="flex items-start gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={alsoUpdate}
-            onChange={(e) => setAlsoUpdate(e.target.checked)}
-            className="mt-0.5"
-          />
-          <span>
-            Also update every instance's stored password to this one.
-            <span className="block text-xs text-muted-fg">
-              Recommended — otherwise future backups will encrypt with the old
-              password while the historical files use the new one.
-            </span>
-          </span>
-        </label>
-        {err && (
-          <p className="text-xs text-danger">{err}</p>
-        )}
-      </div>
-      <div className="mt-6 flex justify-end gap-2">
-        <Button variant="secondary" onClick={onClose}>Cancel</Button>
-        <Button onClick={submit} disabled={!canSubmit}>
-          {submitting ? "Starting…" : "Re-encrypt all"}
-        </Button>
-      </div>
+        <div className="mt-6 flex justify-end gap-2">
+          <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button type="submit" disabled={!canSubmit}>
+            {submitting ? "Starting…" : "Re-encrypt all"}
+          </Button>
+        </div>
+      </form>
     </Dialog>
   );
 }

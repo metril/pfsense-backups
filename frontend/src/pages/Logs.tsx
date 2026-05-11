@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Controller, useForm, useWatch } from "react-hook-form";
 import { Pause, Play, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
-import { Input } from "@/components/ui/Input";
+import { FormInput } from "@/components/ui/form";
 import { cn } from "@/lib/cn";
 
 const MAX_LINES = 1000;
@@ -53,13 +54,30 @@ const SERVICE_TONE: Record<Service, string> = {
   worker: "text-ok",
 };
 
+type LogsFilterForm = {
+  serviceFilter: Service | "all";
+  minLevel: Level;
+  loggerFilter: string;
+  search: string;
+};
+
+const LOGS_FILTER_DEFAULTS: LogsFilterForm = {
+  serviceFilter: "all",
+  minLevel: "DEBUG",
+  loggerFilter: "",
+  search: "",
+};
+
 export function LogsPage() {
   const [entries, setEntries] = useState<LogEntry[]>([]);
   const [connected, setConnected] = useState(false);
-  const [serviceFilter, setServiceFilter] = useState<Service | "all">("all");
-  const [minLevel, setMinLevel] = useState<Level>("DEBUG");
-  const [loggerFilter, setLoggerFilter] = useState<string>("");
-  const [search, setSearch] = useState("");
+  const { control } = useForm<LogsFilterForm>({
+    defaultValues: LOGS_FILTER_DEFAULTS,
+  });
+  const serviceFilter = useWatch({ control, name: "serviceFilter" });
+  const minLevel = useWatch({ control, name: "minLevel" });
+  const loggerFilter = useWatch({ control, name: "loggerFilter" });
+  const search = useWatch({ control, name: "search" });
   const [autoScroll, setAutoScroll] = useState(true);
 
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -168,47 +186,65 @@ export function LogsPage() {
       </div>
 
       <div className="mt-4 grid grid-cols-[auto_auto_auto_1fr_auto_auto] gap-2">
-        <select
-          value={serviceFilter}
-          onChange={(e) => setServiceFilter(e.target.value as Service | "all")}
-          className="h-9 rounded-md border border-border bg-bg px-2 text-sm"
-          aria-label="Service filter"
-        >
-          <option value="all">All services</option>
-          <option value="web">web</option>
-          <option value="worker">worker</option>
-        </select>
+        <Controller
+          control={control}
+          name="serviceFilter"
+          render={({ field }) => (
+            <select
+              value={field.value}
+              onChange={field.onChange}
+              className="h-9 rounded-md border border-border bg-bg px-2 text-sm"
+              aria-label="Service filter"
+            >
+              <option value="all">All services</option>
+              <option value="web">web</option>
+              <option value="worker">worker</option>
+            </select>
+          )}
+        />
 
-        <select
-          value={minLevel}
-          onChange={(e) => setMinLevel(e.target.value as Level)}
-          className="h-9 rounded-md border border-border bg-bg px-2 text-sm"
-          aria-label="Minimum level"
-        >
-          <option value="DEBUG">DEBUG+</option>
-          <option value="INFO">INFO+</option>
-          <option value="WARNING">WARNING+</option>
-          <option value="ERROR">ERROR+</option>
-          <option value="CRITICAL">CRITICAL only</option>
-        </select>
+        <Controller
+          control={control}
+          name="minLevel"
+          render={({ field }) => (
+            <select
+              value={field.value}
+              onChange={field.onChange}
+              className="h-9 rounded-md border border-border bg-bg px-2 text-sm"
+              aria-label="Minimum level"
+            >
+              <option value="DEBUG">DEBUG+</option>
+              <option value="INFO">INFO+</option>
+              <option value="WARNING">WARNING+</option>
+              <option value="ERROR">ERROR+</option>
+              <option value="CRITICAL">CRITICAL only</option>
+            </select>
+          )}
+        />
 
-        <select
-          value={loggerFilter}
-          onChange={(e) => setLoggerFilter(e.target.value)}
-          className="h-9 rounded-md border border-border bg-bg px-2 text-sm max-w-56"
-          aria-label="Logger filter"
-        >
-          <option value="">All loggers</option>
-          {loggerNames.map((n) => (
-            <option key={n} value={n}>
-              {n}
-            </option>
-          ))}
-        </select>
+        <Controller
+          control={control}
+          name="loggerFilter"
+          render={({ field }) => (
+            <select
+              value={field.value}
+              onChange={field.onChange}
+              className="h-9 rounded-md border border-border bg-bg px-2 text-sm max-w-56"
+              aria-label="Logger filter"
+            >
+              <option value="">All loggers</option>
+              {loggerNames.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+          )}
+        />
 
-        <Input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
+        <FormInput
+          control={control}
+          name="search"
           placeholder="Search message…"
           aria-label="Search message text"
         />

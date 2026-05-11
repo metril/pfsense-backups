@@ -13,13 +13,13 @@
  */
 
 import { useMemo, useState } from "react";
+import { useForm, useWatch } from "react-hook-form";
 import { Link, useParams } from "react-router-dom";
 import { ArrowLeft, ChevronDown, ChevronUp, Clock, History } from "lucide-react";
 import { Alert } from "@/components/ui/Alert";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import { Input } from "@/components/ui/Input";
-import { Select } from "@/components/ui/Select";
+import { FormInput, FormSelect } from "@/components/ui/form";
 import {
   useBackups,
   useCumulativeChanges,
@@ -28,6 +28,7 @@ import {
 } from "@/api/queries";
 import { AnchorHistoryDrawer } from "@/components/xref/AnchorHistoryDrawer";
 import { formatLocal } from "@/lib/datetime";
+import { useDebouncedValue } from "@/lib/useDebouncedValue";
 import { formatRelative } from "@/lib/formatRelative";
 
 // Radix Select refuses empty-string values (v1.x emits a console
@@ -37,6 +38,14 @@ import { formatRelative } from "@/lib/formatRelative";
 const SENTINEL_ALL = "__all__";
 const SENTINEL_FIRST = "__first__";
 const SENTINEL_LATEST = "__latest__";
+
+type ChangesFilterForm = {
+  sinceId: string;
+  untilId: string;
+  sectionFilter: string;
+  kindFilter: string;
+  textFilter: string;
+};
 
 function kindTone(kind: CumulativeChangeRow["latest_kind"]) {
   switch (kind) {
@@ -97,8 +106,22 @@ export function InstanceChangesPage() {
     [backupsQuery.data],
   );
 
-  const [sinceId, setSinceId] = useState<string>(SENTINEL_FIRST);
-  const [untilId, setUntilId] = useState<string>(SENTINEL_LATEST);
+  const { control } = useForm<ChangesFilterForm>({
+    defaultValues: {
+      sinceId: SENTINEL_FIRST,
+      untilId: SENTINEL_LATEST,
+      sectionFilter: SENTINEL_ALL,
+      kindFilter: SENTINEL_ALL,
+      textFilter: "",
+    },
+  });
+  const sinceId = useWatch({ control, name: "sinceId" });
+  const untilId = useWatch({ control, name: "untilId" });
+  const sectionFilter = useWatch({ control, name: "sectionFilter" });
+  const kindFilter = useWatch({ control, name: "kindFilter" });
+  const textFilterRaw = useWatch({ control, name: "textFilter" });
+  const textFilter = useDebouncedValue(textFilterRaw, 200);
+
   const sinceBackupId =
     sinceId === SENTINEL_FIRST || !sinceId ? null : Number(sinceId);
   const untilBackupId =
@@ -110,11 +133,6 @@ export function InstanceChangesPage() {
     untilBackupId,
   );
 
-  // Client-side filters. Selects use the SENTINEL_ALL sentinel
-  // rather than empty string per Radix requirements.
-  const [sectionFilter, setSectionFilter] = useState<string>(SENTINEL_ALL);
-  const [kindFilter, setKindFilter] = useState<string>(SENTINEL_ALL);
-  const [textFilter, setTextFilter] = useState<string>("");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [openAnchor, setOpenAnchor] = useState<string | null>(null);
 
@@ -196,9 +214,9 @@ export function InstanceChangesPage() {
       <div className="flex flex-wrap items-end gap-3 border-b border-border px-4 py-3">
         <div className="flex min-w-[220px] flex-col gap-1">
           <span className="text-xs uppercase text-muted-fg">Since</span>
-          <Select
-            value={sinceId}
-            onChange={setSinceId}
+          <FormSelect
+            control={control}
+            name="sinceId"
             options={[
               { value: SENTINEL_FIRST, label: "First retained backup" },
               ...backupOptions,
@@ -208,9 +226,9 @@ export function InstanceChangesPage() {
         </div>
         <div className="flex min-w-[220px] flex-col gap-1">
           <span className="text-xs uppercase text-muted-fg">Until</span>
-          <Select
-            value={untilId}
-            onChange={setUntilId}
+          <FormSelect
+            control={control}
+            name="untilId"
             options={[
               { value: SENTINEL_LATEST, label: "Latest backup" },
               ...backupOptions,
@@ -220,9 +238,9 @@ export function InstanceChangesPage() {
         </div>
         <div className="flex min-w-[180px] flex-col gap-1">
           <span className="text-xs uppercase text-muted-fg">Section</span>
-          <Select
-            value={sectionFilter}
-            onChange={setSectionFilter}
+          <FormSelect
+            control={control}
+            name="sectionFilter"
             options={[
               { value: SENTINEL_ALL, label: "All sections" },
               ...sections.map((s) => ({ value: s, label: s })),
@@ -232,9 +250,9 @@ export function InstanceChangesPage() {
         </div>
         <div className="flex min-w-[140px] flex-col gap-1">
           <span className="text-xs uppercase text-muted-fg">Kind</span>
-          <Select
-            value={kindFilter}
-            onChange={setKindFilter}
+          <FormSelect
+            control={control}
+            name="kindFilter"
             options={[
               { value: SENTINEL_ALL, label: "Any kind" },
               { value: "added", label: "added" },
@@ -249,12 +267,11 @@ export function InstanceChangesPage() {
           <label className="text-xs uppercase text-muted-fg" htmlFor="filter">
             Filter
           </label>
-          <Input
+          <FormInput
+            control={control}
+            name="textFilter"
             id="filter"
-            type="text"
             placeholder="Search label or anchor id…"
-            value={textFilter}
-            onChange={(e) => setTextFilter(e.target.value)}
           />
         </div>
       </div>

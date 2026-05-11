@@ -1,5 +1,12 @@
 import { useMemo, useState } from "react";
 import {
+  Controller,
+  useForm,
+  useWatch,
+  type Control,
+  type UseFormSetValue,
+} from "react-hook-form";
+import {
   Bell,
   ChevronDown,
   Eye,
@@ -28,6 +35,12 @@ import {
 import { Input } from "@/components/ui/Input";
 import { Label } from "@/components/ui/Label";
 import { Select } from "@/components/ui/Select";
+import {
+  FormCheckbox,
+  FormInput,
+  FormSelect,
+  FormTextarea,
+} from "@/components/ui/form";
 import {
   useCreateNotification,
   useDeleteNotification,
@@ -304,6 +317,14 @@ function KindPickerDialog({
 // Editor (per-kind form + common footer)
 // ------------------------------------------------------------------ //
 
+// The form shape extends Draft with two raw-string buffers for the
+// JSON headers/payload textareas. They're parsed back into structured
+// fields at submit time.
+type FormShape = Draft & {
+  _headersStr: string;
+  _payloadStr: string;
+};
+
 function EditorDialog({
   draft,
   instances,
@@ -315,27 +336,40 @@ function EditorDialog({
   onClose: () => void;
   onSave: (d: Draft) => Promise<void>;
 }) {
-  const [d, setD] = useState(draft);
-  const [headersStr, setHeadersStr] = useState(
-    d.headers ? JSON.stringify(d.headers, null, 2) : "",
-  );
-  const [payloadStr, setPayloadStr] = useState(
-    d.payload_template ? JSON.stringify(d.payload_template, null, 2) : "",
-  );
+  const { control, handleSubmit, setValue, watch } = useForm<FormShape>({
+    defaultValues: {
+      ...draft,
+      _headersStr: draft.headers ? JSON.stringify(draft.headers, null, 2) : "",
+      _payloadStr: draft.payload_template
+        ? JSON.stringify(draft.payload_template, null, 2)
+        : "",
+    },
+  });
+
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const meta = KIND_META[d.kind] ?? KIND_META.webhook;
+  // Need ``kind`` and ``name`` live for the dialog header / conditional
+  // per-kind blocks. ``watch`` re-renders only this component when the
+  // watched field changes; sibling Controllers stay still.
+  const kind = watch("kind");
+  const nameLive = watch("name");
+  const meta = KIND_META[kind] ?? KIND_META.webhook;
 
-  async function save() {
+  const onSubmit = handleSubmit(async (data) => {
     setError(null);
     try {
+      const headersStr = data._headersStr.trim();
+      const payloadStr = data._payloadStr.trim();
       const final: Draft = {
-        ...d,
-        headers: headersStr.trim() ? JSON.parse(headersStr) : null,
-        payload_template: payloadStr.trim() ? JSON.parse(payloadStr) : null,
+        ...data,
+        headers: headersStr ? JSON.parse(headersStr) : null,
+        payload_template: payloadStr ? JSON.parse(payloadStr) : null,
       };
+      // Strip form-only fields before sending to the server.
+      delete (final as Partial<FormShape>)._headersStr;
+      delete (final as Partial<FormShape>)._payloadStr;
       setSaving(true);
       await onSave(final);
     } catch (e) {
@@ -343,151 +377,142 @@ function EditorDialog({
     } finally {
       setSaving(false);
     }
-  }
+  });
 
   return (
     <Dialog
       open
       onOpenChange={(o) => !o && onClose()}
-      title={d.id === undefined ? `Add ${meta.label}` : `Edit ${d.name}`}
+      title={draft.id === undefined ? `Add ${meta.label}` : `Edit ${nameLive}`}
     >
-      <div className="space-y-4">
-        <Field label="Name">
-          <Input value={d.name} onChange={(e) => setD({ ...d, name: e.target.value })} />
-        </Field>
-
-        {d.kind === "discord" && <DiscordFields d={d} setD={setD} />}
-        {d.kind === "home_assistant" && <HaFields d={d} setD={setD} />}
-        {d.kind === "ntfy" && <NtfyFields d={d} setD={setD} />}
-        {d.kind === "healthchecks" && <HcFields d={d} setD={setD} />}
-        {d.kind === "webhook" && <WebhookFields d={d} setD={setD} />}
-
-        <Field label="Message format">
-          <Input
-            value={d.message_format}
-            onChange={(e) => setD({ ...d, message_format: e.target.value })}
-          />
-          <p className="mt-1 text-xs text-muted-fg">
-            Available placeholders: <code>{"{status}"}</code> and{" "}
-            <code>{"{details}"}</code>.
-          </p>
-        </Field>
-
-        {/* Trigger (hidden for Healthchecks — locked to "always") */}
-        {d.kind !== "healthchecks" && (
-          <Field label="Trigger">
-            <Select
-              value={d.trigger}
-              onChange={(v) => setD({ ...d, trigger: v as Draft["trigger"] })}
-              options={[
-                { value: "always", label: "always" },
-                { value: "success", label: "success only" },
-                { value: "failure", label: "failure only" },
-              ]}
-              aria-label="Notification trigger"
-            />
+      <form onSubmit={onSubmit} noValidate>
+        <div className="space-y-4">
+          <Field label="Name">
+            <FormInput control={control} name="name" />
           </Field>
-        )}
 
-        <InstanceScopeField
-          value={d.instance_ids}
-          instances={instances}
-          onChange={(v) => setD({ ...d, instance_ids: v })}
-        />
-
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={d.enabled}
-            onChange={(e) => setD({ ...d, enabled: e.target.checked })}
-          />
-          enabled
-        </label>
-
-        {/* Advanced disclosure */}
-        <div className="rounded-md border border-border">
-          <button
-            type="button"
-            onClick={() => setAdvancedOpen((o) => !o)}
-            className="flex w-full items-center justify-between px-3 py-2 text-sm text-muted-fg hover:text-fg"
-          >
-            <span>Advanced</span>
-            <ChevronDown
-              className={cn(
-                "h-4 w-4 transition-transform",
-                advancedOpen && "rotate-180",
-              )}
-            />
-          </button>
-          {advancedOpen && (
-            <div className="space-y-3 border-t border-border p-3">
-              <Field label="Timeout (seconds)">
-                <Input
-                  type="number"
-                  min={1}
-                  value={d.timeout_seconds}
-                  onChange={(e) => {
-                    const v = e.target.valueAsNumber;
-                    if (Number.isFinite(v) && v > 0) {
-                      setD({ ...d, timeout_seconds: v });
-                    }
-                  }}
-                />
-              </Field>
-              {d.kind !== "healthchecks" && (
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={d.include_instance_details}
-                    onChange={(e) =>
-                      setD({ ...d, include_instance_details: e.target.checked })
-                    }
-                  />
-                  include failed-instance names in message
-                </label>
-              )}
-              {/* Headers/payload overrides apply to any kind but are
-                  primarily meaningful on the Custom webhook card. */}
-              <Field label="Headers (JSON, optional)">
-                <textarea
-                  value={headersStr}
-                  onChange={(e) => setHeadersStr(e.target.value)}
-                  rows={3}
-                  placeholder='{"Authorization": "Bearer ${TOKEN}"}'
-                  className="w-full rounded-md border border-border bg-bg p-2 font-mono text-xs"
-                />
-                <p className="mt-1 text-xs text-muted-fg">
-                  For Custom webhook only. <code>${"{VAR}"}</code> expands
-                  from the container's environment.
-                </p>
-              </Field>
-              <Field label="Payload template (JSON, optional)">
-                <textarea
-                  value={payloadStr}
-                  onChange={(e) => setPayloadStr(e.target.value)}
-                  rows={4}
-                  placeholder='{"text": "{message}"}'
-                  className="w-full rounded-md border border-border bg-bg p-2 font-mono text-xs"
-                />
-                <p className="mt-1 text-xs text-muted-fg">
-                  For Custom webhook only. First-class kinds ignore this.
-                </p>
-              </Field>
-            </div>
+          {kind === "discord" && <DiscordFields control={control} />}
+          {kind === "home_assistant" && (
+            <HaFields control={control} setValue={setValue} />
           )}
+          {kind === "ntfy" && <NtfyFields control={control} setValue={setValue} />}
+          {kind === "healthchecks" && (
+            <HcFields control={control} setValue={setValue} />
+          )}
+          {kind === "webhook" && <WebhookFields control={control} />}
+
+          <Field label="Message format">
+            <FormInput control={control} name="message_format" />
+            <p className="mt-1 text-xs text-muted-fg">
+              Available placeholders: <code>{"{status}"}</code> and{" "}
+              <code>{"{details}"}</code>.
+            </p>
+          </Field>
+
+          {/* Trigger (hidden for Healthchecks — locked to "always") */}
+          {kind !== "healthchecks" && (
+            <Field label="Trigger">
+              <FormSelect
+                control={control}
+                name="trigger"
+                options={[
+                  { value: "always", label: "always" },
+                  { value: "success", label: "success only" },
+                  { value: "failure", label: "failure only" },
+                ]}
+                aria-label="Notification trigger"
+              />
+            </Field>
+          )}
+
+          <Controller
+            control={control}
+            name="instance_ids"
+            render={({ field }) => (
+              <InstanceScopeField
+                value={field.value}
+                instances={instances}
+                onChange={field.onChange}
+              />
+            )}
+          />
+
+          <FormCheckbox control={control} name="enabled" label="enabled" />
+
+          {/* Advanced disclosure */}
+          <div className="rounded-md border border-border">
+            <button
+              type="button"
+              onClick={() => setAdvancedOpen((o) => !o)}
+              className="flex w-full items-center justify-between px-3 py-2 text-sm text-muted-fg hover:text-fg"
+            >
+              <span>Advanced</span>
+              <ChevronDown
+                className={cn(
+                  "h-4 w-4 transition-transform",
+                  advancedOpen && "rotate-180",
+                )}
+              />
+            </button>
+            {advancedOpen && (
+              <div className="space-y-3 border-t border-border p-3">
+                <Field label="Timeout (seconds)">
+                  <FormInput
+                    control={control}
+                    name="timeout_seconds"
+                    type="number"
+                    min={1}
+                    numericFallback={10}
+                  />
+                </Field>
+                {kind !== "healthchecks" && (
+                  <FormCheckbox
+                    control={control}
+                    name="include_instance_details"
+                    label="include failed-instance names in message"
+                  />
+                )}
+                {/* Headers/payload overrides apply to any kind but are
+                    primarily meaningful on the Custom webhook card. */}
+                <Field label="Headers (JSON, optional)">
+                  <FormTextarea
+                    control={control}
+                    name="_headersStr"
+                    rows={3}
+                    placeholder='{"Authorization": "Bearer ${TOKEN}"}'
+                  />
+                  <p className="mt-1 text-xs text-muted-fg">
+                    For Custom webhook only. <code>${"{VAR}"}</code> expands
+                    from the container's environment.
+                  </p>
+                </Field>
+                <Field label="Payload template (JSON, optional)">
+                  <FormTextarea
+                    control={control}
+                    name="_payloadStr"
+                    rows={4}
+                    placeholder='{"text": "{message}"}'
+                  />
+                  <p className="mt-1 text-xs text-muted-fg">
+                    For Custom webhook only. First-class kinds ignore this.
+                  </p>
+                </Field>
+              </div>
+            )}
+          </div>
+
+          {error && <p className="text-sm text-danger">{error}</p>}
         </div>
 
-        {error && <p className="text-sm text-danger">{error}</p>}
-      </div>
-
-      <div className="mt-6 flex justify-end gap-2">
-        <Button variant="secondary" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button onClick={save} disabled={saving}>
-          {saving ? "Saving…" : "Save"}
-        </Button>
-      </div>
+        <div className="mt-6 flex justify-end gap-2">
+          <Button type="button" variant="secondary" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={saving}>
+            {saving ? "Saving…" : "Save"}
+          </Button>
+        </div>
+      </form>
     </Dialog>
   );
 }
@@ -496,23 +521,17 @@ function EditorDialog({
 // Per-kind field blocks
 // ------------------------------------------------------------------ //
 
-function getConfig<T extends Record<string, unknown>>(d: Draft): T {
-  return (d.config ?? {}) as T;
-}
+// `config` is a free-form Record<string, unknown> on the wire. The
+// per-kind helpers below treat it as a typed object via useWatch +
+// setValue so individual fields update in isolation.
 
-function DiscordFields({
-  d,
-  setD,
-}: {
-  d: Draft;
-  setD: (d: Draft) => void;
-}) {
+function DiscordFields({ control }: { control: Control<FormShape> }) {
   return (
     <Field label="Webhook URL">
-      <Input
-        value={d.url}
+      <FormInput
+        control={control}
+        name="url"
         placeholder="https://discord.com/api/webhooks/..."
-        onChange={(e) => setD({ ...d, url: e.target.value })}
       />
     </Field>
   );
@@ -527,24 +546,32 @@ type HaConfig = {
   title?: string;
 };
 
-function HaFields({ d, setD }: { d: Draft; setD: (d: Draft) => void }) {
-  const c = getConfig<HaConfig>(d);
-  const mode = c.mode ?? "notify";
+function HaFields({
+  control,
+  setValue,
+}: {
+  control: Control<FormShape>;
+  setValue: UseFormSetValue<FormShape>;
+}) {
+  const config = (useWatch({ control, name: "config" }) ?? {}) as HaConfig;
+  const mode = config.mode ?? "notify";
   const setCfg = (patch: Partial<HaConfig>) =>
-    setD({ ...d, config: { ...c, ...patch } as Record<string, unknown> });
+    setValue("config", { ...config, ...patch } as Record<string, unknown>, {
+      shouldDirty: true,
+    });
 
   return (
     <>
       <Field label="Home Assistant base URL">
         <Input
-          value={c.base_url ?? ""}
+          value={config.base_url ?? ""}
           placeholder="https://homeassistant.local:8123"
           onChange={(e) => setCfg({ base_url: e.target.value })}
         />
       </Field>
       <Field label="Long-lived access token">
         <SecretInput
-          value={c.access_token ?? ""}
+          value={config.access_token ?? ""}
           onChange={(v) => setCfg({ access_token: v })}
           placeholder="eyJhbGciOi..."
         />
@@ -571,7 +598,7 @@ function HaFields({ d, setD }: { d: Draft; setD: (d: Draft) => void }) {
       {mode === "notify" ? (
         <Field label="Notify service">
           <Input
-            value={c.service ?? ""}
+            value={config.service ?? ""}
             placeholder="notify.mobile_app_pixel"
             onChange={(e) => setCfg({ service: e.target.value })}
           />
@@ -582,7 +609,7 @@ function HaFields({ d, setD }: { d: Draft; setD: (d: Draft) => void }) {
       ) : (
         <Field label="Webhook ID">
           <Input
-            value={c.webhook_id ?? ""}
+            value={config.webhook_id ?? ""}
             placeholder="pfsense-backup-event"
             onChange={(e) => setCfg({ webhook_id: e.target.value })}
           />
@@ -590,7 +617,7 @@ function HaFields({ d, setD }: { d: Draft; setD: (d: Draft) => void }) {
       )}
       <Field label="Title (optional)">
         <Input
-          value={c.title ?? ""}
+          value={config.title ?? ""}
           placeholder="pfSense Backup"
           onChange={(e) => setCfg({ title: e.target.value })}
         />
@@ -607,37 +634,45 @@ type NtfyConfig = {
   tags?: string[];
 };
 
-function NtfyFields({ d, setD }: { d: Draft; setD: (d: Draft) => void }) {
-  const c = getConfig<NtfyConfig>(d);
+function NtfyFields({
+  control,
+  setValue,
+}: {
+  control: Control<FormShape>;
+  setValue: UseFormSetValue<FormShape>;
+}) {
+  const config = (useWatch({ control, name: "config" }) ?? {}) as NtfyConfig;
   const setCfg = (patch: Partial<NtfyConfig>) =>
-    setD({ ...d, config: { ...c, ...patch } as Record<string, unknown> });
-  const tagsStr = (c.tags ?? []).join(", ");
+    setValue("config", { ...config, ...patch } as Record<string, unknown>, {
+      shouldDirty: true,
+    });
+  const tagsStr = (config.tags ?? []).join(", ");
   return (
     <>
       <Field label="Server URL">
         <Input
-          value={c.server_url ?? "https://ntfy.sh"}
+          value={config.server_url ?? "https://ntfy.sh"}
           placeholder="https://ntfy.sh"
           onChange={(e) => setCfg({ server_url: e.target.value })}
         />
       </Field>
       <Field label="Topic">
         <Input
-          value={c.topic ?? ""}
+          value={config.topic ?? ""}
           placeholder="my-pfsense-alerts"
           onChange={(e) => setCfg({ topic: e.target.value })}
         />
       </Field>
       <Field label="Auth token (optional)">
         <SecretInput
-          value={c.auth_token ?? ""}
+          value={config.auth_token ?? ""}
           onChange={(v) => setCfg({ auth_token: v })}
           placeholder="tk_..."
         />
       </Field>
       <Field label="Priority">
         <Select
-          value={String(c.priority ?? 3)}
+          value={String(config.priority ?? 3)}
           onChange={(v) => setCfg({ priority: Number(v) })}
           options={[
             { value: "1", label: "1 — min" },
@@ -676,14 +711,23 @@ type HcConfig = {
   grace?: number;
 };
 
-function HcFields({ d, setD }: { d: Draft; setD: (d: Draft) => void }) {
-  const c = getConfig<HcConfig>(d);
-  const provisioned = !!c.provisioned;
+function HcFields({
+  control,
+  setValue,
+}: {
+  control: Control<FormShape>;
+  setValue: UseFormSetValue<FormShape>;
+}) {
+  const config = (useWatch({ control, name: "config" }) ?? {}) as HcConfig;
+  const provisioned = !!config.provisioned;
   const setCfg = (patch: Partial<HcConfig> | null) =>
-    setD({
-      ...d,
-      config: patch === null ? null : ({ ...c, ...patch } as Record<string, unknown>),
-    });
+    setValue(
+      "config",
+      patch === null
+        ? null
+        : ({ ...config, ...patch } as Record<string, unknown>),
+      { shouldDirty: true },
+    );
 
   return (
     <>
@@ -700,10 +744,10 @@ function HcFields({ d, setD }: { d: Draft; setD: (d: Draft) => void }) {
             onClick={() =>
               setCfg({
                 provisioned: true,
-                server_url: c.server_url ?? "https://healthchecks.io",
-                api_key: c.api_key ?? "",
-                expected_timeout: c.expected_timeout ?? 86400,
-                grace: c.grace ?? 3600,
+                server_url: config.server_url ?? "https://healthchecks.io",
+                api_key: config.api_key ?? "",
+                expected_timeout: config.expected_timeout ?? 86400,
+                grace: config.grace ?? 3600,
               })
             }
             label="Auto-provision"
@@ -714,10 +758,10 @@ function HcFields({ d, setD }: { d: Draft; setD: (d: Draft) => void }) {
 
       {!provisioned ? (
         <Field label="Ping URL">
-          <Input
-            value={d.url}
+          <FormInput
+            control={control}
+            name="url"
             placeholder="https://hc-ping.com/<uuid> or https://checks.example.com/ping/<slug>"
-            onChange={(e) => setD({ ...d, url: e.target.value })}
           />
           <p className="mt-1 text-xs text-muted-fg">
             Success pings the base URL; failure pings <code>/fail</code>;
@@ -729,14 +773,14 @@ function HcFields({ d, setD }: { d: Draft; setD: (d: Draft) => void }) {
         <>
           <Field label="Healthchecks server URL">
             <Input
-              value={c.server_url ?? ""}
+              value={config.server_url ?? ""}
               placeholder="https://healthchecks.io"
               onChange={(e) => setCfg({ server_url: e.target.value })}
             />
           </Field>
           <Field label="Project API key (write permission)">
             <SecretInput
-              value={c.api_key ?? ""}
+              value={config.api_key ?? ""}
               onChange={(v) => setCfg({ api_key: v })}
               placeholder="..."
             />
@@ -750,7 +794,7 @@ function HcFields({ d, setD }: { d: Draft; setD: (d: Draft) => void }) {
               <Input
                 type="number"
                 min={1}
-                value={c.expected_timeout ?? 86400}
+                value={config.expected_timeout ?? 86400}
                 onChange={(e) => {
                   const v = e.target.valueAsNumber;
                   if (Number.isFinite(v) && v > 0) setCfg({ expected_timeout: v });
@@ -762,7 +806,7 @@ function HcFields({ d, setD }: { d: Draft; setD: (d: Draft) => void }) {
               <Input
                 type="number"
                 min={1}
-                value={c.grace ?? 3600}
+                value={config.grace ?? 3600}
                 onChange={(e) => {
                   const v = e.target.valueAsNumber;
                   if (Number.isFinite(v) && v > 0) setCfg({ grace: v });
@@ -771,9 +815,9 @@ function HcFields({ d, setD }: { d: Draft; setD: (d: Draft) => void }) {
               <p className="mt-1 text-xs text-muted-fg">Default: 3600 (1h).</p>
             </Field>
           </div>
-          {c.uuid && (
+          {config.uuid && (
             <div className="rounded-md border border-border bg-muted/10 p-2 text-xs text-muted-fg">
-              Check created — uuid <code>{c.uuid}</code>
+              Check created — uuid <code>{config.uuid}</code>
             </div>
           )}
         </>
@@ -782,13 +826,13 @@ function HcFields({ d, setD }: { d: Draft; setD: (d: Draft) => void }) {
   );
 }
 
-function WebhookFields({ d, setD }: { d: Draft; setD: (d: Draft) => void }) {
+function WebhookFields({ control }: { control: Control<FormShape> }) {
   return (
     <Field label="URL">
-      <Input
-        value={d.url}
+      <FormInput
+        control={control}
+        name="url"
         placeholder="https://example.com/webhook"
-        onChange={(e) => setD({ ...d, url: e.target.value })}
       />
       <p className="mt-1 text-xs text-muted-fg">
         Headers and payload template live under Advanced below.

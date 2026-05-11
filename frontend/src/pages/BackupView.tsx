@@ -1,4 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
+import { useForm } from "react-hook-form";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ArrowLeft,
@@ -14,8 +15,8 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import { Input } from "@/components/ui/Input";
 import { Tabs } from "@/components/ui/Tabs";
+import { FormInput, FormTextarea } from "@/components/ui/form";
 import { useToast } from "@/components/ui/Toast";
 import {
   useAnchorBlameSummary,
@@ -85,8 +86,9 @@ export function BackupViewPage() {
   const updateBackup = useUpdateBackup();
 
   const [editingMeta, setEditingMeta] = useState(false);
-  const [tagDraft, setTagDraft] = useState("");
-  const [noteDraft, setNoteDraft] = useState("");
+  const metaForm = useForm<{ tag: string; note: string }>({
+    defaultValues: { tag: "", note: "" },
+  });
   const [tab, setTab] = useState<ViewTab>("structured");
 
   // ---- Structured ↔ Raw XML tab-switch sync ----
@@ -366,17 +368,16 @@ export function BackupViewPage() {
 
   function startEditingMeta() {
     if (!detail) return;
-    setTagDraft(detail.tag ?? "");
-    setNoteDraft(detail.note ?? "");
+    metaForm.reset({ tag: detail.tag ?? "", note: detail.note ?? "" });
     setEditingMeta(true);
   }
 
-  async function saveMeta() {
+  const saveMeta = metaForm.handleSubmit(async (data) => {
     if (!detail) return;
     try {
       const r = await updateBackup.mutateAsync({
         id: detail.id,
-        patch: { tag: tagDraft, note: noteDraft },
+        patch: { tag: data.tag, note: data.note },
       });
       setDetail({ ...detail, tag: r.tag, note: r.note });
       setEditingMeta(false);
@@ -384,7 +385,7 @@ export function BackupViewPage() {
     } catch {
       // MutationCache's onError already surfaces the error toast.
     }
-  }
+  });
 
   if (error) return <div className="p-6 text-sm text-danger">{error}</div>;
   if (!detail || content === null)
@@ -434,27 +435,26 @@ export function BackupViewPage() {
             </p>
           )}
           {editingMeta && (
-            <div className="mt-3 flex max-w-2xl flex-col gap-2">
-              <Input
-                value={tagDraft}
-                onChange={(e) => setTagDraft(e.target.value)}
+            <form onSubmit={saveMeta} className="mt-3 flex max-w-2xl flex-col gap-2">
+              <FormInput
+                control={metaForm.control}
+                name="tag"
                 placeholder="Tag (e.g. pre-upgrade, known-good)"
-                maxLength={64}
                 aria-label="Tag"
               />
-              <textarea
-                value={noteDraft}
-                onChange={(e) => setNoteDraft(e.target.value)}
+              <FormTextarea
+                control={metaForm.control}
+                name="note"
                 placeholder="Free-text note (what makes this backup interesting?)"
                 rows={3}
-                className="w-full rounded-md border border-border bg-bg p-2 text-sm"
                 aria-label="Note"
               />
               <div className="flex gap-2">
-                <Button size="sm" onClick={saveMeta} disabled={updateBackup.isPending}>
+                <Button type="submit" size="sm" disabled={updateBackup.isPending}>
                   <Check className="h-4 w-4" /> Save
                 </Button>
                 <Button
+                  type="button"
                   variant="secondary"
                   size="sm"
                   onClick={() => setEditingMeta(false)}
@@ -463,7 +463,7 @@ export function BackupViewPage() {
                   <X className="h-4 w-4" /> Cancel
                 </Button>
               </div>
-            </div>
+            </form>
           )}
         </div>
         <div className="flex shrink-0 gap-2">

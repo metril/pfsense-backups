@@ -1,7 +1,9 @@
 import { Fragment, useState } from "react";
+import { Controller, useForm, useWatch } from "react-hook-form";
 import { ChevronDown, ChevronRight, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { formatLocal } from "@/lib/datetime";
+import { useDebouncedValue } from "@/lib/useDebouncedValue";
 import { useAuditFacets, useAuditLog, type AuditFilter } from "@/api/queries";
 
 const ACTION_TONE: Record<string, string> = {
@@ -22,20 +24,41 @@ function boundary(d: string, end: boolean): string | undefined {
   return date.toISOString();
 }
 
+type AuditFilterForm = {
+  actor: string;
+  action: string;
+  resource: string;
+  fromDate: string;
+  toDate: string;
+};
+
+const AUDIT_FILTER_DEFAULTS: AuditFilterForm = {
+  actor: "",
+  action: "",
+  resource: "",
+  fromDate: "",
+  toDate: "",
+};
+
 export function AuditPage() {
-  const [actor, setActor] = useState("");
-  const [action, setAction] = useState("");
-  const [resource, setResource] = useState("");
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
+  const { control, reset } = useForm<AuditFilterForm>({
+    defaultValues: AUDIT_FILTER_DEFAULTS,
+  });
+  const actor = useWatch({ control, name: "actor" });
+  const action = useWatch({ control, name: "action" });
+  const resource = useWatch({ control, name: "resource" });
+  const fromDate = useWatch({ control, name: "fromDate" });
+  const toDate = useWatch({ control, name: "toDate" });
+  const debouncedFromDate = useDebouncedValue(fromDate, 300);
+  const debouncedToDate = useDebouncedValue(toDate, 300);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
 
   const filter: AuditFilter = {
     actor: actor || undefined,
     action: action || undefined,
     resource: resource || undefined,
-    tsFrom: boundary(fromDate, false),
-    tsTo: boundary(toDate, true),
+    tsFrom: boundary(debouncedFromDate, false),
+    tsTo: boundary(debouncedToDate, true),
     limit: 500,
   };
 
@@ -63,67 +86,91 @@ export function AuditPage() {
       </div>
 
       <div className="mt-4 flex flex-wrap gap-2">
-        <select
-          value={actor}
-          onChange={(e) => setActor(e.target.value)}
-          className="h-9 rounded-md border border-border bg-bg px-2 text-sm"
-          aria-label="Actor filter"
-        >
-          <option value="">All actors</option>
-          {facets.data?.actors.map((a) => (
-            <option key={a} value={a}>{a}</option>
-          ))}
-        </select>
-        <select
-          value={action}
-          onChange={(e) => setAction(e.target.value)}
-          className="h-9 rounded-md border border-border bg-bg px-2 text-sm"
-          aria-label="Action filter"
-        >
-          <option value="">All actions</option>
-          {facets.data?.actions.map((a) => (
-            <option key={a} value={a}>{a}</option>
-          ))}
-        </select>
-        <select
-          value={resource}
-          onChange={(e) => setResource(e.target.value)}
-          className="h-9 rounded-md border border-border bg-bg px-2 text-sm"
-          aria-label="Resource filter"
-        >
-          <option value="">All resources</option>
-          {facets.data?.resources.map((r) => (
-            <option key={r} value={r}>{r}</option>
-          ))}
-        </select>
+        <Controller
+          control={control}
+          name="actor"
+          render={({ field }) => (
+            <select
+              value={field.value}
+              onChange={field.onChange}
+              className="h-9 rounded-md border border-border bg-bg px-2 text-sm"
+              aria-label="Actor filter"
+            >
+              <option value="">All actors</option>
+              {facets.data?.actors.map((a) => (
+                <option key={a} value={a}>{a}</option>
+              ))}
+            </select>
+          )}
+        />
+        <Controller
+          control={control}
+          name="action"
+          render={({ field }) => (
+            <select
+              value={field.value}
+              onChange={field.onChange}
+              className="h-9 rounded-md border border-border bg-bg px-2 text-sm"
+              aria-label="Action filter"
+            >
+              <option value="">All actions</option>
+              {facets.data?.actions.map((a) => (
+                <option key={a} value={a}>{a}</option>
+              ))}
+            </select>
+          )}
+        />
+        <Controller
+          control={control}
+          name="resource"
+          render={({ field }) => (
+            <select
+              value={field.value}
+              onChange={field.onChange}
+              className="h-9 rounded-md border border-border bg-bg px-2 text-sm"
+              aria-label="Resource filter"
+            >
+              <option value="">All resources</option>
+              {facets.data?.resources.map((r) => (
+                <option key={r} value={r}>{r}</option>
+              ))}
+            </select>
+          )}
+        />
         <div className="flex items-center gap-1 rounded-md border border-border bg-bg px-2 text-sm">
           <span className="text-muted-fg">from</span>
-          <input
-            type="date"
-            value={fromDate}
-            onChange={(e) => setFromDate(e.target.value)}
-            className="h-9 bg-transparent text-sm outline-none"
-            aria-label="From date"
+          <Controller
+            control={control}
+            name="fromDate"
+            render={({ field }) => (
+              <input
+                type="date"
+                value={field.value}
+                onChange={field.onChange}
+                className="h-9 bg-transparent text-sm outline-none"
+                aria-label="From date"
+              />
+            )}
           />
           <span className="text-muted-fg">to</span>
-          <input
-            type="date"
-            value={toDate}
-            onChange={(e) => setToDate(e.target.value)}
-            className="h-9 bg-transparent text-sm outline-none"
-            aria-label="To date"
+          <Controller
+            control={control}
+            name="toDate"
+            render={({ field }) => (
+              <input
+                type="date"
+                value={field.value}
+                onChange={field.onChange}
+                className="h-9 bg-transparent text-sm outline-none"
+                aria-label="To date"
+              />
+            )}
           />
         </div>
         {hasFilter && (
           <button
             type="button"
-            onClick={() => {
-              setActor("");
-              setAction("");
-              setResource("");
-              setFromDate("");
-              setToDate("");
-            }}
+            onClick={() => reset(AUDIT_FILTER_DEFAULTS)}
             className="inline-flex h-9 items-center gap-1 rounded-md border border-border bg-bg px-3 text-sm text-muted-fg hover:text-fg"
           >
             <X className="h-4 w-4" /> Clear

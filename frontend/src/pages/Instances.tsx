@@ -1,5 +1,12 @@
 import { cloneElement, isValidElement, useId, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import {
+  Controller,
+  useForm,
+  useWatch,
+  type Control,
+  type UseFormSetValue,
+} from "react-hook-form";
 import cronstrue from "cronstrue";
 import {
   AlertTriangle,
@@ -17,13 +24,19 @@ import { Button } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
 import { Input } from "@/components/ui/Input";
 import { Label } from "@/components/ui/Label";
+import { Checkbox } from "@/components/ui/Checkbox";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Select, type SelectOption } from "@/components/ui/Select";
 import { SkeletonRows } from "@/components/ui/Skeleton";
 import { SplitButton } from "@/components/ui/SplitButton";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { useToast } from "@/components/ui/Toast";
-import { CronEditor } from "@/components/cron/CronEditor";
+import {
+  FormCheckbox,
+  FormCronEditor,
+  FormInput,
+  FormSwitch,
+} from "@/components/ui/form";
 import {
   useBackupNow,
   useCreateInstance,
@@ -376,35 +389,46 @@ function EditorDialog({
   onClose: () => void;
   onSave: (d: Draft) => Promise<void>;
 }) {
-  const [d, setD] = useState(draft);
+  const { control, handleSubmit, getValues, setValue, watch, formState } = useForm<Draft>({
+    defaultValues: draft,
+  });
   const [saving, setSaving] = useState(false);
   const preflight = usePreflight();
   const [preflightMsg, setPreflightMsg] = useState<
     { ok: boolean; detail: string; duration_ms: number } | null
   >(null);
 
-  async function save() {
+  const isNew = draft.id === undefined;
+  // Header title + filename-prefix preview both need the live ``name``.
+  // ``watch('name')`` re-renders only this component when ``name`` changes,
+  // not the entire form tree — so we can use it liberally.
+  const nameLive = watch("name");
+  const urlLive = watch("url");
+  const usernameLive = watch("username");
+
+  const onSubmit = handleSubmit(async (data) => {
     setSaving(true);
     try {
-      await onSave(d);
+      await onSave(data);
     } finally {
       setSaving(false);
     }
-  }
+  });
 
   async function runPreflight() {
     setPreflightMsg(null);
+    const v = getValues();
     try {
       const r = await preflight.mutateAsync({
         // Edit flow: if the user didn't touch the password, we pass the
         // instance_id so the server pulls the stored ciphertext. Create flow
         // has no id and sends the raw creds.
-        instance_id: d.id,
-        url: d.url || undefined,
-        username: d.username || undefined,
-        password: d.password || undefined,
-        verify_ssl: d.verify_ssl ?? false,
-        timeout_seconds: d.timeout_seconds ?? 15,
+        instance_id: v.id,
+        url: v.url || undefined,
+        username: v.username || undefined,
+        password: v.password || undefined,
+        verify_ssl: v.verify_ssl ?? false,
+        timeout_seconds: v.timeout_seconds ?? 15,
       });
       setPreflightMsg(r);
     } catch (e) {
@@ -412,135 +436,111 @@ function EditorDialog({
     }
   }
 
-  const isNew = d.id === undefined;
-
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()} title={isNew ? "Add instance" : `Edit ${d.name}`}>
-      <div className="grid grid-cols-2 gap-4">
-        <Field label="Name"><Input value={d.name} onChange={(e) => setD({ ...d, name: e.target.value })} /></Field>
-        <Field label="URL">
-          <Input
-            type="url"
-            value={d.url}
-            onChange={(e) => setD({ ...d, url: e.target.value })}
-            placeholder="https://pfsense.example.com"
-          />
-        </Field>
-        <Field label="Username"><Input value={d.username} onChange={(e) => setD({ ...d, username: e.target.value })} /></Field>
-        <Field label={isNew ? "Password" : "Password (leave blank to keep)"}>
-          <Input type="password" value={d.password} onChange={(e) => setD({ ...d, password: e.target.value })} />
-        </Field>
-        <Field label="Subfolder"><Input value={d.subfolder ?? ""} onChange={(e) => setD({ ...d, subfolder: e.target.value || null })} /></Field>
-        <Field label="Backup prefix">
-          <Input
-            placeholder="daily"
-            value={d.backup_prefix}
-            onChange={(e) => setD({ ...d, backup_prefix: e.target.value })}
-          />
-          <p className="mt-1 text-xs text-muted-fg">
-            Prefix for backup filenames — e.g. <code>daily</code> produces{" "}
-            <code>daily-{d.name || "instance"}-2026-04-20.xml</code>.
-          </p>
-        </Field>
-        <Field label="Timeout (s)">
-          <Input
-            type="number"
-            min={1}
-            value={d.timeout_seconds}
-            onChange={(e) => {
-              const v = e.target.valueAsNumber;
-              if (Number.isFinite(v) && v > 0) setD({ ...d, timeout_seconds: v });
-            }}
-          />
-        </Field>
-        <Field label="Retention count">
-          <Input
-            type="number"
-            min={1}
-            value={d.retention_count}
-            onChange={(e) => {
-              const v = e.target.valueAsNumber;
-              if (Number.isFinite(v) && v > 0) setD({ ...d, retention_count: v });
-            }}
-          />
-        </Field>
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title={isNew ? "Add instance" : `Edit ${nameLive}`}
+    >
+      <form onSubmit={onSubmit} noValidate>
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="Name"><FormInput control={control} name="name" /></Field>
+          <Field label="URL">
+            <FormInput
+              control={control}
+              name="url"
+              type="url"
+              placeholder="https://pfsense.example.com"
+            />
+          </Field>
+          <Field label="Username"><FormInput control={control} name="username" /></Field>
+          <Field label={isNew ? "Password" : "Password (leave blank to keep)"}>
+            <FormInput control={control} name="password" type="password" />
+          </Field>
+          <Field label="Subfolder">
+            <FormInput control={control} name="subfolder" />
+          </Field>
+          <Field label="Backup prefix">
+            <FormInput control={control} name="backup_prefix" placeholder="daily" />
+            <p className="mt-1 text-xs text-muted-fg">
+              Prefix for backup filenames — e.g. <code>daily</code> produces{" "}
+              <code>daily-{nameLive || "instance"}-2026-04-20.xml</code>.
+            </p>
+          </Field>
+          <Field label="Timeout (s)">
+            <FormInput control={control} name="timeout_seconds" type="number" min={1} numericFallback={30} />
+          </Field>
+          <Field label="Retention count">
+            <FormInput control={control} name="retention_count" type="number" min={1} numericFallback={365} />
+          </Field>
 
-        <Field label="Verify SSL">
-          <Switch
-            label="Verify SSL"
-            checked={d.verify_ssl ?? false}
-            onChange={(v) => setD({ ...d, verify_ssl: v })}
-          />
-        </Field>
-        <Field label="Compress">
-          <Switch
-            label="Compress backups"
-            checked={d.compress ?? false}
-            onChange={(v) => setD({ ...d, compress: v })}
-          />
-        </Field>
-        <Field label="Enabled">
-          <Switch
-            label="Instance enabled"
-            checked={d.enabled ?? true}
-            onChange={(v) => setD({ ...d, enabled: v })}
-          />
-        </Field>
+          <Field label="Verify SSL">
+            <FormSwitch control={control} name="verify_ssl" label="Verify SSL" />
+          </Field>
+          <Field label="Compress">
+            <FormSwitch control={control} name="compress" label="Compress backups" />
+          </Field>
+          <Field label="Enabled">
+            <FormSwitch control={control} name="enabled" label="Instance enabled" />
+          </Field>
 
-        <div className="col-span-2">
-          <Label>Schedule (cron)</Label>
-          <CronEditor
-            value={d.cron_expression ?? null}
-            onChange={(v) => setD({ ...d, cron_expression: v })}
-            timezone={d.cron_timezone ?? null}
-            globalTimezone={globalTimezone}
-            onTimezoneChange={(v) => setD({ ...d, cron_timezone: v })}
-          />
-        </div>
-
-        <div className="col-span-2 border-t border-border pt-4">
-          <BackupContentsSection d={d} setD={setD} isNew={isNew} />
-        </div>
-      </div>
-
-      {preflightMsg && (
-        <div
-          className={
-            "mt-4 rounded-md border px-3 py-2 text-sm " +
-            (preflightMsg.ok
-              ? "border-ok/50 bg-ok/10 text-ok"
-              : "border-danger/50 bg-danger/10 text-danger")
-          }
-          role="status"
-        >
-          <div className="font-medium">
-            {preflightMsg.ok ? "Connection OK" : "Connection failed"}{" "}
-            <span className="font-normal text-muted-fg">
-              ({preflightMsg.duration_ms} ms)
-            </span>
+          <div className="col-span-2">
+            <Label>Schedule (cron)</Label>
+            <FormCronEditor
+              control={control}
+              valueName="cron_expression"
+              timezoneName="cron_timezone"
+              globalTimezone={globalTimezone}
+            />
           </div>
-          <div className="mt-0.5 text-xs">{preflightMsg.detail}</div>
-        </div>
-      )}
 
-      <div className="mt-6 flex items-center justify-between gap-2">
-        <Button
-          variant="secondary"
-          onClick={runPreflight}
-          disabled={preflight.isPending || saving || !d.url || !d.username}
-          title={
-            !d.url || !d.username
-              ? "Fill in URL and username first"
-              : "Run a live login against this pfSense"
-          }
-        >
-          {preflight.isPending ? "Testing…" : "Test connection"}
-        </Button>
-        <div className="flex gap-2">
-          <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button onClick={save} disabled={saving}>{saving ? "Saving…" : "Save"}</Button>
+          <div className="col-span-2 border-t border-border pt-4">
+            <BackupContentsSection control={control} setValue={setValue} isNew={isNew} />
+          </div>
         </div>
-      </div>
+
+        {preflightMsg && (
+          <div
+            className={
+              "mt-4 rounded-md border px-3 py-2 text-sm " +
+              (preflightMsg.ok
+                ? "border-ok/50 bg-ok/10 text-ok"
+                : "border-danger/50 bg-danger/10 text-danger")
+            }
+            role="status"
+          >
+            <div className="font-medium">
+              {preflightMsg.ok ? "Connection OK" : "Connection failed"}{" "}
+              <span className="font-normal text-muted-fg">
+                ({preflightMsg.duration_ms} ms)
+              </span>
+            </div>
+            <div className="mt-0.5 text-xs">{preflightMsg.detail}</div>
+          </div>
+        )}
+
+        <div className="mt-6 flex items-center justify-between gap-2">
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={runPreflight}
+            disabled={preflight.isPending || saving || !urlLive || !usernameLive}
+            title={
+              !urlLive || !usernameLive
+                ? "Fill in URL and username first"
+                : "Run a live login against this pfSense"
+            }
+          >
+            {preflight.isPending ? "Testing…" : "Test connection"}
+          </Button>
+          <div className="flex gap-2">
+            <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
+            <Button type="submit" disabled={saving || formState.isSubmitting}>
+              {saving ? "Saving…" : "Save"}
+            </Button>
+          </div>
+        </div>
+      </form>
     </Dialog>
   );
 }
@@ -567,29 +567,35 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 function BackupContentsSection({
-  d,
-  setD,
+  control,
+  setValue,
   isNew,
 }: {
-  d: Draft;
-  setD: (v: Draft) => void;
+  control: Control<Draft>;
+  setValue: UseFormSetValue<Draft>;
   isNew: boolean;
 }) {
-  const hasStoredPassword = d.backup_encrypt_password === "__set__";
-  // The re-encrypt checkbox is only meaningful when Encrypt is on AND
-  // the user is supplying a new plaintext password (not the sentinel).
+  // Field-level subscriptions: this component re-renders only when the
+  // four watched fields change, not when name/url/timeout/etc do.
+  const backupEncrypt = useWatch({ control, name: "backup_encrypt" });
+  const backupEncryptPassword = useWatch({
+    control,
+    name: "backup_encrypt_password",
+  });
+
+  const hasStoredPassword = backupEncryptPassword === "__set__";
   const canReencrypt =
     !isNew &&
-    d.backup_encrypt === true &&
-    typeof d.backup_encrypt_password === "string" &&
-    d.backup_encrypt_password !== "__set__" &&
-    d.backup_encrypt_password.trim().length > 0;
+    backupEncrypt === true &&
+    typeof backupEncryptPassword === "string" &&
+    backupEncryptPassword !== "__set__" &&
+    backupEncryptPassword.trim().length > 0;
 
   const passwordInvalid =
-    d.backup_encrypt &&
-    (!d.backup_encrypt_password ||
-      (typeof d.backup_encrypt_password === "string" &&
-        d.backup_encrypt_password.trim() === "" &&
+    !!backupEncrypt &&
+    (!backupEncryptPassword ||
+      (typeof backupEncryptPassword === "string" &&
+        backupEncryptPassword.trim() === "" &&
         !hasStoredPassword));
 
   return (
@@ -607,11 +613,17 @@ function BackupContentsSection({
         icon={<Package className="h-4 w-4" aria-hidden />}
         title="Area"
       >
-        <Select
-          value={areaToUi(d.backup_area ?? "")}
-          onChange={(v) => setD({ ...d, backup_area: areaFromUi(v) })}
-          options={PFSENSE_BACKUP_AREAS}
-          aria-label="Backup area"
+        <Controller
+          control={control}
+          name="backup_area"
+          render={({ field }) => (
+            <Select
+              value={areaToUi(field.value ?? "")}
+              onChange={(v) => field.onChange(areaFromUi(v))}
+              options={PFSENSE_BACKUP_AREAS}
+              aria-label="Backup area"
+            />
+          )}
         />
       </ContentsSubsection>
 
@@ -620,20 +632,20 @@ function BackupContentsSection({
         title="Contents"
       >
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          <Checkbox
+          <FormCheckbox
+            control={control}
+            name="backup_include_rrd"
             label="Include RRD graph data"
-            checked={d.backup_include_rrd ?? false}
-            onChange={(v) => setD({ ...d, backup_include_rrd: v })}
           />
-          <Checkbox
+          <FormCheckbox
+            control={control}
+            name="backup_include_packages"
             label="Include package information"
-            checked={d.backup_include_packages ?? true}
-            onChange={(v) => setD({ ...d, backup_include_packages: v })}
           />
-          <Checkbox
+          <FormCheckbox
+            control={control}
+            name="backup_include_ssh"
             label="Include SSH host keys"
-            checked={d.backup_include_ssh ?? true}
-            onChange={(v) => setD({ ...d, backup_include_ssh: v })}
           />
         </div>
       </ContentsSubsection>
@@ -642,49 +654,55 @@ function BackupContentsSection({
         icon={<KeyRound className="h-4 w-4" aria-hidden />}
         title="Encryption"
       >
-        <Checkbox
-          label="Encrypt backup"
-          checked={d.backup_encrypt ?? false}
-          onChange={(v) =>
-            setD({
-              ...d,
-              backup_encrypt: v,
-              // Keep whatever the user has typed / the stored sentinel
-              // across toggle cycles so a fat-finger off/on doesn't
-              // silently drop their new password. The server clears
-              // the ciphertext when backup_encrypt=false lands anyway.
-              reencrypt_existing_backups: v
-                ? d.reencrypt_existing_backups
-                : false,
-            })
-          }
+        {/* Custom Controller for backup_encrypt: turning it off must also
+            reset reencrypt_existing_backups so a fat-finger cycle doesn't
+            silently re-encrypt with whatever was previously typed. */}
+        <Controller
+          control={control}
+          name="backup_encrypt"
+          render={({ field }) => (
+            <Checkbox
+              label="Encrypt backup"
+              checked={Boolean(field.value)}
+              onChange={(v) => {
+                field.onChange(v);
+                if (!v) {
+                  setValue("reencrypt_existing_backups", false);
+                }
+              }}
+            />
+          )}
         />
-        {d.backup_encrypt && (
+        {backupEncrypt && (
           <div className="mt-3">
             <Label>
               {hasStoredPassword
                 ? "Encryption password (leave blank to keep)"
                 : "Encryption password"}
             </Label>
-            <Input
-              type="password"
-              value={
-                d.backup_encrypt_password === "__set__"
-                  ? ""
-                  : (d.backup_encrypt_password ?? "")
-              }
-              placeholder={hasStoredPassword ? "•••••••• (stored)" : ""}
-              onChange={(e) => {
-                const v = e.target.value;
-                if (v === "" && hasStoredPassword) {
-                  setD({ ...d, backup_encrypt_password: "__set__" });
-                } else {
-                  setD({ ...d, backup_encrypt_password: v });
-                }
-              }}
-              className="mt-1"
-              aria-invalid={passwordInvalid}
-              aria-describedby={passwordInvalid ? "backup-encrypt-password-err" : undefined}
+            <Controller
+              control={control}
+              name="backup_encrypt_password"
+              render={({ field }) => (
+                <Input
+                  type="password"
+                  value={
+                    field.value === "__set__"
+                      ? ""
+                      : (field.value as string | null | undefined) ?? ""
+                  }
+                  placeholder={hasStoredPassword ? "•••••••• (stored)" : ""}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    field.onChange(v === "" && hasStoredPassword ? "__set__" : v);
+                  }}
+                  className="mt-1"
+                  aria-invalid={passwordInvalid}
+                  aria-describedby={
+                    passwordInvalid ? "backup-encrypt-password-err" : undefined
+                  }
+                />
+              )}
             />
             {passwordInvalid && (
               <p id="backup-encrypt-password-err" className="mt-1 text-xs text-danger">
@@ -696,23 +714,12 @@ function BackupContentsSection({
         {canReencrypt && (
           <div className="mt-3 flex items-start gap-2 rounded-md border border-warn/30 bg-warn/10 px-3 py-2">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warn" aria-hidden />
-            <label className="flex cursor-pointer items-start gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={d.reencrypt_existing_backups ?? false}
-                onChange={(e) =>
-                  setD({ ...d, reencrypt_existing_backups: e.target.checked })
-                }
-                className="mt-1 h-4 w-4 cursor-pointer accent-accent"
-              />
-              <span>
-                Also re-encrypt existing backups with the new password.
-                <span className="mt-0.5 block text-xs text-muted-fg">
-                  Old-password files become unreadable once this finishes. Progress
-                  shows up on the Jobs page.
-                </span>
-              </span>
-            </label>
+            <FormCheckbox
+              control={control}
+              name="reencrypt_existing_backups"
+              label="Also re-encrypt existing backups with the new password."
+              className="items-start"
+            />
           </div>
         )}
       </ContentsSubsection>
@@ -740,61 +747,5 @@ function ContentsSubsection({
   );
 }
 
-function Checkbox({
-  label,
-  checked,
-  onChange,
-}: {
-  label: string;
-  checked: boolean;
-  onChange: (v: boolean) => void;
-}) {
-  return (
-    <label className="flex cursor-pointer items-center gap-2 text-sm">
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-        className="h-4 w-4 cursor-pointer accent-accent"
-      />
-      <span>{label}</span>
-    </label>
-  );
-}
-
-function Switch({
-  checked,
-  onChange,
-  label,
-  id,
-}: {
-  checked: boolean;
-  onChange: (v: boolean) => void;
-  label: string;
-  /** Optional id to forward to the underlying button. The ``Field``
-   *  wrapper assigns this via ``cloneElement`` so ``<Label htmlFor>``
-   *  resolves to a real element — without it, clicking the visual
-   *  label didn't focus/toggle the switch. */
-  id?: string;
-}) {
-  // M6 (a11y): expose as a proper switch so screen readers announce it.
-  return (
-    <button
-      type="button"
-      id={id}
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      onClick={() => onChange(!checked)}
-      className={`mt-1 inline-flex h-5 w-9 items-center rounded-full transition-colors ${
-        checked ? "bg-accent" : "bg-muted"
-      }`}
-    >
-      <span
-        className={`inline-block h-4 w-4 transform rounded-full bg-fg transition-transform ${
-          checked ? "translate-x-4" : "translate-x-0.5"
-        }`}
-      />
-    </button>
-  );
-}
+// Switch and Checkbox primitives have moved to
+// frontend/src/components/ui/{Switch,Checkbox}.tsx.

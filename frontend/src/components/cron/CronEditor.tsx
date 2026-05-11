@@ -29,6 +29,12 @@ export function CronEditor({
   const [error, setError] = useState<string | null>(null);
   const [nextRuns, setNextRuns] = useState<string[]>([]);
   const tzList = useMemo(supportedTimezones, []);
+  // 418 IANA timezones — caching the <option> JSX array makes parent
+  // re-renders effectively free for this picker.
+  const tzOptions = useMemo(
+    () => tzList.map((tz) => <option key={tz} value={tz}>{tz}</option>),
+    [tzList],
+  );
 
   const effectiveTz = timezone ?? globalTimezone;
 
@@ -109,11 +115,7 @@ export function CronEditor({
                     {timezone} (not in browser list)
                   </option>
                 )}
-                {tzList.map((tz) => (
-                  <option key={tz} value={tz}>
-                    {tz}
-                  </option>
-                ))}
+                {tzOptions}
               </select>
             </div>
           )}
