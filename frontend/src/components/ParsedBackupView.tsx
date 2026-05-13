@@ -15,7 +15,6 @@ import { Card } from "@/components/ui/Card";
 import {
   ActionPill,
   Dl,
-  PackageCard,
   Redacted,
   RV,
   StatusPill,
@@ -57,7 +56,6 @@ import type {
   CertificateAuthority,
   CertificateRevocationList,
   HaProxyConfig,
-  InstalledPackages,
   PfBlockerNgConfig,
   SuricataConfig,
   UnknownPackage,
@@ -371,6 +369,11 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
             <StaticRoutesTable rows={data.static_routes} />
           </Section>
         )}
+        {data.installedpackages?.frr && showTitle("FRR — routing daemon") && (
+          <Section title="FRR — routing daemon" count={1}>
+            <FrrPanel p={data.installedpackages.frr} />
+          </Section>
+        )}
         {data.firewall_rules.length > 0 && (
           <Section title="Firewall rules" count={data.firewall_rules.length}>
             <FirewallTable rows={data.firewall_rules} />
@@ -381,9 +384,35 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
             <NatTable rows={data.nat_rules} />
           </Section>
         )}
+        {data.installedpackages?.miniupnpd && showTitle("miniupnpd (UPnP / NAT-PMP)") && (
+          <Section title="miniupnpd (UPnP / NAT-PMP)" count={1}>
+            <MiniUpnpdPanel p={data.installedpackages.miniupnpd} />
+          </Section>
+        )}
         {data.aliases.length > 0 && (
           <Section title="Aliases" count={data.aliases.length}>
             <AliasesTable rows={data.aliases} />
+          </Section>
+        )}
+        {data.installedpackages?.pfblockerng && showTitle("pfBlockerNG") && (
+          <Section title="pfBlockerNG" count={1}>
+            <PfBlockerNgPanel p={data.installedpackages.pfblockerng} />
+          </Section>
+        )}
+        {data.installedpackages?.suricata && showTitle("Suricata IDS/IPS") && (
+          <Section
+            title="Suricata IDS/IPS"
+            count={data.installedpackages.suricata.interfaces.length || 1}
+          >
+            <SuricataPanel p={data.installedpackages.suricata} />
+          </Section>
+        )}
+        {data.installedpackages?.snort && showTitle("Snort IDS/IPS") && (
+          <Section
+            title="Snort IDS/IPS"
+            count={data.installedpackages.snort.interfaces.length || 1}
+          >
+            <SnortPanel p={data.installedpackages.snort} />
           </Section>
         )}
         {data.dhcp_servers.length > 0 && (
@@ -417,6 +446,11 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
             count={data.radvd_interfaces.length}
           >
             <RadvdTable rows={data.radvd_interfaces} />
+          </Section>
+        )}
+        {data.installedpackages?.avahi && showTitle("Avahi (mDNS reflector)") && (
+          <Section title="Avahi (mDNS reflector)" count={1}>
+            <AvahiPanel p={data.installedpackages.avahi} />
           </Section>
         )}
         {data.notifications && showTitle("Notifications") && (
@@ -457,6 +491,16 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
             <SyslogPanel s={data.syslog} />
           </Section>
         )}
+        {data.installedpackages?.telegraf && showTitle("Telegraf (metrics)") && (
+          <Section title="Telegraf (metrics)" count={1}>
+            <TelegrafPanel p={data.installedpackages.telegraf} />
+          </Section>
+        )}
+        {data.installedpackages?.zabbix && showTitle("Zabbix") && (
+          <Section title="Zabbix" count={1}>
+            <ZabbixPanel p={data.installedpackages.zabbix} />
+          </Section>
+        )}
         {data.schedules.length > 0 && (
           <Section title="Schedules" count={data.schedules.length}>
             <SchedulesTable rows={data.schedules} />
@@ -483,12 +527,28 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
             />
           </Section>
         )}
+        {data.installedpackages?.haproxy && showTitle("HAProxy") && (
+          <Section
+            title="HAProxy"
+            count={
+              data.installedpackages.haproxy.frontends.length +
+                data.installedpackages.haproxy.backends.length || 1
+            }
+          >
+            <HaProxyPanel p={data.installedpackages.haproxy} />
+          </Section>
+        )}
         {data.captive_portal_zones.length > 0 && (
           <Section
             title="Captive portal"
             count={data.captive_portal_zones.length}
           >
             <CaptivePortalTable rows={data.captive_portal_zones} />
+          </Section>
+        )}
+        {data.installedpackages?.squid && showTitle("Squid (web proxy)") && (
+          <Section title="Squid (web proxy)" count={1}>
+            <SquidPanel p={data.installedpackages.squid} />
           </Section>
         )}
         {data.openvpn_servers.length > 0 && (
@@ -507,6 +567,16 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
             count={data.openvpn_cscs.length}
           >
             <OpenVpnCscTable rows={data.openvpn_cscs} />
+          </Section>
+        )}
+        {data.installedpackages?.openvpn_client_export && showTitle("OpenVPN Client Export") && (
+          <Section
+            title="OpenVPN Client Export"
+            count={data.installedpackages.openvpn_client_export.servers.length || 1}
+          >
+            <OpenvpnClientExportPanel
+              p={data.installedpackages.openvpn_client_export}
+            />
           </Section>
         )}
         {data.ipsec_phase1.length > 0 && (
@@ -532,6 +602,17 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
             <IpsecMobileClientsCard m={data.ipsec_mobile_clients} />
           </Section>
         )}
+        {data.installedpackages?.wireguard && showTitle("WireGuard") && (
+          <Section
+            title="WireGuard"
+            count={
+              data.installedpackages.wireguard.tunnels.length +
+                data.installedpackages.wireguard.peers.length || 1
+            }
+          >
+            <WireGuardPanel p={data.installedpackages.wireguard} />
+          </Section>
+        )}
         {data.certificate_authorities.length > 0 && (
           <Section
             title="Certificate authorities"
@@ -551,6 +632,14 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
             count={data.crls.length}
           >
             <CrlTable rows={data.crls} />
+          </Section>
+        )}
+        {data.installedpackages?.acme && showTitle("ACME (Let's Encrypt)") && (
+          <Section
+            title="ACME (Let's Encrypt)"
+            count={data.installedpackages.acme.certificates.length || 1}
+          >
+            <AcmePanel p={data.installedpackages.acme} />
           </Section>
         )}
         {data.ovpnserver_wizard && showTitle("OpenVPN server (wizard state)") && (
@@ -583,14 +672,21 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
             />
           </Section>
         )}
-        {data.installedpackages && showTitle("Installed packages") && (
-          <Section
-            title="Installed packages"
-            count={packageCount(data.installedpackages)}
-          >
-            <PackagesPanel ip={data.installedpackages} />
-          </Section>
-        )}
+        {/* Leftover bucket — only renders for packages whose XML the
+            per-package parsers didn't recognise. Every parsed package
+            now has its own top-level <Section> positioned next to its
+            functional peers (see edits above the routing/security/
+            services/vpn-pki/system sections). */}
+        {data.installedpackages &&
+          data.installedpackages.unknown.length > 0 &&
+          showTitle("Other installed packages") && (
+            <Section
+              title="Other installed packages"
+              count={data.installedpackages.unknown.length}
+            >
+              <UnknownPackagesList rows={data.installedpackages.unknown} />
+            </Section>
+          )}
         {data.users.length > 0 && (
           <Section title="Users" count={data.users.length}>
             <UsersTable rows={data.users} />
@@ -609,6 +705,17 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
             <AuthServersTable rows={data.authservers} />
           </Section>
         )}
+        {data.installedpackages?.freeradius && showTitle("FreeRADIUS") && (
+          <Section
+            title="FreeRADIUS"
+            count={
+              data.installedpackages.freeradius.clients.length +
+                data.installedpackages.freeradius.users.length || 1
+            }
+          >
+            <FreeRadiusPanel p={data.installedpackages.freeradius} />
+          </Section>
+        )}
         {data.sysctl.length > 0 && (
           <Section title="Sysctl tunables" count={data.sysctl.length}>
             <SysctlTable rows={data.sysctl} />
@@ -617,6 +724,14 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
         {data.cron.length > 0 && (
           <Section title="Cron jobs" count={data.cron.length}>
             <CronTable rows={data.cron} />
+          </Section>
+        )}
+        {data.installedpackages?.shellcmd && showTitle("Shell commands") && (
+          <Section
+            title="Shell commands"
+            count={data.installedpackages.shellcmd.entries.length || 1}
+          >
+            <ShellCmdPanel p={data.installedpackages.shellcmd} />
           </Section>
         )}
         {data.unrecognized_sections.length > 0 && (
@@ -935,7 +1050,28 @@ const TITLE_TO_KEY: Record<string, string> = {
   Users: "users",
   Groups: "groups",
   "External auth servers": "authservers",
-  "Installed packages": "installedpackages",
+  // v0.44.0 — each parsed package now renders as its own top-level
+  // section near its functional peers, instead of all of them being
+  // buried under one "Installed packages" wrapper. Only the
+  // raw-XML fallback for parser-unrecognised packages keeps the
+  // legacy ``installedpackages`` key (rendered as "Other installed
+  // packages" — the only thing still in the ``packages`` color group).
+  pfBlockerNG: "pfblockerng",
+  "Suricata IDS/IPS": "suricata",
+  "Snort IDS/IPS": "snort",
+  "FRR — routing daemon": "frr",
+  "miniupnpd (UPnP / NAT-PMP)": "miniupnpd",
+  HAProxy: "haproxy",
+  "Squid (web proxy)": "squid",
+  "Telegraf (metrics)": "telegraf",
+  Zabbix: "zabbix",
+  "Avahi (mDNS reflector)": "avahi",
+  WireGuard: "wireguard",
+  "OpenVPN Client Export": "openvpn_client_export",
+  FreeRADIUS: "freeradius",
+  "ACME (Let's Encrypt)": "acme",
+  "Shell commands": "shellcmd",
+  "Other installed packages": "installedpackages",
   // v0.14.0
   "Last change": "lastchange",
   Theme: "theme",
@@ -1006,10 +1142,25 @@ function TableOfContents({
     entries.push(["Gateway groups", cfg.gateway_groups.length]);
   if (cfg.static_routes.length)
     entries.push(["Static routes", cfg.static_routes.length]);
+  if (cfg.installedpackages?.frr)
+    entries.push(["FRR — routing daemon", 1]);
   if (cfg.firewall_rules.length)
     entries.push(["Firewall rules", cfg.firewall_rules.length]);
   if (cfg.nat_rules.length) entries.push(["NAT rules", cfg.nat_rules.length]);
+  if (cfg.installedpackages?.miniupnpd)
+    entries.push(["miniupnpd (UPnP / NAT-PMP)", 1]);
   if (cfg.aliases.length) entries.push(["Aliases", cfg.aliases.length]);
+  if (cfg.installedpackages?.pfblockerng) entries.push(["pfBlockerNG", 1]);
+  if (cfg.installedpackages?.suricata)
+    entries.push([
+      "Suricata IDS/IPS",
+      cfg.installedpackages.suricata.interfaces.length || 1,
+    ]);
+  if (cfg.installedpackages?.snort)
+    entries.push([
+      "Snort IDS/IPS",
+      cfg.installedpackages.snort.interfaces.length || 1,
+    ]);
   if (cfg.dhcp_servers.length)
     entries.push(["DHCP servers", cfg.dhcp_servers.length]);
   if (cfg.dns) entries.push(["DNS", 1]);
@@ -1024,6 +1175,8 @@ function TableOfContents({
       "Router Advertisements (IPv6)",
       cfg.radvd_interfaces.length,
     ]);
+  if (cfg.installedpackages?.avahi)
+    entries.push(["Avahi (mDNS reflector)", 1]);
   if (cfg.notifications) entries.push(["Notifications", 1]);
   if (cfg.ups) entries.push(["UPS monitoring", 1]);
   if (cfg.voucher_rolls.length)
@@ -1032,6 +1185,8 @@ function TableOfContents({
   if (cfg.ntpd) entries.push(["NTP server", 1]);
   if (cfg.snmpd) entries.push(["SNMP", 1]);
   if (cfg.syslog) entries.push(["Remote syslog", 1]);
+  if (cfg.installedpackages?.telegraf) entries.push(["Telegraf (metrics)", 1]);
+  if (cfg.installedpackages?.zabbix) entries.push(["Zabbix", 1]);
   if (cfg.schedules.length) entries.push(["Schedules", cfg.schedules.length]);
   if (cfg.shaper_queues.length)
     entries.push(["Traffic shaper queues", cfg.shaper_queues.length]);
@@ -1042,8 +1197,15 @@ function TableOfContents({
       "Load balancer",
       cfg.lb_pools.length + cfg.lb_virtual_servers.length,
     ]);
+  if (cfg.installedpackages?.haproxy)
+    entries.push([
+      "HAProxy",
+      cfg.installedpackages.haproxy.frontends.length +
+        cfg.installedpackages.haproxy.backends.length || 1,
+    ]);
   if (cfg.captive_portal_zones.length)
     entries.push(["Captive portal", cfg.captive_portal_zones.length]);
+  if (cfg.installedpackages?.squid) entries.push(["Squid (web proxy)", 1]);
   if (cfg.openvpn_servers.length)
     entries.push(["OpenVPN servers", cfg.openvpn_servers.length]);
   if (cfg.openvpn_clients.length)
@@ -1053,12 +1215,24 @@ function TableOfContents({
       "OpenVPN client-specific overrides",
       cfg.openvpn_cscs.length,
     ]);
+  if (cfg.installedpackages?.openvpn_client_export)
+    entries.push([
+      "OpenVPN Client Export",
+      cfg.installedpackages.openvpn_client_export.servers.length || 1,
+    ]);
   if (cfg.ipsec_phase1.length)
     entries.push(["IPsec — phase 1", cfg.ipsec_phase1.length]);
   if (cfg.ipsec_phase2.length)
     entries.push(["IPsec — phase 2", cfg.ipsec_phase2.length]);
   if (cfg.ipsec_psks.length)
     entries.push(["IPsec — pre-shared keys", cfg.ipsec_psks.length]);
+  if (cfg.ipsec_mobile_clients) entries.push(["IPsec — mobile clients", 1]);
+  if (cfg.installedpackages?.wireguard)
+    entries.push([
+      "WireGuard",
+      cfg.installedpackages.wireguard.tunnels.length +
+        cfg.installedpackages.wireguard.peers.length || 1,
+    ]);
   if (cfg.certificate_authorities.length)
     entries.push([
       "Certificate authorities",
@@ -1068,14 +1242,33 @@ function TableOfContents({
     entries.push(["Certificates", cfg.certificates.length]);
   if (cfg.crls.length)
     entries.push(["Certificate revocation lists", cfg.crls.length]);
-  if (cfg.installedpackages)
-    entries.push(["Installed packages", packageCount(cfg.installedpackages)]);
+  if (cfg.installedpackages?.acme)
+    entries.push([
+      "ACME (Let's Encrypt)",
+      cfg.installedpackages.acme.certificates.length || 1,
+    ]);
   if (cfg.users.length) entries.push(["Users", cfg.users.length]);
   if (cfg.groups.length) entries.push(["Groups", cfg.groups.length]);
   if (cfg.authservers.length)
     entries.push(["External auth servers", cfg.authservers.length]);
+  if (cfg.installedpackages?.freeradius)
+    entries.push([
+      "FreeRADIUS",
+      cfg.installedpackages.freeradius.clients.length +
+        cfg.installedpackages.freeradius.users.length || 1,
+    ]);
   if (cfg.sysctl.length) entries.push(["Sysctl tunables", cfg.sysctl.length]);
   if (cfg.cron.length) entries.push(["Cron jobs", cfg.cron.length]);
+  if (cfg.installedpackages?.shellcmd)
+    entries.push([
+      "Shell commands",
+      cfg.installedpackages.shellcmd.entries.length || 1,
+    ]);
+  if (cfg.installedpackages && cfg.installedpackages.unknown.length > 0)
+    entries.push([
+      "Other installed packages",
+      cfg.installedpackages.unknown.length,
+    ]);
   if (cfg.apikeys.length) entries.push(["API keys", cfg.apikeys.length]);
   if (cfg.sshdata) entries.push(["SSH host keys", 1]);
   if (cfg.interface_groups.length)
@@ -2737,51 +2930,15 @@ function ExpiryCell({
   return <span title={`expires on ${isoDate}`}>{isoDate}</span>;
 }
 
-function packageCount(ip: InstalledPackages): number {
-  let n = 0;
-  if (ip.pfblockerng) n += 1;
-  if (ip.haproxy) n += 1;
-  if (ip.suricata) n += 1;
-  if (ip.acme) n += 1;
-  if (ip.squid) n += 1;
-  if (ip.freeradius) n += 1;
-  if (ip.telegraf) n += 1;
-  if (ip.frr) n += 1;
-  if (ip.zabbix) n += 1;
-  if (ip.wireguard) n += 1;
-  if (ip.snort) n += 1;
-  if (ip.miniupnpd) n += 1;
-  if (ip.avahi) n += 1;
-  if (ip.openvpn_client_export) n += 1;
-  if (ip.shellcmd) n += 1;
-  n += ip.unknown.length;
-  return n;
-}
-
-function PackagesPanel({ ip }: { ip: InstalledPackages }) {
-  return (
-    <div className="space-y-4">
-      {ip.pfblockerng && <PfBlockerNgPanel p={ip.pfblockerng} />}
-      {ip.haproxy && <HaProxyPanel p={ip.haproxy} />}
-      {ip.suricata && <SuricataPanel p={ip.suricata} />}
-      {ip.snort && <SnortPanel p={ip.snort} />}
-      {ip.acme && <AcmePanel p={ip.acme} />}
-      {ip.squid && <SquidPanel p={ip.squid} />}
-      {ip.freeradius && <FreeRadiusPanel p={ip.freeradius} />}
-      {ip.telegraf && <TelegrafPanel p={ip.telegraf} />}
-      {ip.frr && <FrrPanel p={ip.frr} />}
-      {ip.zabbix && <ZabbixPanel p={ip.zabbix} />}
-      {ip.wireguard && <WireGuardPanel p={ip.wireguard} />}
-      {ip.miniupnpd && <MiniUpnpdPanel p={ip.miniupnpd} />}
-      {ip.avahi && <AvahiPanel p={ip.avahi} />}
-      {ip.openvpn_client_export && (
-        <OpenvpnClientExportPanel p={ip.openvpn_client_export} />
-      )}
-      {ip.shellcmd && <ShellCmdPanel p={ip.shellcmd} />}
-      {ip.unknown.length > 0 && <UnknownPackagesList rows={ip.unknown} />}
-    </div>
-  );
-}
+// ``packageCount`` + ``PackagesPanel`` were removed in v0.44.0 — each
+// parsed package now renders as its own top-level <Section> alongside
+// its functional peers (pfBlockerNG with Aliases, Suricata/Snort with
+// Firewall, HAProxy with Load balancer, WireGuard with OpenVPN/IPsec,
+// FRR with Static routes, etc.). The legacy "Installed packages"
+// wrapper was hiding everything inside one generic header. Only the
+// raw-XML fallback ``UnknownPackagesList`` survives, now rendered
+// directly under a small "Other installed packages" <Section> in the
+// main flow.
 
 function PfBlockerNgPanel({ p }: { p: PfBlockerNgConfig }) {
   const subFeatures = [
@@ -2793,7 +2950,7 @@ function PfBlockerNgPanel({ p }: { p: PfBlockerNgConfig }) {
     p.global_present && "Global",
   ].filter((x): x is string => Boolean(x));
   return (
-    <PackageCard title="pfBlockerNG">
+    <>
       <Dl
         items={[
           ["Enabled", p.enable_pfblockerng ? "yes" : "no"],
@@ -2845,7 +3002,7 @@ function PfBlockerNgPanel({ p }: { p: PfBlockerNgConfig }) {
           />
         </div>
       )}
-    </PackageCard>
+    </>
   );
 }
 
@@ -2875,7 +3032,7 @@ function HaProxyPanel({ p }: { p: HaProxyConfig }) {
   if (p.carpdev) globalRows.push(["CARP device", p.carpdev]);
   if (p.remotesyslog) globalRows.push(["Remote syslog", p.remotesyslog]);
   return (
-    <PackageCard title="HAProxy">
+    <>
       <Dl items={globalRows} />
       {p.frontends.length > 0 && (
         <div className="mt-2">
@@ -3042,13 +3199,13 @@ function HaProxyPanel({ p }: { p: HaProxyConfig }) {
           />
         </div>
       )}
-    </PackageCard>
+    </>
   );
 }
 
 function SuricataPanel({ p }: { p: SuricataConfig }) {
   return (
-    <PackageCard title="Suricata IDS/IPS">
+    <>
       <Dl
         items={[
           ["Stats collection", p.enable_stats ? "yes" : "no"],
@@ -3092,13 +3249,13 @@ function SuricataPanel({ p }: { p: SuricataConfig }) {
           />
         </div>
       )}
-    </PackageCard>
+    </>
   );
 }
 
 function AcmePanel({ p }: { p: AcmeConfig }) {
   return (
-    <PackageCard title="ACME (Let's Encrypt)">
+    <>
       <Dl
         items={[
           ["Enabled", p.enable ? "yes" : "no"],
@@ -3139,7 +3296,7 @@ function AcmePanel({ p }: { p: AcmeConfig }) {
           />
         </div>
       )}
-    </PackageCard>
+    </>
   );
 }
 
@@ -3205,7 +3362,7 @@ function CopyableKey({ value }: { value: string }) {
 
 function WireGuardPanel({ p }: { p: WireGuardConfig }) {
   return (
-    <PackageCard title="WireGuard">
+    <>
       {p.tunnels.length === 0 && p.peers.length === 0 && (
         <div className="text-xs text-muted-fg">
           Package installed but no tunnels or peers configured.
@@ -3298,13 +3455,13 @@ function WireGuardPanel({ p }: { p: WireGuardConfig }) {
           />
         </div>
       )}
-    </PackageCard>
+    </>
   );
 }
 
 function SnortPanel({ p }: { p: SnortConfig }) {
   return (
-    <PackageCard title="Snort (IDS/IPS)">
+    <>
       <Dl
         items={[
           [
@@ -3356,13 +3513,13 @@ function SnortPanel({ p }: { p: SnortConfig }) {
           />
         </div>
       )}
-    </PackageCard>
+    </>
   );
 }
 
 function MiniUpnpdPanel({ p }: { p: MiniUpnpdConfig }) {
   return (
-    <PackageCard title="miniUPnPd (UPnP & NAT-PMP)">
+    <>
       <Dl
         items={[
           ["Enabled", <StatusPill key="e" enabled={p.enable} />, fieldId("miniupnpd", "enable")],
@@ -3388,13 +3545,13 @@ function MiniUpnpdPanel({ p }: { p: MiniUpnpdConfig }) {
           </ul>
         </div>
       )}
-    </PackageCard>
+    </>
   );
 }
 
 function AvahiPanel({ p }: { p: AvahiConfig }) {
   return (
-    <PackageCard title="Avahi (mDNS reflector)">
+    <>
       <Dl
         items={[
           ["Enabled", <StatusPill key="e" enabled={p.enable} />, fieldId("avahi", "enable")],
@@ -3451,7 +3608,7 @@ function AvahiPanel({ p }: { p: AvahiConfig }) {
           ["Cache max entries", p.cache_entries_max ?? "—", fieldId("avahi", "cache_entries_max")],
         ]}
       />
-    </PackageCard>
+    </>
   );
 }
 
@@ -3461,7 +3618,7 @@ function OpenvpnClientExportPanel({
   p: OpenvpnClientExportConfig;
 }) {
   return (
-    <PackageCard title="OpenVPN Client Export">
+    <>
       <Dl
         items={[
           [
@@ -3534,13 +3691,13 @@ function OpenvpnClientExportPanel({
           />
         </div>
       )}
-    </PackageCard>
+    </>
   );
 }
 
 function ShellCmdPanel({ p }: { p: ShellCmdSettings }) {
   return (
-    <PackageCard title="Shellcmd (boot / filter hooks)">
+    <>
       {p.entries.length === 0 ? (
         <div className="text-xs text-muted-fg">No commands configured.</div>
       ) : (
@@ -3558,13 +3715,13 @@ function ShellCmdPanel({ p }: { p: ShellCmdSettings }) {
           ])}
         />
       )}
-    </PackageCard>
+    </>
   );
 }
 
 function UnknownPackagesList({ rows }: { rows: UnknownPackage[] }) {
   return (
-    <PackageCard title={`Other packages (${rows.length})`}>
+    <>
       <p className="mb-2 text-xs text-muted-fg">
         These packages aren't yet structured-parsed — raw XML subtree is
         available below for reference.
@@ -3587,7 +3744,7 @@ function UnknownPackagesList({ rows }: { rows: UnknownPackage[] }) {
           </details>
         ))}
       </div>
-    </PackageCard>
+    </>
   );
 }
 
@@ -3937,7 +4094,7 @@ function CrlTable({ rows }: { rows: CertificateRevocationList[] }) {
 
 function SquidPanel({ p }: { p: SquidBundle }) {
   return (
-    <PackageCard title="Squid / squidGuard">
+    <>
       {p.squid && (
         <div className="mb-2">
           <div className="mb-1 text-xs uppercase text-muted-fg">Proxy</div>
@@ -4185,13 +4342,13 @@ function SquidPanel({ p }: { p: SquidBundle }) {
           />
         </div>
       )}
-    </PackageCard>
+    </>
   );
 }
 
 function FreeRadiusPanel({ p }: { p: FreeRadiusConfig }) {
   return (
-    <PackageCard title="FreeRADIUS">
+    <>
       <Dl
         items={[
           ["Enabled", <StatusPill key="e" enabled={p.enabled} />],
@@ -4229,13 +4386,13 @@ function FreeRadiusPanel({ p }: { p: FreeRadiusConfig }) {
           />
         </div>
       )}
-    </PackageCard>
+    </>
   );
 }
 
 function TelegrafPanel({ p }: { p: TelegrafConfig }) {
   return (
-    <PackageCard title="Telegraf">
+    <>
       <Dl
         items={[
           ["Enabled", <StatusPill key="e" enabled={p.enabled} />, fieldId("telegraf", "enable")],
@@ -4253,13 +4410,13 @@ function TelegrafPanel({ p }: { p: TelegrafConfig }) {
           ],
         ]}
       />
-    </PackageCard>
+    </>
   );
 }
 
 function FrrPanel({ p }: { p: FrrConfig }) {
   return (
-    <PackageCard title="FRR (routing daemon)">
+    <>
       <Dl
         items={[
           ["Enabled", <StatusPill key="e" enabled={p.enabled} />],
@@ -4442,13 +4599,13 @@ function FrrPanel({ p }: { p: FrrConfig }) {
           {p.bgp6_present && <Badge tone="muted">BGP6d</Badge>}
         </div>
       )}
-    </PackageCard>
+    </>
   );
 }
 
 function ZabbixPanel({ p }: { p: ZabbixBundle }) {
   return (
-    <PackageCard title="Zabbix">
+    <>
       {p.agent && (
         <div className="mb-2">
           <div className="mb-1 text-xs uppercase text-muted-fg">Agent</div>
@@ -4498,7 +4655,7 @@ function ZabbixPanel({ p }: { p: ZabbixBundle }) {
           />
         </div>
       )}
-    </PackageCard>
+    </>
   );
 }
 

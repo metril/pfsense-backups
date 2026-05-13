@@ -36,6 +36,9 @@ const GROUP_MEMBERS: Record<Exclude<SectionGroup, "neutral">, string[]> = {
     "diag",
     "sshdata",
     "apikeys",
+    // v0.44.0 — Shell commands package (boot / filter hooks). Same
+    // hue as cron because it's "things that fire on schedule / event".
+    "shellcmd",
   ],
   networking: [
     "interfaces",
@@ -58,8 +61,21 @@ const GROUP_MEMBERS: Record<Exclude<SectionGroup, "neutral">, string[]> = {
     "legacy_bridge",
     "proxyarp",
     "interface_groups",
+    // v0.44.0 — FRR is a routing daemon; sits next to gateways/static
+    // routes.
+    "frr",
   ],
-  security: ["firewall_rules", "nat_rules", "aliases", "schedules"],
+  security: [
+    "firewall_rules",
+    "nat_rules",
+    "aliases",
+    "schedules",
+    // v0.44.0 — IDS / DNS-blocking packages. pfBlockerNG ships
+    // firewall rules + a DNSBL; Suricata/Snort are pure IDS/IPS.
+    "pfblockerng",
+    "suricata",
+    "snort",
+  ],
   services: [
     "dhcp_servers",
     "dhcp_relays",
@@ -79,6 +95,15 @@ const GROUP_MEMBERS: Record<Exclude<SectionGroup, "neutral">, string[]> = {
     // v0.14.0
     "dhcp_backend",
     "ezshaper",
+    // v0.44.0 — service-daemon packages: HAProxy reverse-proxies,
+    // Squid is a web proxy, Telegraf/Zabbix are monitoring agents,
+    // miniupnpd is a UPnP/NAT-PMP daemon, Avahi is an mDNS reflector.
+    "miniupnpd",
+    "haproxy",
+    "squid",
+    "telegraf",
+    "zabbix",
+    "avahi",
   ],
   "vpn-pki": [
     "openvpn_servers",
@@ -97,7 +122,16 @@ const GROUP_MEMBERS: Record<Exclude<SectionGroup, "neutral">, string[]> = {
     "ovpnserver_wizard",
     "l2tp",
     "pppoe_servers",
+    // v0.44.0 — VPN / auth / cert packages.
+    "wireguard",
+    "openvpn_client_export",
+    "freeradius",
+    "acme",
   ],
+  // v0.44.0 — the only thing still in the "packages" group is the
+  // raw-XML leftover bucket for packages whose XML our per-package
+  // parsers didn't recognise. Every parsed package now has its own
+  // colored section in one of the groups above.
   packages: ["installedpackages"],
 };
 
