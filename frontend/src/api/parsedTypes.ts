@@ -794,6 +794,20 @@ export interface PfBlockerNgConfig {
   geoip_continents: string[];
 }
 
+export interface HaProxyAcl {
+  name: string;
+  expression: string | null;
+  value: string | null;
+  casesensitive: boolean;
+  inverse: boolean;
+}
+
+export interface HaProxyAction {
+  action: string | null;
+  acl: string | null;
+  parameters: string | null;
+}
+
 export interface HaProxyFrontend {
   name: string;
   status: string | null;
@@ -804,6 +818,17 @@ export interface HaProxyFrontend {
   default_backend: string | null;
   ssl: boolean;
   forwardfor: boolean;
+  // v0.43.0 — SSL / TLS detail + routing logic.
+  ssloffloadcert: string | null;
+  dcertadv: string | null;
+  clientcert_ca: string | null;
+  clientcert_crl: string | null;
+  sslclientcert_required: boolean;
+  sslciphers: string | null;
+  sslprotocols: string | null;
+  advanced: string | null;
+  acls: HaProxyAcl[];
+  actions: HaProxyAction[];
 }
 
 export interface HaProxyServer {
@@ -814,6 +839,10 @@ export interface HaProxyServer {
   status: string | null;
   weight: string | null;
   password: string | null;
+  // v0.43.0
+  maxconn: string | null;
+  sslservercertverify: boolean;
+  advanced: string | null;
 }
 
 export interface HaProxyBackend {
@@ -822,6 +851,18 @@ export interface HaProxyBackend {
   balance: string | null;
   check_type: string | null;
   servers: HaProxyServer[];
+  // v0.43.0 — timeouts + retries + health check + cookie persistence.
+  connection_timeout: string | null;
+  server_timeout: string | null;
+  retries: string | null;
+  httpcheck_method: string | null;
+  monitor_uri: string | null;
+  monitor_httpversion: string | null;
+  check_interval: string | null;
+  persist_cookie_enabled: boolean;
+  persist_cookie_name: string | null;
+  persist_cookie_mode: string | null;
+  advanced: string | null;
 }
 
 export interface HaProxyConfig {
@@ -830,6 +871,20 @@ export interface HaProxyConfig {
   remotesyslog: string | null;
   frontends: HaProxyFrontend[];
   backends: HaProxyBackend[];
+  // v0.43.0 — global stanza.
+  maxconn: string | null;
+  nbthread: string | null;
+  nbproc: string | null;
+  hard_stop_after: string | null;
+  ssldefaultdhparam: string | null;
+  log_facility: string | null;
+  log_level: string | null;
+  log_send_hostname: string | null;
+  localstats_port: string | null;
+  localstats_refresh: string | null;
+  localstats_sticktable_views: boolean;
+  carpdev: string | null;
+  enable_iface: string | null;
 }
 
 export interface SuricataInterface {
@@ -904,6 +959,51 @@ export interface SquidConfig {
   ntlm_domain: string | null;
   ntlm_admin_username: string | null;
   ntlm_admin_password: string | null;
+  // v0.43.0 — SSL bump (HTTPS interception).
+  ssl_proxy_enable: boolean;
+  ssl_proxy_intercept_port: string | null;
+  ssl_proxy_intercept_interfaces: string[];
+  ssl_proxy_dhparams_size: string | null;
+  ssl_proxy_options: string | null;
+  ssl_proxy_compatibility: string | null;
+  ssl_proxy_cafile_ref: string | null;
+  ssl_proxy_certificate_ref: string | null;
+  sslproxy_cipher: string | null;
+}
+
+export interface SquidCacheConfig {
+  enable: boolean;
+  harddisk_cache_size: string | null;
+  harddisk_cache_system: string | null;
+  harddisk_cache_location: string | null;
+  minimum_object_size: string | null;
+  maximum_object_size: string | null;
+  memory_cache_size: string | null;
+  maximum_objsize_in_mem: string | null;
+  cache_replacement_policy: string | null;
+  memory_replacement_policy: string | null;
+  level1_subdirs: string | null;
+  donotcache: string | null;
+  enable_offline: boolean;
+}
+
+export interface SquidAntivirusConfig {
+  enable: boolean;
+  client_info: string | null;
+  enable_advanced: boolean;
+  raw_squidclamav_conf: string | null;
+  raw_cicap_conf: string | null;
+  raw_cicap_magic: string | null;
+  raw_freshclam_conf: string | null;
+  raw_clamd_conf: string | null;
+}
+
+export interface SquidRemoteConfig {
+  enable: boolean;
+  proxyaddr: string | null;
+  proxyport: string | null;
+  username: string | null;
+  password: string | null;
 }
 
 export interface SquidGuardTarget {
@@ -951,9 +1051,13 @@ export interface SquidBundle {
   squid: SquidConfig | null;
   squidguard: SquidGuardConfig | null;
   cache_present: boolean;
+  // v0.43.0 — structured sub-package config (was presence-only).
+  cache: SquidCacheConfig | null;
   remote_present: boolean;
+  remote: SquidRemoteConfig | null;
   auth: SquidAuthConfig | null;
   antivirus_present: boolean;
+  antivirus: SquidAntivirusConfig | null;
 }
 
 export interface FreeRadiusClient {
@@ -1032,15 +1136,46 @@ export interface FrrOspfConfig {
   interfaces: FrrOspfInterface[];
 }
 
+export interface FrrOspfd6Config {
+  enabled: boolean;
+  router_id: string | null;
+  redistribute_connected: boolean;
+  redistribute_static: boolean;
+  redistribute_kernel: boolean;
+  redistribute_bgp: boolean;
+}
+
+export interface FrrAclEntry {
+  name: string;
+  seq: string | null;
+  action: string | null;
+  source: string | null;
+  descr: string | null;
+}
+
+export interface FrrPrefixListEntry {
+  name: string;
+  seq: string | null;
+  action: string | null;
+  prefix: string | null;
+  ge: string | null;
+  le: string | null;
+  descr: string | null;
+}
+
 export interface FrrConfig {
   enabled: boolean;
   bgp: FrrBgpConfig | null;
   ospf: FrrOspfConfig | null;
   ospfd_present: boolean;
+  // v0.43.0 — structured OSPFv3 daemon + ACL/prefix-list rows.
+  ospfd: FrrOspfd6Config | null;
   ospfd_areas_present: boolean;
   ospfd_interfaces_present: boolean;
   global_acls_present: boolean;
+  global_acls: FrrAclEntry[];
   global_prefixes_present: boolean;
+  global_prefixes: FrrPrefixListEntry[];
   bgp6_present: boolean;
   // OSPFv3 (IPv6) rows carry the same field set as OSPFv2 — reuse the
   // existing type directly rather than aliasing (the old indirection

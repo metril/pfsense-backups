@@ -2850,31 +2850,140 @@ function PfBlockerNgPanel({ p }: { p: PfBlockerNgConfig }) {
 }
 
 function HaProxyPanel({ p }: { p: HaProxyConfig }) {
+  // Global stanza summary — only show rows with values to keep the
+  // header compact on minimal configs.
+  const globalRows: [string, React.ReactNode][] = [
+    ["Enabled", p.enable ? "yes" : "no"],
+  ];
+  if (p.maxconn) globalRows.push(["maxconn", p.maxconn]);
+  if (p.nbthread) globalRows.push(["nbthread", p.nbthread]);
+  if (p.nbproc) globalRows.push(["nbproc", p.nbproc]);
+  if (p.hard_stop_after) globalRows.push(["hard_stop_after", p.hard_stop_after]);
+  if (p.ssldefaultdhparam) globalRows.push(["default DH param", p.ssldefaultdhparam]);
+  if (p.log_facility || p.log_level) {
+    globalRows.push([
+      "Log",
+      [p.log_facility, p.log_level].filter(Boolean).join(" ") || "—",
+    ]);
+  }
+  if (p.localstats_port) {
+    globalRows.push([
+      "Local stats",
+      `port ${p.localstats_port}${p.localstats_refresh ? `, refresh ${p.localstats_refresh}s` : ""}`,
+    ]);
+  }
+  if (p.carpdev) globalRows.push(["CARP device", p.carpdev]);
+  if (p.remotesyslog) globalRows.push(["Remote syslog", p.remotesyslog]);
   return (
     <PackageCard title="HAProxy">
-      <Dl
-        items={[
-          ["Enabled", p.enable ? "yes" : "no"],
-          ["Remote syslog", p.remotesyslog ?? "—"],
-        ]}
-      />
+      <Dl items={globalRows} />
       {p.frontends.length > 0 && (
         <div className="mt-2">
           <div className="mb-1 text-xs uppercase text-muted-fg">
             Frontends ({p.frontends.length})
           </div>
           <Table
-            headers={["Name", "Type", "Listen", "Default backend", "SSL", "Status"]}
+            headers={[
+              "Name",
+              "Type",
+              "Listen",
+              "Default backend",
+              "SSL",
+              "TLS detail",
+              "Status",
+            ]}
             rowKeys={p.frontends.map((f) => f.name)}
-            rows={p.frontends.map((f) => [
-              f.name,
-              f.type ?? "—",
-              f.addresses.join(", ") || f.extaddr || "—",
-              <Xref key="db" kind="haproxy_backend" k={f.default_backend} />,
-              f.ssl ? "yes" : "no",
-              f.status ?? "—",
-            ])}
+            rows={p.frontends.map((f) => {
+              const tlsBits: string[] = [];
+              if (f.sslclientcert_required) tlsBits.push("mTLS");
+              if (f.sslprotocols) tlsBits.push(f.sslprotocols);
+              if (f.sslciphers) tlsBits.push("ciphers");
+              return [
+                f.name,
+                f.type ?? "—",
+                f.addresses.join(", ") || f.extaddr || "—",
+                <Xref key="db" kind="haproxy_backend" k={f.default_backend} />,
+                f.ssl ? "yes" : "no",
+                tlsBits.length === 0 ? (
+                  "—"
+                ) : (
+                  <span
+                    key="tls"
+                    className="inline-flex flex-wrap gap-1 text-xs"
+                    title={
+                      [
+                        f.ssloffloadcert ? `cert ${f.ssloffloadcert}` : null,
+                        f.clientcert_ca ? `mTLS CA ${f.clientcert_ca}` : null,
+                        f.sslciphers ?? null,
+                      ]
+                        .filter(Boolean)
+                        .join("\n") || undefined
+                    }
+                  >
+                    {tlsBits.map((b) => (
+                      <span key={b} className="rounded bg-muted px-1.5 py-0.5 font-mono">
+                        {b}
+                      </span>
+                    ))}
+                  </span>
+                ),
+                f.status ?? "—",
+              ];
+            })}
           />
+          {/* Per-frontend ACLs + actions. Most pfSense-HAProxy
+              deployments use these for routing decisions; previously
+              entirely invisible in the structured view. */}
+          {p.frontends.some((f) => f.acls.length > 0 || f.actions.length > 0) && (
+            <div className="mt-2 space-y-3">
+              {p.frontends
+                .filter((f) => f.acls.length > 0 || f.actions.length > 0)
+                .map((f) => (
+                  <div key={f.name} className="rounded border border-border p-2">
+                    <div className="mb-1 text-xs uppercase text-muted-fg">
+                      {f.name} — ACLs ({f.acls.length}) · actions (
+                      {f.actions.length})
+                    </div>
+                    {f.acls.length > 0 && (
+                      <Table
+                        headers={["ACL name", "Expression", "Value", "Flags"]}
+                        rows={f.acls.map((a) => [
+                          a.name,
+                          <span key="e" className="font-mono text-xs">
+                            {a.expression ?? "—"}
+                          </span>,
+                          <span key="v" className="font-mono text-xs">
+                            {a.value ?? "—"}
+                          </span>,
+                          <span key="fl" className="inline-flex gap-1">
+                            {a.casesensitive ? (
+                              <Badge tone="muted" className="text-[10px]">case</Badge>
+                            ) : null}
+                            {a.inverse ? (
+                              <Badge tone="muted" className="text-[10px]">!</Badge>
+                            ) : null}
+                          </span>,
+                        ])}
+                      />
+                    )}
+                    {f.actions.length > 0 && (
+                      <Table
+                        headers={["Action", "ACL", "Parameters"]}
+                        rows={f.actions.map((a) => [
+                          <span key="a" className="font-mono text-xs">
+                            {a.action ?? "—"}
+                          </span>,
+                          a.acl ?? "—",
+                          <span key="p" className="font-mono text-xs">
+                            {a.parameters ?? "—"}
+                          </span>,
+                        ])}
+                      />
+                    )}
+                  </div>
+                ))}
+            </div>
+          )}
         </div>
       )}
       {p.backends.length > 0 && (
@@ -2883,21 +2992,53 @@ function HaProxyPanel({ p }: { p: HaProxyConfig }) {
             Backends ({p.backends.length})
           </div>
           <Table
-            headers={["Name", "Balance", "Check", "Servers"]}
+            headers={[
+              "Name",
+              "Balance",
+              "Check",
+              "Tuning",
+              "Cookie persistence",
+              "Servers",
+            ]}
             rowKeys={p.backends.map((b) => b.name)}
             rowIds={p.backends.map((b) => itemId("haproxy_backend", b.name))}
-            rows={p.backends.map((b) => [
-              b.name,
-              b.balance ?? "—",
-              b.check_type ?? "—",
-              <span key="s" className="text-xs">
-                {b.servers
-                  .map((s) =>
-                    `${s.name} ${s.address ?? "?"}:${s.port ?? "?"}${s.password === "***redacted***" ? " 🔒" : ""}`,
-                  )
-                  .join(", ") || "—"}
-              </span>,
-            ])}
+            rows={p.backends.map((b) => {
+              const tuning: string[] = [];
+              if (b.connection_timeout) tuning.push(`conn ${b.connection_timeout}ms`);
+              if (b.server_timeout) tuning.push(`srv ${b.server_timeout}ms`);
+              if (b.retries) tuning.push(`retry×${b.retries}`);
+              if (b.check_interval) tuning.push(`int ${b.check_interval}ms`);
+              if (b.httpcheck_method && b.monitor_uri) {
+                tuning.push(`${b.httpcheck_method} ${b.monitor_uri}`);
+              }
+              const cookie = b.persist_cookie_enabled
+                ? `${b.persist_cookie_name ?? "?"} (${b.persist_cookie_mode ?? "?"})`
+                : null;
+              return [
+                b.name,
+                b.balance ?? "—",
+                b.check_type ?? "—",
+                tuning.length === 0 ? (
+                  "—"
+                ) : (
+                  <span key="t" className="inline-flex flex-wrap gap-1 text-xs">
+                    {tuning.map((s) => (
+                      <span key={s} className="rounded bg-muted px-1.5 py-0.5 font-mono">
+                        {s}
+                      </span>
+                    ))}
+                  </span>
+                ),
+                cookie ?? "—",
+                <span key="s" className="text-xs">
+                  {b.servers
+                    .map((s) =>
+                      `${s.name} ${s.address ?? "?"}:${s.port ?? "?"}${s.password === "***redacted***" ? " 🔒" : ""}${s.maxconn ? ` mc${s.maxconn}` : ""}`,
+                    )
+                    .join(", ") || "—"}
+                </span>,
+              ];
+            })}
           />
         </div>
       )}
@@ -3911,12 +4052,137 @@ function SquidPanel({ p }: { p: SquidBundle }) {
           />
         </div>
       )}
-      {(p.cache_present || p.remote_present || p.antivirus_present) && (
-        <div className="mt-2 flex flex-wrap gap-1 text-xs">
-          <span className="text-muted-fg">Sub-features configured:</span>
-          {p.cache_present && <Badge tone="muted">cache</Badge>}
-          {p.remote_present && <Badge tone="muted">remote ACL</Badge>}
-          {p.antivirus_present && <Badge tone="muted">antivirus</Badge>}
+      {p.squid?.ssl_proxy_enable && (
+        <div className="mt-2">
+          <div className="mb-1 text-xs uppercase text-muted-fg">
+            SSL bump (HTTPS interception)
+          </div>
+          <Dl
+            items={[
+              [
+                "Intercept port",
+                p.squid.ssl_proxy_intercept_port ?? "—",
+              ],
+              [
+                "Intercept interfaces",
+                p.squid.ssl_proxy_intercept_interfaces.length > 0 ? (
+                  <span key="i" className="flex flex-wrap gap-1">
+                    {p.squid.ssl_proxy_intercept_interfaces.map((i) => (
+                      <InterfaceChip key={i} name={i} />
+                    ))}
+                  </span>
+                ) : (
+                  "—"
+                ),
+              ],
+              ["Compatibility", p.squid.ssl_proxy_compatibility ?? "—"],
+              ["DH params", p.squid.ssl_proxy_dhparams_size ?? "—"],
+              [
+                "Forging CA",
+                <Xref key="ca" kind="ca" k={p.squid.ssl_proxy_cafile_ref} />,
+              ],
+              [
+                "Server cert",
+                <Xref
+                  key="c"
+                  kind="cert"
+                  k={p.squid.ssl_proxy_certificate_ref}
+                />,
+              ],
+              ["Cipher suite", p.squid.sslproxy_cipher ?? "—"],
+            ]}
+          />
+        </div>
+      )}
+      {p.cache && (
+        <div className="mt-2">
+          <div className="mb-1 text-xs uppercase text-muted-fg">
+            Cache settings
+          </div>
+          <Dl
+            items={[
+              ["Enabled", <StatusPill key="e" enabled={p.cache.enable} />],
+              [
+                "Disk cache",
+                p.cache.harddisk_cache_size
+                  ? `${p.cache.harddisk_cache_size} MB (${p.cache.harddisk_cache_system ?? "?"})`
+                  : "—",
+              ],
+              ["Cache path", p.cache.harddisk_cache_location ?? "—"],
+              [
+                "Memory cache",
+                p.cache.memory_cache_size
+                  ? `${p.cache.memory_cache_size} MB`
+                  : "—",
+              ],
+              [
+                "Object size limits",
+                [
+                  p.cache.minimum_object_size && `min ${p.cache.minimum_object_size} KB`,
+                  p.cache.maximum_object_size && `max ${p.cache.maximum_object_size} KB`,
+                  p.cache.maximum_objsize_in_mem &&
+                    `mem-max ${p.cache.maximum_objsize_in_mem} KB`,
+                ]
+                  .filter(Boolean)
+                  .join(", ") || "—",
+              ],
+              ["Replacement policy", p.cache.cache_replacement_policy ?? "—"],
+              [
+                "Do-not-cache",
+                p.cache.donotcache ? (
+                  <span key="d" className="font-mono text-xs whitespace-pre">
+                    {p.cache.donotcache}
+                  </span>
+                ) : (
+                  "—"
+                ),
+              ],
+            ]}
+          />
+        </div>
+      )}
+      {p.antivirus && (
+        <div className="mt-2">
+          <div className="mb-1 text-xs uppercase text-muted-fg">
+            Antivirus (ClamAV / c-icap)
+          </div>
+          <Dl
+            items={[
+              ["Enabled", <StatusPill key="e" enabled={p.antivirus.enable} />],
+              ["Client info", p.antivirus.client_info ?? "—"],
+              [
+                "Advanced",
+                <StatusPill
+                  key="a"
+                  enabled={p.antivirus.enable_advanced}
+                  labels={{ on: "yes", off: "no" }}
+                />,
+              ],
+            ]}
+          />
+        </div>
+      )}
+      {p.remote && (
+        <div className="mt-2">
+          <div className="mb-1 text-xs uppercase text-muted-fg">
+            Upstream / parent proxy
+          </div>
+          <Dl
+            items={[
+              ["Enabled", <StatusPill key="e" enabled={p.remote.enable} />],
+              [
+                "Upstream",
+                p.remote.proxyaddr
+                  ? `${p.remote.proxyaddr}:${p.remote.proxyport ?? "?"}`
+                  : "—",
+              ],
+              ["Username", p.remote.username ?? "—"],
+              [
+                "Password",
+                p.remote.password === "***redacted***" ? <Redacted /> : "—",
+              ],
+            ]}
+          />
         </div>
       )}
     </PackageCard>
@@ -4080,24 +4346,98 @@ function FrrPanel({ p }: { p: FrrConfig }) {
           />
         </div>
       )}
-      {(p.ospfd_present ||
-        p.ospfd_areas_present ||
+      {p.ospfd && (
+        <div className="mt-2">
+          <div className="mb-1 text-xs uppercase text-muted-fg">
+            OSPFv3 (IPv6) daemon
+          </div>
+          <Dl
+            items={[
+              ["Enabled", <StatusPill key="e" enabled={p.ospfd.enabled} />],
+              ["Router id", p.ospfd.router_id ?? "—"],
+              [
+                "Redistribute",
+                (() => {
+                  const bits = [
+                    p.ospfd.redistribute_connected && "connected",
+                    p.ospfd.redistribute_static && "static",
+                    p.ospfd.redistribute_kernel && "kernel",
+                    p.ospfd.redistribute_bgp && "bgp",
+                  ].filter(Boolean);
+                  return bits.length > 0 ? bits.join(", ") : "—";
+                })(),
+              ],
+            ]}
+          />
+        </div>
+      )}
+      {p.global_acls.length > 0 && (
+        <div className="mt-2">
+          <div className="mb-1 text-xs uppercase text-muted-fg">
+            Global ACLs ({p.global_acls.length} rows)
+          </div>
+          <Table
+            headers={["Name", "Seq", "Action", "Source", "Description"]}
+            rows={p.global_acls.map((a) => [
+              a.name,
+              <span key="s" className="font-mono text-xs">
+                {a.seq ?? "—"}
+              </span>,
+              a.action === "deny" ? (
+                <Badge key="a" tone="danger" className="text-[10px]">deny</Badge>
+              ) : a.action === "permit" ? (
+                <Badge key="a" tone="success" className="text-[10px]">permit</Badge>
+              ) : (
+                a.action ?? "—"
+              ),
+              <span key="src" className="font-mono text-xs">
+                {a.source ?? "—"}
+              </span>,
+              a.descr ?? "—",
+            ])}
+          />
+        </div>
+      )}
+      {p.global_prefixes.length > 0 && (
+        <div className="mt-2">
+          <div className="mb-1 text-xs uppercase text-muted-fg">
+            Prefix lists ({p.global_prefixes.length} rows)
+          </div>
+          <Table
+            headers={["Name", "Seq", "Action", "Prefix", "ge/le", "Description"]}
+            rows={p.global_prefixes.map((pr) => [
+              pr.name,
+              <span key="s" className="font-mono text-xs">
+                {pr.seq ?? "—"}
+              </span>,
+              pr.action === "deny" ? (
+                <Badge key="a" tone="danger" className="text-[10px]">deny</Badge>
+              ) : pr.action === "permit" ? (
+                <Badge key="a" tone="success" className="text-[10px]">permit</Badge>
+              ) : (
+                pr.action ?? "—"
+              ),
+              <span key="p" className="font-mono text-xs">
+                {pr.prefix ?? "—"}
+              </span>,
+              <span key="gl" className="font-mono text-xs">
+                {[pr.ge && `ge ${pr.ge}`, pr.le && `le ${pr.le}`]
+                  .filter(Boolean)
+                  .join(" ") || "—"}
+              </span>,
+              pr.descr ?? "—",
+            ])}
+          />
+        </div>
+      )}
+      {(p.ospfd_areas_present ||
         p.ospfd_interfaces_present ||
-        p.global_acls_present ||
-        p.global_prefixes_present ||
         p.bgp6_present) && (
         <div className="mt-2 flex flex-wrap gap-1 text-xs">
-          <span className="text-muted-fg">
-            IPv6 OSPF + global policy:
-          </span>
-          {p.ospfd_present && <Badge tone="muted">OSPFd</Badge>}
+          <span className="text-muted-fg">Also configured (raw):</span>
           {p.ospfd_areas_present && <Badge tone="muted">OSPFd areas</Badge>}
           {p.ospfd_interfaces_present && (
             <Badge tone="muted">OSPFd interfaces</Badge>
-          )}
-          {p.global_acls_present && <Badge tone="muted">ACLs</Badge>}
-          {p.global_prefixes_present && (
-            <Badge tone="muted">prefix lists</Badge>
           )}
           {p.bgp6_present && <Badge tone="muted">BGP6d</Badge>}
         </div>

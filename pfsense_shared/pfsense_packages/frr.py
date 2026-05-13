@@ -65,22 +65,68 @@ class FrrOspfConfig(BaseModel):
 FrrOspfdInterface = FrrOspfInterface
 
 
+class FrrOspfd6Config(BaseModel):
+    """``<frrospfd>`` — OSPFv3 (IPv6) daemon settings. Counterpart to
+    ``<frrospf>``; previously only presence-tracked."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    router_id: str | None = None
+    redistribute_connected: bool = False
+    redistribute_static: bool = False
+    redistribute_kernel: bool = False
+    redistribute_bgp: bool = False
+
+
+class FrrAclEntry(BaseModel):
+    """``<frrglobalacls><item>`` — one row in a named access-list.
+    Multiple entries with the same ``name`` form a single ACL, evaluated
+    in ``seq`` order."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    seq: str | None = None
+    action: str | None = None  # permit | deny
+    source: str | None = None  # CIDR or "any"
+    descr: str | None = None
+
+
+class FrrPrefixListEntry(BaseModel):
+    """``<frrglobalprefixes><item>`` — one row in a named prefix-list."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    seq: str | None = None
+    action: str | None = None
+    prefix: str | None = None  # CIDR
+    ge: str | None = None  # prefix-length lower bound
+    le: str | None = None  # prefix-length upper bound
+    descr: str | None = None
+
+
 class FrrConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
     bgp: FrrBgpConfig | None = None
     ospf: FrrOspfConfig | None = None
-    # v0.16.0: FRR's OSPFd (IPv6 OSPF) daemon and a handful of shared
-    # global policy tables live under separate top-level package tags.
-    # We surface presence so operators see the daemon/policy is
-    # configured without stranding the tags in "Other packages";
-    # structural details stay available via the raw-XML fallback.
+    # v0.16.0: FRR's OSPFd (IPv6 OSPF) daemon and shared global
+    # policy tables. Presence booleans kept for diff back-compat;
+    # v0.43.0 adds the structured payload alongside them so operators
+    # can see ACL rows + prefix-list rows + the OSPFv3 daemon's own
+    # config in the structured view instead of having to dig into the
+    # raw-XML tab.
     ospfd_present: bool = False
+    ospfd: FrrOspfd6Config | None = None
     ospfd_areas_present: bool = False
     ospfd_interfaces_present: bool = False
     global_acls_present: bool = False
+    global_acls: list[FrrAclEntry] = []
     global_prefixes_present: bool = False
+    global_prefixes: list[FrrPrefixListEntry] = []
     # v0.20.0 — sibling IPv6-BGP daemon tag (presence only; BGP on FRR
     # is dual-stack via address-families, so there is nothing to parse
     # separately).
@@ -239,18 +285,90 @@ def _parse_ospfd_interfaces(
     return out
 
 
+def _parse_ospfd(ospfd_el: Element | None) -> FrrOspfd6Config | None:
+    """Structured ``<frrospfd>`` parser. Mirrors ``<frrospf>`` for
+    the OSPFv3 daemon."""
+    if ospfd_el is None:
+        return None
+    return FrrOspfd6Config(
+        enabled=bool_flag(ospfd_el, "enable") or bool_flag(ospfd_el, "enableospf6"),
+        router_id=text(ospfd_el, "router_id") or text(ospfd_el, "routerid"),
+        redistribute_connected=bool_flag(ospfd_el, "redistribute_connected")
+        or bool_flag(ospfd_el, "redistribute_connectedsubnets"),
+        redistribute_static=bool_flag(ospfd_el, "redistribute_static")
+        or bool_flag(ospfd_el, "redistribute_staticroutes"),
+        redistribute_kernel=bool_flag(ospfd_el, "redistribute_kernel"),
+        redistribute_bgp=bool_flag(ospfd_el, "redistribute_bgp"),
+    )
+
+
+def _parse_global_acls(acl_el: Element | None) -> list[FrrAclEntry]:
+    """``<frrglobalacls><item>`` rows. Multiple entries with the same
+    ``name`` belong to the same ACL; we keep them as a flat list with
+    the name on each row so diff alignment stays stable."""
+    if acl_el is None:
+        return []
+    out: list[FrrAclEntry] = []
+    rows = children(acl_el, "item")
+    if not rows:
+        rows = children(acl_el, "config")
+    for row in rows:
+        name = text(row, "name") or text(row, "aclname")
+        if not name:
+            continue
+        out.append(
+            FrrAclEntry(
+                name=name,
+                seq=text(row, "seq") or text(row, "sequence"),
+                action=text(row, "action"),
+                source=text(row, "source") or text(row, "network"),
+                descr=text(row, "descr") or text(row, "description"),
+            )
+        )
+    return out
+
+
+def _parse_global_prefixes(prefix_el: Element | None) -> list[FrrPrefixListEntry]:
+    """``<frrglobalprefixes><item>`` rows — prefix-list entries."""
+    if prefix_el is None:
+        return []
+    out: list[FrrPrefixListEntry] = []
+    rows = children(prefix_el, "item")
+    if not rows:
+        rows = children(prefix_el, "config")
+    for row in rows:
+        name = text(row, "name") or text(row, "prefixname")
+        if not name:
+            continue
+        out.append(
+            FrrPrefixListEntry(
+                name=name,
+                seq=text(row, "seq") or text(row, "sequence"),
+                action=text(row, "action"),
+                prefix=text(row, "source") or text(row, "prefix") or text(row, "network"),
+                ge=text(row, "ge"),
+                le=text(row, "le"),
+                descr=text(row, "descr") or text(row, "description"),
+            )
+        )
+    return out
+
+
 def parse(ip: Element) -> FrrConfig | None:
     global_el = ip.find("frr")
     if global_el is None:
         global_el = ip.find("frrglobal")
     bgp = _parse_bgp(ip)
     ospf = _parse_ospf(ip)
-    ospfd = ip.find("frrospfd")
+    ospfd_el = ip.find("frrospfd")
+    ospfd_struct = _parse_ospfd(ospfd_el)
     ospfd_areas = ip.find("frrospfdareas")
     ospfd_ifaces_el = ip.find("frrospfdinterfaces")
     ospfd_ifaces = _parse_ospfd_interfaces(ospfd_ifaces_el)
-    global_acls = ip.find("frrglobalacls")
-    global_prefixes = ip.find("frrglobalprefixes")
+    global_acls_el = ip.find("frrglobalacls")
+    global_prefixes_el = ip.find("frrglobalprefixes")
+    global_acls = _parse_global_acls(global_acls_el)
+    global_prefixes = _parse_global_prefixes(global_prefixes_el)
     bgp6 = ip.find("frrbgp6d")
     if all(
         x is None
@@ -258,11 +376,11 @@ def parse(ip: Element) -> FrrConfig | None:
             global_el,
             bgp,
             ospf,
-            ospfd,
+            ospfd_el,
             ospfd_areas,
             ospfd_ifaces_el,
-            global_acls,
-            global_prefixes,
+            global_acls_el,
+            global_prefixes_el,
             bgp6,
         )
     ):
@@ -274,11 +392,14 @@ def parse(ip: Element) -> FrrConfig | None:
         enabled=enabled,
         bgp=bgp,
         ospf=ospf,
-        ospfd_present=ospfd is not None,
+        ospfd_present=ospfd_el is not None,
+        ospfd=ospfd_struct,
         ospfd_areas_present=ospfd_areas is not None,
         ospfd_interfaces_present=ospfd_ifaces_el is not None,
-        global_acls_present=global_acls is not None,
-        global_prefixes_present=global_prefixes is not None,
+        global_acls_present=global_acls_el is not None,
+        global_acls=global_acls,
+        global_prefixes_present=global_prefixes_el is not None,
+        global_prefixes=global_prefixes,
         bgp6_present=bgp6 is not None,
         ospfd_interfaces=ospfd_ifaces,
     )
