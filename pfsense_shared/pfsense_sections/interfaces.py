@@ -47,6 +47,17 @@ class Interface(BaseModel):
     # their presence here with a pointer field so the UI can cross-link.
     blockpriv: bool = False
     blockbogons: bool = False
+    # IPv6 prefix-delegation tracking. When ``ipaddrv6 == "track6"``
+    # the interface inherits its prefix from the WAN's DHCPv6-PD lease;
+    # ``track6_interface`` is the upstream interface key (e.g. ``wan``)
+    # and ``track6_prefix_id`` selects which /64 (hex) out of the
+    # delegated prefix this interface uses.
+    track6_interface: str | None = None
+    track6_prefix_id: str | None = None
+    # Per-interface DHCPv6 client options (when ``ipaddrv6 == "dhcp6"``).
+    dhcp6_ia_pd_len: str | None = None
+    dhcp6_prefix_only: bool = False
+    adv_dhcp6_prefix_selected_interface: str | None = None
 
 
 def parse(root: Element) -> list[Interface]:
@@ -75,6 +86,13 @@ def parse(root: Element) -> list[Interface]:
                 mediaopt=text(child, "mediaopt"),
                 blockpriv=bool_flag(child, "blockpriv"),
                 blockbogons=bool_flag(child, "blockbogons"),
+                track6_interface=text(child, "track6-interface"),
+                track6_prefix_id=text(child, "track6-prefix-id"),
+                dhcp6_ia_pd_len=text(child, "dhcp6-ia-pd-len"),
+                dhcp6_prefix_only=bool_flag(child, "dhcp6prefixonly"),
+                adv_dhcp6_prefix_selected_interface=text(
+                    child, "adv_dhcp6_prefix_selected_interface"
+                ),
             )
         )
     return out

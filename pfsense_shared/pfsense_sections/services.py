@@ -10,6 +10,8 @@ from xml.etree.ElementTree import Element
 
 from pydantic import BaseModel, ConfigDict
 
+from pfsense_shared.pfsense_redact import redact
+
 from ._helpers import bool_flag, children, text
 
 
@@ -20,6 +22,26 @@ class DhcpStaticMap(BaseModel):
     ipaddr: str | None = None
     hostname: str | None = None
     descr: str | None = None
+    # v0.42.0 — per-mapping overrides. ``ddnsdomain`` makes this
+    # mapping update a specific DDNS zone (rather than the
+    # interface-wide one); ``filename`` + ``rootpath`` drive PXE /
+    # BOOTP behaviour; ``gateway`` + ``dnsservers`` override the
+    # interface defaults for this client.
+    ddnsdomain: str | None = None
+    filename: str | None = None
+    rootpath: str | None = None
+    gateway: str | None = None
+    dnsservers: list[str] = []
+
+
+class DhcpNumberOption(BaseModel):
+    """One custom DHCP option override (``<numberoptions><item>``)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    number: str | None = None
+    value: str | None = None
+    type: str | None = None  # text | string | boolean | ...
 
 
 class DhcpServer(BaseModel):
@@ -37,6 +59,29 @@ class DhcpServer(BaseModel):
     gateway: str | None = None
     domainsearchlist: str | None = None
     static_mappings: list[DhcpStaticMap] = []
+    # v0.42.0 — broader DHCP server-wide fields. Custom numberoptions
+    # are vendor / option overrides (e.g. option 252 for WPAD); DDNS
+    # block configures the interface-wide dynamic DNS update; lease
+    # times tune how long leases last.
+    numberoptions: list[DhcpNumberOption] = []
+    ddnsdomain: str | None = None
+    ddnsdomainprimary: str | None = None
+    ddnsdomainkey: str | None = None  # redacted (TSIG key for DDNS nsupdate)
+    defaultleasetime: str | None = None
+    maxleasetime: str | None = None
+
+
+class DnsHostAlias(BaseModel):
+    """One alias under a DNS Resolver host override. pfSense lets each
+    host override carry a list of additional ``host``+``domain``
+    aliases that resolve to the same IP — historically silently
+    dropped from the structured view."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    host: str | None = None
+    domain: str | None = None
+    description: str | None = None
 
 
 class DnsHostOverride(BaseModel):
@@ -46,6 +91,7 @@ class DnsHostOverride(BaseModel):
     domain: str | None = None
     ip: str | None = None
     descr: str | None = None
+    aliases: list[DnsHostAlias] = []
 
 
 class DnsDomainOverride(BaseModel):
@@ -87,14 +133,35 @@ def parse_dhcp(root: Element) -> list[DhcpServer]:
             ]
             maps: list[DhcpStaticMap] = []
             for sm in children(iface, "staticmap"):
+                sm_dns = [
+                    e.text or ""
+                    for e in children(sm, "dnsserver")
+                    if (e.text or "").strip()
+                ]
                 maps.append(
                     DhcpStaticMap(
                         mac=text(sm, "mac"),
                         ipaddr=text(sm, "ipaddr"),
                         hostname=text(sm, "hostname"),
                         descr=text(sm, "descr"),
+                        ddnsdomain=text(sm, "ddnsdomain"),
+                        filename=text(sm, "filename"),
+                        rootpath=text(sm, "rootpath"),
+                        gateway=text(sm, "gateway"),
+                        dnsservers=sm_dns,
                     )
                 )
+            numopts: list[DhcpNumberOption] = []
+            numopts_block = iface.find("numberoptions")
+            if numopts_block is not None:
+                for opt in children(numopts_block, "item"):
+                    numopts.append(
+                        DhcpNumberOption(
+                            number=text(opt, "number"),
+                            value=text(opt, "value"),
+                            type=text(opt, "type"),
+                        )
+                    )
             out.append(
                 DhcpServer(
                     interface=f"{iface.tag}" if tag == "dhcpd" else f"{iface.tag} (v6)",
@@ -106,6 +173,12 @@ def parse_dhcp(root: Element) -> list[DhcpServer]:
                     gateway=text(iface, "gateway"),
                     domainsearchlist=text(iface, "domainsearchlist"),
                     static_mappings=maps,
+                    numberoptions=numopts,
+                    ddnsdomain=text(iface, "ddnsdomain"),
+                    ddnsdomainprimary=text(iface, "ddnsdomainprimary"),
+                    ddnsdomainkey=redact("ddnsdomainkey", text(iface, "ddnsdomainkey")),
+                    defaultleasetime=text(iface, "defaultleasetime"),
+                    maxleasetime=text(iface, "maxleasetime"),
                 )
             )
     return out
@@ -116,12 +189,27 @@ def _host_overrides(el: Element | None) -> list[DnsHostOverride]:
         return []
     out: list[DnsHostOverride] = []
     for ho in children(el, "hosts"):
+        aliases: list[DnsHostAlias] = []
+        # ``<aliases>`` carries zero or more ``<item>`` children, each
+        # an additional host+domain that resolves to the override's IP.
+        # Previously silently dropped — fixed in v0.42.0.
+        aliases_el = ho.find("aliases")
+        if aliases_el is not None:
+            for item in children(aliases_el, "item"):
+                aliases.append(
+                    DnsHostAlias(
+                        host=text(item, "host"),
+                        domain=text(item, "domain"),
+                        description=text(item, "description"),
+                    )
+                )
         out.append(
             DnsHostOverride(
                 host=text(ho, "host"),
                 domain=text(ho, "domain"),
                 ip=text(ho, "ip"),
                 descr=text(ho, "descr"),
+                aliases=aliases,
             )
         )
     return out

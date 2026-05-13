@@ -22,6 +22,7 @@ from defusedxml import DefusedXmlException
 from defusedxml.ElementTree import fromstring as _defused_fromstring
 from pydantic import BaseModel, ConfigDict
 
+from .pfsense_packages import wireguard as _wireguard_pkg
 from .pfsense_sections import (
     aliases as _aliases,
 )
@@ -144,6 +145,7 @@ from .pfsense_sections.ssh import SshData
 from .pfsense_sections.sysctl import SysctlTunable
 from .pfsense_sections.system import SystemInfo
 from .pfsense_sections.vpn import (
+    IpsecMobileClient,
     IpsecPhase1,
     IpsecPhase2,
     IpsecPskEntry,
@@ -227,6 +229,11 @@ _KNOWN: Final[frozenset[str]] = frozenset(
         "apikeys",
         "l2tp",
         "pppoes",
+        # v0.42.0 — pfSense CE 2.7+ / Plus 23.x+ moved WireGuard out
+        # of <installedpackages> and into a top-level <wireguard>
+        # element. The parser folds top-level WireGuard back into
+        # installedpackages.wireguard for unified rendering.
+        "wireguard",
     }
 )
 
@@ -309,6 +316,8 @@ class ParsedConfig(BaseModel):
     ipsec_phase1: list[IpsecPhase1] = []
     ipsec_phase2: list[IpsecPhase2] = []
     ipsec_psks: list[IpsecPskEntry] = []
+    # v0.42.0 — IPsec mobile-clients (road-warrior IKEv2) block.
+    ipsec_mobile_clients: IpsecMobileClient | None = None
     certificate_authorities: list[CertificateAuthority] = []
     certificates: list[Certificate] = []
     crls: list[CertificateRevocationList] = []
@@ -375,7 +384,20 @@ def parse(xml_bytes: bytes | str) -> ParsedConfig:
     gws, ggroups = _routing.parse_gateways(root)
     lb_pools, lb_vservers = _services_extra.parse_load_balancer(root)
     ovpn_servers, ovpn_clients, ovpn_cscs = _vpn.parse_openvpn(root)
-    ipsec_p1, ipsec_p2, ipsec_psks = _vpn.parse_ipsec(root)
+    ipsec_p1, ipsec_p2, ipsec_psks, ipsec_mobile = _vpn.parse_ipsec(root)
+    # WireGuard lives under <installedpackages><wireguard> in the legacy
+    # community-package layout, but pfSense CE 2.7+ / Plus 23.x+ moved it
+    # to a top-level <wireguard> element. Fold both into the same
+    # installedpackages.wireguard slot so the UI renders one panel; if
+    # both are present (mid-upgrade configs), the top-level wins.
+    installed_packages = _packages.parse(root)
+    top_wg_el = root.find("wireguard")
+    if top_wg_el is not None:
+        top_wg_cfg = _wireguard_pkg.parse_wireguard(top_wg_el)
+        if installed_packages is None:
+            installed_packages = InstalledPackages(wireguard=top_wg_cfg)
+        else:
+            installed_packages.wireguard = top_wg_cfg
     ver_el = root.find("version")
     result = ParsedConfig(
         config_version=(ver_el.text or None) if ver_el is not None else None,
@@ -425,6 +447,7 @@ def parse(xml_bytes: bytes | str) -> ParsedConfig:
         ipsec_phase1=ipsec_p1,
         ipsec_phase2=ipsec_p2,
         ipsec_psks=ipsec_psks,
+        ipsec_mobile_clients=ipsec_mobile,
         certificate_authorities=_pki.parse_cas(root),
         certificates=_pki.parse_certs(root),
         crls=_pki.parse_crls(root),
@@ -441,7 +464,7 @@ def parse(xml_bytes: bytes | str) -> ParsedConfig:
         apikeys=_apikeys.parse(root),
         l2tp=_extra_vpn.parse_l2tp(root),
         pppoe_servers=_extra_vpn.parse_pppoes(root),
-        installedpackages=_packages.parse(root),
+        installedpackages=installed_packages,
         users=_auth.parse_users(root),
         groups=_auth.parse_groups(root),
         authservers=_auth.parse_authservers(root),

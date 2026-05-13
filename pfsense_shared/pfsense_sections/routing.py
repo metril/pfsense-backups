@@ -25,6 +25,20 @@ class Gateway(BaseModel):
     weight: str | None = None
     defaultgw: bool = False
     disabled: bool = False
+    # v0.42.0 — gateway monitoring thresholds. pfSense uses dpinger
+    # against ``monitor``; these tune what counts as a degraded gateway
+    # (used by gateway groups for failover) and how often it probes.
+    # Previously silently dropped — operators couldn't see their tuning.
+    latencylow: str | None = None
+    latencyhigh: str | None = None
+    losslow: str | None = None
+    losshigh: str | None = None
+    interval: str | None = None
+    time_period: str | None = None
+    alert_interval: str | None = None
+    loss_interval: str | None = None
+    data_payload: str | None = None
+    force_down: bool = False
 
 
 class GatewayGroup(BaseModel):
@@ -68,6 +82,16 @@ def parse_gateways(root: Element) -> tuple[list[Gateway], list[GatewayGroup]]:
                 weight=text(item, "weight"),
                 defaultgw=bool_flag(item, "defaultgw"),
                 disabled=bool_flag(item, "disabled"),
+                latencylow=text(item, "latencylow"),
+                latencyhigh=text(item, "latencyhigh"),
+                losslow=text(item, "losslow"),
+                losshigh=text(item, "losshigh"),
+                interval=text(item, "interval"),
+                time_period=text(item, "time_period"),
+                alert_interval=text(item, "alert_interval"),
+                loss_interval=text(item, "loss_interval"),
+                data_payload=text(item, "data_payload"),
+                force_down=bool_flag(item, "force_down"),
             )
         )
     groups: list[GatewayGroup] = []

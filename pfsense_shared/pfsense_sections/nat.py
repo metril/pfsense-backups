@@ -15,7 +15,7 @@ class NatRule(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     key: str
-    kind: str  # "port_forward" | "one_to_one" | "outbound"
+    kind: str  # "port_forward" | "one_to_one" | "outbound" | "npt"
     interface: str | None = None
     protocol: str | None = None
     source: Endpoint = Endpoint()
@@ -146,5 +146,32 @@ def parse(root: Element) -> list[NatRule]:
                     disabled=bool_flag(r, "disabled"),
                 )
             )
+
+    # NPt (Network Prefix Translation, IPv6). pfSense stores each
+    # entry as a <npt> child of <nat> with <interface>, a source IPv6
+    # prefix in <source>/<address> (or <src>), a destination IPv6
+    # prefix in <destination>/<address> (or <dst>), plus <descr> /
+    # <disabled>. Previously dropped entirely — entire NAT kind was
+    # invisible in the structured view.
+    for r in children(nat_el, "npt"):
+        src_addr = (
+            text(r.find("source"), "address") if r.find("source") is not None else None
+        ) or text(r, "src")
+        dst_addr = (
+            text(r.find("destination"), "address")
+            if r.find("destination") is not None
+            else None
+        ) or text(r, "dst")
+        out.append(
+            NatRule(
+                key=_key(r, "npt"),
+                kind="npt",
+                interface=text(r, "interface"),
+                source=Endpoint(address=src_addr) if src_addr else Endpoint(),
+                destination=Endpoint(address=dst_addr) if dst_addr else Endpoint(),
+                descr=text(r, "descr"),
+                disabled=bool_flag(r, "disabled"),
+            )
+        )
 
     return out

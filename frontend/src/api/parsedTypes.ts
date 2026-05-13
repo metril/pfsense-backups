@@ -74,6 +74,12 @@ export interface Interface {
   mediaopt: string | null;
   blockpriv: boolean;
   blockbogons: boolean;
+  // v0.42.0 — IPv6 prefix-delegation tracking.
+  track6_interface: string | null;
+  track6_prefix_id: string | null;
+  dhcp6_ia_pd_len: string | null;
+  dhcp6_prefix_only: boolean;
+  adv_dhcp6_prefix_selected_interface: string | null;
 }
 
 export interface Vlan {
@@ -90,6 +96,15 @@ export interface Bridge {
   members: string[];
   descr: string | null;
   enablestp: boolean;
+  // v0.42.0 — STP parameters.
+  stp_proto: string | null;
+  stp_priority: string | null;
+  stp_forward_delay: string | null;
+  stp_hello_time: string | null;
+  stp_maxage: string | null;
+  stp_holdcnt: string | null;
+  stp_member_priorities: Record<string, string>;
+  stp_member_pathcosts: Record<string, string>;
 }
 
 export interface Tunnel {
@@ -180,6 +195,17 @@ export interface Gateway {
   weight: string | null;
   defaultgw: boolean;
   disabled: boolean;
+  // v0.42.0 — monitoring thresholds (dpinger).
+  latencylow: string | null;
+  latencyhigh: string | null;
+  losslow: string | null;
+  losshigh: string | null;
+  interval: string | null;
+  time_period: string | null;
+  alert_interval: string | null;
+  loss_interval: string | null;
+  data_payload: string | null;
+  force_down: boolean;
 }
 
 export interface GatewayGroup {
@@ -205,6 +231,12 @@ export interface Endpoint {
   not_: boolean;
 }
 
+export interface RuleChange {
+  time: string | null;
+  username: string | null;
+  description: string | null;
+}
+
 export interface FirewallRule {
   key: string;
   tracker: string | null;
@@ -221,11 +253,21 @@ export interface FirewallRule {
   gateway: string | null;
   schedule: string | null;
   floating: boolean;
+  // v0.42.0 — direction + traffic-shaping wiring + audit blame.
+  direction: string | null;
+  tag: string | null;
+  dnpipe: string | null;
+  pdnpipe: string | null;
+  queuename: string | null;
+  ackqueue: string | null;
+  max_mss: string | null;
+  created: RuleChange | null;
+  updated: RuleChange | null;
 }
 
 export interface NatRule {
   key: string;
-  kind: "port_forward" | "one_to_one" | "outbound";
+  kind: "port_forward" | "one_to_one" | "outbound" | "npt";
   interface: string | null;
   protocol: string | null;
   source: Endpoint;
@@ -250,6 +292,18 @@ export interface DhcpStaticMap {
   ipaddr: string | null;
   hostname: string | null;
   descr: string | null;
+  // v0.42.0 — per-mapping overrides.
+  ddnsdomain: string | null;
+  filename: string | null;
+  rootpath: string | null;
+  gateway: string | null;
+  dnsservers: string[];
+}
+
+export interface DhcpNumberOption {
+  number: string | null;
+  value: string | null;
+  type: string | null;
 }
 
 export interface DhcpServer {
@@ -262,6 +316,19 @@ export interface DhcpServer {
   gateway: string | null;
   domainsearchlist: string | null;
   static_mappings: DhcpStaticMap[];
+  // v0.42.0 — custom options + DDNS + lease times.
+  numberoptions: DhcpNumberOption[];
+  ddnsdomain: string | null;
+  ddnsdomainprimary: string | null;
+  ddnsdomainkey: string | null;
+  defaultleasetime: string | null;
+  maxleasetime: string | null;
+}
+
+export interface DnsHostAlias {
+  host: string | null;
+  domain: string | null;
+  description: string | null;
 }
 
 export interface DnsHostOverride {
@@ -269,6 +336,8 @@ export interface DnsHostOverride {
   domain: string | null;
   ip: string | null;
   descr: string | null;
+  // v0.42.0 — extra aliases under each host override.
+  aliases: DnsHostAlias[];
 }
 
 export interface DnsDomainOverride {
@@ -525,6 +594,17 @@ export interface OpenVpnServer {
   caref: string | null;
   certref: string | null;
   authmode: string[];
+  // v0.42.0 — extras.
+  push_options: string | null;
+  custom_options: string | null;
+  comp_lzo: string | null;
+  verify_x509_name: string | null;
+  x509_alt_name: string | null;
+  fragment: string | null;
+  mtu_test: boolean;
+  tunnel_mtu: string | null;
+  data_ciphers: string | null;
+  data_ciphers_fallback: string | null;
   shared_key: string | null;
   tls: string | null;
 }
@@ -543,6 +623,16 @@ export interface OpenVpnClient {
   digest: string | null;
   caref: string | null;
   certref: string | null;
+  // v0.42.0 — extras + client auth.
+  custom_options: string | null;
+  comp_lzo: string | null;
+  fragment: string | null;
+  tunnel_mtu: string | null;
+  data_ciphers: string | null;
+  data_ciphers_fallback: string | null;
+  username: string | null;
+  password: string | null;
+  auth_user_pass: string | null;
   shared_key: string | null;
   tls: string | null;
 }
@@ -574,6 +664,16 @@ export interface IpsecPhase1 {
   myid_data: string | null;
   peerid_type: string | null;
   peerid_data: string | null;
+  // v0.42.0 — DPD + lifetimes + mobike + NAT-T.
+  mode: string | null;
+  nat_traversal: string | null;
+  mobike: string | null;
+  dpd_action: string | null;
+  dpd_delay: string | null;
+  dpd_maxfail: string | null;
+  lifetime: string | null;
+  reauth_time: string | null;
+  gw_duplicates: boolean;
   pre_shared_key: string | null;
   encryption_set: string[];
 }
@@ -592,6 +692,12 @@ export interface IpsecPhase2 {
   remote_address: string | null;
   remote_netbits: string | null;
   encryption_set: string[];
+  // v0.42.0 — extras + VTI tunnel-interface addresses.
+  lifetime: string | null;
+  keepalive: string | null;
+  pfsgroup: string | null;
+  mode_vti_addr: string | null;
+  mode_vti_remote_addr: string | null;
 }
 
 export interface IpsecPskEntry {
@@ -599,6 +705,17 @@ export interface IpsecPskEntry {
   ident_type: string | null;
   ident: string | null;
   pre_shared_key: string | null;
+}
+
+export interface IpsecMobileClient {
+  enable: boolean;
+  user_source: string | null;
+  group_source: string | null;
+  pool_address: string | null;
+  pool_netbits: string | null;
+  dns_address: string | null;
+  wins_address: string | null;
+  login_banner: string | null;
 }
 
 export interface CertMetadata {
@@ -1098,6 +1215,10 @@ export interface User {
   groups: string[];
   certrefs: string[];
   expires: string | null;
+  // v0.42.0 — 2FA + SSH key.
+  otp_seed: string | null;
+  u2f_keys: string[];
+  ssh_key: string | null;
 }
 
 export interface Group {
@@ -1291,6 +1412,7 @@ export interface ParsedConfig {
   ipsec_phase1: IpsecPhase1[];
   ipsec_phase2: IpsecPhase2[];
   ipsec_psks: IpsecPskEntry[];
+  ipsec_mobile_clients: IpsecMobileClient | null;
   certificate_authorities: CertificateAuthority[];
   certificates: Certificate[];
   crls: CertificateRevocationList[];

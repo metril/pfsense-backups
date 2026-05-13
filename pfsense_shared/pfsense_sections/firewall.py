@@ -26,6 +26,17 @@ class Endpoint(BaseModel):
     not_: bool = False
 
 
+class RuleChange(BaseModel):
+    """``<created>`` / ``<updated>`` audit blocks pfSense writes on
+    each rule mutation. Not secrets; useful blame context."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    time: str | None = None  # unix epoch seconds (string)
+    username: str | None = None  # ``admin@10.0.0.1`` style
+    description: str | None = None
+
+
 class FirewallRule(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -44,6 +55,26 @@ class FirewallRule(BaseModel):
     gateway: str | None = None
     schedule: str | None = None
     floating: bool = False
+    # Floating rules have an explicit direction (``in``/``out``/``any``);
+    # per-interface rules default to ``in``. The hash key already
+    # references ``<direction>`` — expose it on the model too so the
+    # UI can show it.
+    direction: str | None = None
+    # Traffic-shaping wiring. ``tag`` is the policy tag used to mark
+    # packets for downstream rules / limiters; ``dnpipe`` and
+    # ``pdnpipe`` reference dnshaper pipes for the forward + reply
+    # paths; ``queuename`` and ``ackqueue`` reference shaper queues;
+    # ``max_mss`` is per-rule TCP MSS clamping.
+    tag: str | None = None
+    dnpipe: str | None = None
+    pdnpipe: str | None = None
+    queuename: str | None = None
+    ackqueue: str | None = None
+    max_mss: str | None = None
+    # Audit blame from pfSense itself (separate from our backup-level
+    # anchor blame).
+    created: RuleChange | None = None
+    updated: RuleChange | None = None
 
 
 def _endpoint(el: Element | None) -> Endpoint:
@@ -119,6 +150,17 @@ def _rule_key(r: Element) -> str:
     return "hash:" + hashlib.sha1(blob.encode(), usedforsecurity=False).hexdigest()[:12]
 
 
+def _rule_change(el: Element | None) -> RuleChange | None:
+    if el is None:
+        return None
+    t = text(el, "time")
+    u = text(el, "username")
+    d = text(el, "description")
+    if not any((t, u, d)):
+        return None
+    return RuleChange(time=t, username=u, description=d)
+
+
 def parse(root: Element) -> list[FirewallRule]:
     f_el = root.find("filter")
     if f_el is None:
@@ -142,6 +184,15 @@ def parse(root: Element) -> list[FirewallRule]:
                 gateway=text(r, "gateway"),
                 schedule=text(r, "sched"),
                 floating=text(r, "floating") == "yes",
+                direction=text(r, "direction"),
+                tag=text(r, "tag"),
+                dnpipe=text(r, "dnpipe"),
+                pdnpipe=text(r, "pdnpipe"),
+                queuename=text(r, "defaultqueue") or text(r, "queuename"),
+                ackqueue=text(r, "ackqueue"),
+                max_mss=text(r, "max-mss") or text(r, "max_mss"),
+                created=_rule_change(r.find("created")),
+                updated=_rule_change(r.find("updated")),
             )
         )
     return out

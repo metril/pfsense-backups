@@ -43,6 +43,21 @@ class OpenVpnServer(BaseModel):
     caref: str | None = None
     certref: str | None = None
     authmode: list[str] = []
+    # v0.42.0 — advanced server fields. ``push_options`` is the raw
+    # multi-line text pushed to every client; ``custom_options`` are
+    # raw OpenVPN directives appended verbatim to the server config.
+    # Both can carry security-sensitive routing changes that need to
+    # be visible in diffs.
+    push_options: str | None = None
+    custom_options: str | None = None
+    comp_lzo: str | None = None  # adaptive | yes | no | empty
+    verify_x509_name: str | None = None
+    x509_alt_name: str | None = None
+    fragment: str | None = None
+    mtu_test: bool = False
+    tunnel_mtu: str | None = None
+    data_ciphers: str | None = None
+    data_ciphers_fallback: str | None = None
     # Redacted
     shared_key: str | None = None
     tls: str | None = None
@@ -64,6 +79,18 @@ class OpenVpnClient(BaseModel):
     digest: str | None = None
     caref: str | None = None
     certref: str | None = None
+    # v0.42.0 — see OpenVpnServer.
+    custom_options: str | None = None
+    comp_lzo: str | None = None
+    fragment: str | None = None
+    tunnel_mtu: str | None = None
+    data_ciphers: str | None = None
+    data_ciphers_fallback: str | None = None
+    # Client auth user/pass — username is not secret, password is.
+    username: str | None = None
+    password: str | None = None  # redacted
+    # Auth-user-pass-verify static creds blob — redacted as a whole.
+    auth_user_pass: str | None = None
     # Redacted
     shared_key: str | None = None
     tls: str | None = None
@@ -108,6 +135,17 @@ class IpsecPhase1(BaseModel):
     myid_data: str | None = None
     peerid_type: str | None = None
     peerid_data: str | None = None
+    # v0.42.0 — DPD + lifetimes + mobike + NAT-T + main/aggressive
+    # mode. Critical for tunnel-stability reviews; previously dropped.
+    mode: str | None = None  # main | aggressive
+    nat_traversal: str | None = None  # on | off | force
+    mobike: str | None = None  # on | off
+    dpd_action: str | None = None  # restart | clear | none
+    dpd_delay: str | None = None  # seconds
+    dpd_maxfail: str | None = None
+    lifetime: str | None = None  # seconds
+    reauth_time: str | None = None
+    gw_duplicates: bool = False
     # Redacted
     pre_shared_key: str | None = None
     # Encryption set (flattened for diff legibility; each entry is
@@ -132,6 +170,32 @@ class IpsecPhase2(BaseModel):
     remote_address: str | None = None
     remote_netbits: str | None = None
     encryption_set: list[str] = []
+    # v0.42.0 — lifetime/keepalive/pfsgroup + VTI tunnel-interface
+    # addresses. VTI phase2 entries store the tunnel interface's local
+    # + remote inner addresses (the "interface IPs" the tunnel
+    # presents), which are needed to actually understand what a VTI
+    # tunnel is doing.
+    lifetime: str | None = None
+    keepalive: str | None = None
+    pfsgroup: str | None = None
+    mode_vti_addr: str | None = None
+    mode_vti_remote_addr: str | None = None
+
+
+class IpsecMobileClient(BaseModel):
+    """``<ipsec><mobileclients>`` — IKEv2/IKEv1 road-warrior config
+    block. Single instance (not a list)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enable: bool = False
+    user_source: str | None = None
+    group_source: str | None = None
+    pool_address: str | None = None
+    pool_netbits: str | None = None
+    dns_address: str | None = None
+    wins_address: str | None = None
+    login_banner: str | None = None
 
 
 class IpsecPskEntry(BaseModel):
@@ -213,6 +277,16 @@ def parse_openvpn(
                 caref=text(s, "caref"),
                 certref=text(s, "certref"),
                 authmode=[x for x in authmode_raw.split(",") if x],
+                push_options=text(s, "push_options"),
+                custom_options=text(s, "custom_options"),
+                comp_lzo=text(s, "compression") or text(s, "comp_lzo"),
+                verify_x509_name=text(s, "verify_x509_name"),
+                x509_alt_name=text(s, "x509_alt_name"),
+                fragment=text(s, "fragment"),
+                mtu_test=bool_flag(s, "mtu_test"),
+                tunnel_mtu=text(s, "tunnel_mtu"),
+                data_ciphers=text(s, "data_ciphers"),
+                data_ciphers_fallback=text(s, "data_ciphers_fallback"),
                 shared_key=redact("shared_key", text(s, "shared_key")),
                 # pfSense 2.4 stored the HMAC firewall key under
                 # <tls_auth>; 2.5+ collapsed it into <tls>. Read both
@@ -241,6 +315,17 @@ def parse_openvpn(
                 digest=text(c, "digest"),
                 caref=text(c, "caref"),
                 certref=text(c, "certref"),
+                custom_options=text(c, "custom_options"),
+                comp_lzo=text(c, "compression") or text(c, "comp_lzo"),
+                fragment=text(c, "fragment"),
+                tunnel_mtu=text(c, "tunnel_mtu"),
+                data_ciphers=text(c, "data_ciphers"),
+                data_ciphers_fallback=text(c, "data_ciphers_fallback"),
+                # Username is identity (not a secret); password +
+                # auth_user_pass blob redact via the global rules.
+                username=text(c, "auth_user") or text(c, "username"),
+                password=redact("password", text(c, "auth_pass") or text(c, "password")),
+                auth_user_pass=redact("auth_user_pass", text(c, "auth_user_pass")),
                 shared_key=redact("shared_key", text(c, "shared_key")),
                 tls=redact("tls", text(c, "tls") or text(c, "tls_auth")),
             )
@@ -272,10 +357,15 @@ def parse_openvpn(
 
 def parse_ipsec(
     root: Element,
-) -> tuple[list[IpsecPhase1], list[IpsecPhase2], list[IpsecPskEntry]]:
+) -> tuple[
+    list[IpsecPhase1],
+    list[IpsecPhase2],
+    list[IpsecPskEntry],
+    IpsecMobileClient | None,
+]:
     el = root.find("ipsec")
     if el is None:
-        return [], [], []
+        return [], [], [], None
 
     phase1s: list[IpsecPhase1] = []
     for p in children(el, "phase1"):
@@ -296,6 +386,15 @@ def parse_ipsec(
                 myid_data=text(p, "myid_data"),
                 peerid_type=text(p, "peerid_type"),
                 peerid_data=text(p, "peerid_data"),
+                mode=text(p, "mode"),
+                nat_traversal=text(p, "nat_traversal"),
+                mobike=text(p, "mobike"),
+                dpd_action=text(p, "dpd_action"),
+                dpd_delay=text(p, "dpd_delay"),
+                dpd_maxfail=text(p, "dpd_maxfail"),
+                lifetime=text(p, "lifetime"),
+                reauth_time=text(p, "reauth_time"),
+                gw_duplicates=bool_flag(p, "gw_duplicates"),
                 pre_shared_key=redact("pre_shared_key", text(p, "pre-shared-key")),
                 encryption_set=_encryption_set(p),
             )
@@ -323,6 +422,11 @@ def parse_ipsec(
                 remote_address=text(remote, "address") if remote is not None else None,
                 remote_netbits=text(remote, "netbits") if remote is not None else None,
                 encryption_set=_encryption_set(p),
+                lifetime=text(p, "lifetime"),
+                keepalive=text(p, "pinghost") or text(p, "keepalive"),
+                pfsgroup=text(p, "pfsgroup"),
+                mode_vti_addr=text(p, "mode_vti_addr"),
+                mode_vti_remote_addr=text(p, "mode_vti_remote_addr"),
             )
         )
 
@@ -342,4 +446,20 @@ def parse_ipsec(
                 ),
             )
         )
-    return phase1s, phase2s, psks
+
+    # Mobile-clients block — single instance under <ipsec><mobileclients>.
+    mob_el = el.find("mobileclients")
+    mobile_clients: IpsecMobileClient | None = None
+    if mob_el is not None:
+        mobile_clients = IpsecMobileClient(
+            enable=bool_flag(mob_el, "enable"),
+            user_source=text(mob_el, "user_source"),
+            group_source=text(mob_el, "group_source"),
+            pool_address=text(mob_el, "pool_address"),
+            pool_netbits=text(mob_el, "pool_netbits"),
+            dns_address=text(mob_el, "dns_address"),
+            wins_address=text(mob_el, "wins_address"),
+            login_banner=text(mob_el, "login_banner"),
+        )
+
+    return phase1s, phase2s, psks, mobile_clients

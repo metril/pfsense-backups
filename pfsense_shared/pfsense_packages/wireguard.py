@@ -1,4 +1,6 @@
-"""Parses the WireGuard package under ``<installedpackages><wireguard>``.
+"""Parses WireGuard — either at top-level ``<wireguard>`` (pfSense CE
+2.7+ / Plus 23.x+, where WireGuard is a built-in kernel module) or
+under ``<installedpackages><wireguard>`` (older community package).
 
 Modern VPN with two levels of config:
 
@@ -15,9 +17,9 @@ Modern VPN with two levels of config:
   ends), endpoint, and allowed-IPs list. PSK redacts via the
   existing ``presharedkey`` / ``psk`` entries.
 
-The WireGuard package stores peers and tunnels under the same
-``<installedpackages><wireguard>`` block; the tunnel ↔ peer linkage
-is by the peer's ``<tun>`` field referencing a tunnel name.
+Tunnel ↔ peer linkage is by the peer's ``<tun>`` field referencing a
+tunnel name; the relation is the same regardless of where the
+``<wireguard>`` block lives in the XML.
 """
 
 from __future__ import annotations
@@ -191,14 +193,19 @@ def _parse_peers(wg_el: Element) -> list[WireGuardPeer]:
     return out
 
 
+def parse_wireguard(wg_el: Element) -> WireGuardConfig:
+    """Parse a ``<wireguard>`` element directly (top-level or nested)."""
+    tunnels = _parse_tunnels(wg_el)
+    peers = _parse_peers(wg_el)
+    if not tunnels and not peers:
+        # Bare ``<wireguard/>`` with no tunnels or peers — surface an
+        # empty config so the operator sees the feature is configured.
+        return WireGuardConfig()
+    return WireGuardConfig(tunnels=tunnels, peers=peers)
+
+
 def parse(ip: Element) -> WireGuardConfig | None:
     wg = ip.find("wireguard")
     if wg is None:
         return None
-    tunnels = _parse_tunnels(wg)
-    peers = _parse_peers(wg)
-    if not tunnels and not peers:
-        # Bare ``<wireguard/>`` with no tunnels or peers — surface an
-        # empty config so the operator sees the package is installed.
-        return WireGuardConfig()
-    return WireGuardConfig(tunnels=tunnels, peers=peers)
+    return parse_wireguard(wg)

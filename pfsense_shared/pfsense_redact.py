@@ -115,6 +115,19 @@ _EXACT: Final[frozenset[str]] = frozenset(
         # existing ``presharedkey`` / ``psk`` entries above.
         "privatekey",
         "private_key",
+        # v0.42.0 — fields surfaced by the comprehensive parser-gap sweep.
+        # OpenVPN client embedded ``auth-user-pass`` static credential
+        # blob (``user\npass`` form) — different shape from
+        # ``<username>``/``<password>`` and not caught by ``_password``
+        # suffix because there's no underscore-pass split.
+        "auth_user_pass",
+        # Per-user TOTP seed — anyone with this can mint valid 2FA
+        # codes for the account, equivalent to a stolen password.
+        "otp_seed",
+        # DHCP DDNS TSIG key — used by the DDNS server to authenticate
+        # nsupdate calls from the firewall; leaking it lets anyone
+        # rewrite the dynamic DNS zone.
+        "ddnsdomainkey",
         # NOTE: "token" intentionally NOT in _EXACT. Bare ``<token>``
         # appears in benign contexts (e.g. third-party package revision
         # counters), so we only redact explicit API-token fields via

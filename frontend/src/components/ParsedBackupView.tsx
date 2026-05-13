@@ -78,6 +78,7 @@ import type {
   HaSync,
   IgmpProxyEntry,
   Interface,
+  IpsecMobileClient,
   IpsecPhase1,
   IpsecPhase2,
   IpsecPskEntry,
@@ -524,6 +525,11 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
             count={data.ipsec_psks.length}
           >
             <IpsecPskTable rows={data.ipsec_psks} />
+          </Section>
+        )}
+        {data.ipsec_mobile_clients && (
+          <Section title="IPsec — mobile clients" count={1}>
+            <IpsecMobileClientsCard m={data.ipsec_mobile_clients} />
           </Section>
         )}
         {data.certificate_authorities.length > 0 && (
@@ -1215,16 +1221,52 @@ function InterfacesTable({ rows }: { rows: Interface[] }) {
       headers={["Name", "Device", "Enabled", "IPv4", "IPv6", "Description"]}
       rowKeys={rows.map((r) => r.key)}
       rowIds={rows.map((r) => itemId("interface", r.key))}
-      rows={rows.map((r) => [
-        <InterfaceChip key="k" name={r.key} />,
-        <span key="i" className="font-mono text-xs">
-          {r.if_ ?? "—"}
-        </span>,
-        <StatusPill key="e" enabled={r.enabled} />,
-        r.ipaddr ? `${r.ipaddr}${r.subnet ? "/" + r.subnet : ""}` : "—",
-        r.ipaddrv6 ? `${r.ipaddrv6}${r.subnetv6 ? "/" + r.subnetv6 : ""}` : "—",
-        r.descr ?? "—",
-      ])}
+      rows={rows.map((r) => {
+        // IPv6 cell composes the literal/keyword + PD tracking so the
+        // reviewer sees "track6 ← wan/pid=0" rather than just "track6"
+        // (which historically dropped the upstream-interface link).
+        const ipv6Bits: React.ReactNode[] = [];
+        if (r.ipaddrv6) {
+          ipv6Bits.push(
+            <span key="a">
+              {r.ipaddrv6}
+              {r.subnetv6 ? `/${r.subnetv6}` : ""}
+            </span>,
+          );
+        }
+        if (r.track6_interface) {
+          ipv6Bits.push(
+            <span key="t" className="text-xs text-muted-fg">
+              ← <InterfaceChip name={r.track6_interface} />
+              {r.track6_prefix_id ? (
+                <span className="font-mono"> pid={r.track6_prefix_id}</span>
+              ) : null}
+            </span>,
+          );
+        } else if (r.dhcp6_ia_pd_len) {
+          ipv6Bits.push(
+            <span key="pd" className="text-xs text-muted-fg font-mono">
+              PD /{r.dhcp6_ia_pd_len}
+            </span>,
+          );
+        }
+        return [
+          <InterfaceChip key="k" name={r.key} />,
+          <span key="i" className="font-mono text-xs">
+            {r.if_ ?? "—"}
+          </span>,
+          <StatusPill key="e" enabled={r.enabled} />,
+          r.ipaddr ? `${r.ipaddr}${r.subnet ? "/" + r.subnet : ""}` : "—",
+          ipv6Bits.length > 0 ? (
+            <span key="v6" className="inline-flex flex-wrap items-center gap-1">
+              {ipv6Bits}
+            </span>
+          ) : (
+            "—"
+          ),
+          r.descr ?? "—",
+        ];
+      })}
     />
   );
 }
@@ -1232,19 +1274,55 @@ function InterfacesTable({ rows }: { rows: Interface[] }) {
 function GatewaysTable({ rows }: { rows: Gateway[] }) {
   return (
     <Table
-      headers={["Name", "Interface", "Gateway", "Monitor", "Default", "Descr"]}
+      headers={[
+        "Name",
+        "Interface",
+        "Gateway",
+        "Monitor",
+        "Thresholds",
+        "Default",
+        "Descr",
+      ]}
       rowKeys={rows.map((r) => r.name)}
       rowIds={rows.map((r) => itemId("gateway", r.name))}
-      rows={rows.map((r) => [
-        r.name,
-        <InterfaceChip key="i" name={r.interface} />,
-        <span key="g" className="font-mono text-xs">
-          {r.gateway ?? "—"}
-        </span>,
-        r.monitor ?? "—",
-        r.defaultgw ? <Badge tone="success">default</Badge> : "",
-        r.descr ?? "—",
-      ])}
+      rows={rows.map((r) => {
+        const lat =
+          r.latencylow || r.latencyhigh
+            ? `lat ${r.latencylow ?? "?"}/${r.latencyhigh ?? "?"}ms`
+            : null;
+        const loss =
+          r.losslow || r.losshigh
+            ? `loss ${r.losslow ?? "?"}/${r.losshigh ?? "?"}%`
+            : null;
+        const probe = r.interval ? `probe ${r.interval}ms` : null;
+        const bits = [lat, loss, probe].filter(Boolean) as string[];
+        return [
+          r.name,
+          <InterfaceChip key="i" name={r.interface} />,
+          <span key="g" className="font-mono text-xs">
+            {r.gateway ?? "—"}
+          </span>,
+          r.monitor ?? "—",
+          bits.length > 0 || r.force_down ? (
+            <span key="t" className="inline-flex flex-wrap items-center gap-1 text-xs">
+              {bits.map((b) => (
+                <span key={b} className="rounded bg-muted px-1.5 py-0.5 font-mono">
+                  {b}
+                </span>
+              ))}
+              {r.force_down ? (
+                <Badge key="fd" tone="danger" className="text-[10px]">
+                  force-down
+                </Badge>
+              ) : null}
+            </span>
+          ) : (
+            "—"
+          ),
+          r.defaultgw ? <Badge tone="success">default</Badge> : "",
+          r.descr ?? "—",
+        ];
+      })}
     />
   );
 }
@@ -1297,29 +1375,61 @@ function FirewallTable({ rows }: { rows: FirewallRule[] }) {
         "Destination",
         "Gateway",
         "Sched",
+        "Shaping",
         "Description",
       ]}
       rowKeys={rows.map((r) => r.key)}
       rowIds={rows.map((r) => rowAnchorId("rule", r.key))}
-      rows={rows.map((r, i) => [
-        <span key="n" className="font-mono text-xs text-muted-fg">
-          {i + 1}
-        </span>,
-        <ActionPill key="a" type={r.type} />,
-        <InterfaceChip key="i" name={r.interface} />,
-        <span key="p" className="font-mono text-xs">
-          {r.protocol ?? "any"}
-        </span>,
-        <EndpointCell key="s" e={r.source} />,
-        <EndpointCell key="dst" e={r.destination} />,
-        <Xref key="gw" kind="gateway" k={r.gateway} />,
-        <Xref key="sch" kind="schedule" k={r.schedule} />,
-        <span key="d" className="flex items-center gap-1">
-          {r.descr ?? "—"}
-          {r.disabled && <Badge tone="muted">disabled</Badge>}
-          {r.log && <Badge tone="warn">log</Badge>}
-        </span>,
-      ])}
+      rows={rows.map((r, i) => {
+        // Compact "shaping" cell collects every traffic-shaping /
+        // marking field. Per-row only renders when at least one is
+        // set, otherwise the column shows "—" to keep the table
+        // legible on rule sets that don't use these features.
+        const shapingBits: { label: string; title?: string }[] = [];
+        if (r.tag) shapingBits.push({ label: `tag ${r.tag}` });
+        if (r.dnpipe) shapingBits.push({ label: `dn ${r.dnpipe}` });
+        if (r.pdnpipe) shapingBits.push({ label: `pdn ${r.pdnpipe}` });
+        if (r.queuename) shapingBits.push({ label: `q ${r.queuename}` });
+        if (r.ackqueue) shapingBits.push({ label: `ack ${r.ackqueue}` });
+        if (r.max_mss) shapingBits.push({ label: `mss ${r.max_mss}` });
+        return [
+          <span key="n" className="font-mono text-xs text-muted-fg">
+            {i + 1}
+          </span>,
+          <ActionPill key="a" type={r.type} />,
+          <InterfaceChip key="i" name={r.interface} />,
+          <span key="p" className="font-mono text-xs">
+            {r.protocol ?? "any"}
+            {r.direction && r.floating ? (
+              <span className="text-muted-fg"> ({r.direction})</span>
+            ) : null}
+          </span>,
+          <EndpointCell key="s" e={r.source} />,
+          <EndpointCell key="dst" e={r.destination} />,
+          <Xref key="gw" kind="gateway" k={r.gateway} />,
+          <Xref key="sch" kind="schedule" k={r.schedule} />,
+          shapingBits.length === 0 ? (
+            "—"
+          ) : (
+            <span key="sh" className="inline-flex flex-wrap items-center gap-1 text-xs">
+              {shapingBits.map((b) => (
+                <span
+                  key={b.label}
+                  className="rounded bg-muted px-1.5 py-0.5 font-mono"
+                  title={b.title}
+                >
+                  {b.label}
+                </span>
+              ))}
+            </span>
+          ),
+          <span key="d" className="flex items-center gap-1">
+            {r.descr ?? "—"}
+            {r.disabled && <Badge tone="muted">disabled</Badge>}
+            {r.log && <Badge tone="warn">log</Badge>}
+          </span>,
+        ];
+      })}
     />
   );
 }
@@ -1340,19 +1450,29 @@ function NatTable({ rows }: { rows: NatRule[] }) {
       rowKeys={rows.map((r) => r.key)}
       rowIds={rows.map((r) => rowAnchorId("nat", r.key))}
       rows={rows.map((r) => [
-        <Badge
-          key="k"
-          tone={
-            r.kind === "port_forward"
-              ? "warn"
-              : r.kind === "one_to_one"
-                ? "success"
-                : "muted"
-          }
-          className="font-mono text-[10px] uppercase"
-        >
-          {r.kind.replace("_", " ")}
-        </Badge>,
+        // NPt rules render with the default (accent) tone — visually
+        // distinct from the warn/success/muted tones used for the
+        // pre-v0.42.0 NAT kinds so reviewers spot IPv6 translation at
+        // a glance.
+        r.kind === "npt" ? (
+          <Badge key="k" className="font-mono text-[10px] uppercase">
+            NPt
+          </Badge>
+        ) : (
+          <Badge
+            key="k"
+            tone={
+              r.kind === "port_forward"
+                ? "warn"
+                : r.kind === "one_to_one"
+                  ? "success"
+                  : "muted"
+            }
+            className="font-mono text-[10px] uppercase"
+          >
+            {r.kind.replace("_", " ")}
+          </Badge>
+        ),
         <InterfaceChip key="i" name={r.interface} />,
         <span key="p" className="font-mono text-xs">
           {r.protocol ?? "—"}
@@ -1554,12 +1674,27 @@ function DnsPanel({ d }: { d: DnsConfig }) {
             Host overrides ({d.host_overrides.length})
           </div>
           <Table
-            headers={["Host", "Domain", "IP", "Description"]}
+            headers={["Host", "Domain", "IP", "Description", "Aliases"]}
             rows={d.host_overrides.map((h) => [
               h.host ?? "—",
               h.domain ?? "—",
               h.ip ?? "—",
               h.descr ?? "—",
+              h.aliases.length === 0 ? (
+                "—"
+              ) : (
+                <span key="al" className="inline-flex flex-wrap gap-1">
+                  {h.aliases.map((a, i) => (
+                    <span
+                      key={i}
+                      className="rounded bg-muted px-1.5 py-0.5 text-xs"
+                      title={a.description ?? undefined}
+                    >
+                      {[a.host, a.domain].filter(Boolean).join(".") || "—"}
+                    </span>
+                  ))}
+                </span>
+              ),
             ])}
           />
         </div>
@@ -1586,7 +1721,17 @@ function DnsPanel({ d }: { d: DnsConfig }) {
 function UsersTable({ rows }: { rows: User[] }) {
   return (
     <Table
-      headers={["Name", "UID", "Scope", "Groups", "Certs", "Password", "Expires"]}
+      headers={[
+        "Name",
+        "UID",
+        "Scope",
+        "Groups",
+        "Certs",
+        "Password",
+        "2FA",
+        "SSH key",
+        "Expires",
+      ]}
       rowKeys={rows.map((u) => u.name)}
       rowIds={rows.map((u) => itemId("user", u.name))}
       rows={rows.map((u) => [
@@ -1604,6 +1749,47 @@ function UsersTable({ rows }: { rows: User[] }) {
             : "—"}
         </span>,
         <RV v={u.bcrypt_hash} key="p" />,
+        // 2FA column shows TOTP (redacted) + U2F key count separately
+        // so reviewers can confirm both factors at a glance without
+        // exposing the seed.
+        <span key="2fa" className="inline-flex flex-wrap items-center gap-1">
+          {u.otp_seed ? (
+            <span
+              className="rounded bg-muted px-1.5 py-0.5 text-xs"
+              title="TOTP seed configured"
+            >
+              TOTP
+            </span>
+          ) : null}
+          {u.u2f_keys.length > 0 ? (
+            <span
+              className="rounded bg-muted px-1.5 py-0.5 text-xs"
+              title={`${u.u2f_keys.length} U2F/WebAuthn key${u.u2f_keys.length === 1 ? "" : "s"} enrolled`}
+            >
+              U2F×{u.u2f_keys.length}
+            </span>
+          ) : null}
+          {!u.otp_seed && u.u2f_keys.length === 0 ? "—" : null}
+        </span>,
+        // SSH key column shows just the algorithm + comment to keep
+        // the row compact; full key text reachable via the raw JSON tab.
+        u.ssh_key ? (
+          <span
+            key="ssh"
+            className="font-mono text-xs"
+            title={u.ssh_key}
+          >
+            {(() => {
+              const trimmed = u.ssh_key.trim();
+              const parts = trimmed.split(/\s+/);
+              if (parts.length >= 3) return `${parts[0]} … ${parts[2]}`;
+              if (parts.length === 2) return `${parts[0]} (no comment)`;
+              return parts[0];
+            })()}
+          </span>
+        ) : (
+          "—"
+        ),
         u.expires ?? "—",
       ])}
     />
@@ -1714,19 +1900,62 @@ function VlansTable({ rows }: { rows: Vlan[] }) {
 function BridgesTable({ rows }: { rows: Bridge[] }) {
   return (
     <Table
-      headers={["Bridge", "Members", "STP", "Description"]}
-      rows={rows.map((b) => [
-        <span key="bi" className="font-mono">
-          {b.bridgeif}
-        </span>,
-        <span key="m" className="flex flex-wrap gap-1">
-          {b.members.length > 0
-            ? b.members.map((m) => <InterfaceChip key={m} name={m} />)
-            : "—"}
-        </span>,
-        <StatusPill key="s" enabled={b.enablestp} labels={{ on: "on", off: "off" }} />,
-        b.descr ?? "—",
-      ])}
+      headers={["Bridge", "Members", "STP", "STP details", "Description"]}
+      rows={rows.map((b) => {
+        const stpDetailBits: string[] = [];
+        if (b.stp_proto) stpDetailBits.push(b.stp_proto);
+        if (b.stp_priority) stpDetailBits.push(`pri ${b.stp_priority}`);
+        if (b.stp_forward_delay) stpDetailBits.push(`fwd ${b.stp_forward_delay}s`);
+        if (b.stp_hello_time) stpDetailBits.push(`hello ${b.stp_hello_time}s`);
+        if (b.stp_maxage) stpDetailBits.push(`maxage ${b.stp_maxage}s`);
+        const hasMemberOverrides =
+          Object.keys(b.stp_member_priorities).length > 0 ||
+          Object.keys(b.stp_member_pathcosts).length > 0;
+        return [
+          <span key="bi" className="font-mono">
+            {b.bridgeif}
+          </span>,
+          <span key="m" className="flex flex-wrap gap-1">
+            {b.members.length > 0
+              ? b.members.map((m) => <InterfaceChip key={m} name={m} />)
+              : "—"}
+          </span>,
+          <StatusPill key="s" enabled={b.enablestp} labels={{ on: "on", off: "off" }} />,
+          // Show STP tuning only when STP is enabled and at least one
+          // param differs from defaults; otherwise — to keep the row
+          // legible.
+          b.enablestp && (stpDetailBits.length > 0 || hasMemberOverrides) ? (
+            <span key="d" className="inline-flex flex-wrap items-center gap-1 text-xs">
+              {stpDetailBits.map((s) => (
+                <span key={s} className="rounded bg-muted px-1.5 py-0.5 font-mono">
+                  {s}
+                </span>
+              ))}
+              {hasMemberOverrides ? (
+                <span
+                  className="rounded bg-muted px-1.5 py-0.5 font-mono"
+                  title={
+                    "Per-member: " +
+                    [
+                      ...Object.entries(b.stp_member_priorities).map(
+                        ([m, v]) => `${m} pri=${v}`,
+                      ),
+                      ...Object.entries(b.stp_member_pathcosts).map(
+                        ([m, v]) => `${m} cost=${v}`,
+                      ),
+                    ].join(", ")
+                  }
+                >
+                  per-member
+                </span>
+              ) : null}
+            </span>
+          ) : (
+            "—"
+          ),
+          b.descr ?? "—",
+        ];
+      })}
     />
   );
 }
@@ -2088,30 +2317,63 @@ function OpenVpnServersTable({ rows }: { rows: OpenVpnServer[] }) {
         "Auth",
         "Cipher",
         "TLS",
+        "Extras",
       ]}
       rowKeys={rows.map((s) => s.vpnid)}
       rowIds={rows.map((s) => itemId("openvpn_server", s.vpnid))}
-      rows={rows.map((s) => [
-        s.vpnid,
-        s.description ?? "—",
-        s.mode ?? "—",
-        <InterfaceChip key="if" name={s.interface} />,
-        `${s.protocol ?? "?"} :${s.local_port ?? "?"}`,
-        s.tunnel_network ?? s.tunnel_networkv6 ?? "—",
-        <span key="pki" className="inline-flex flex-wrap gap-1">
-          <Xref kind="ca" k={s.caref} label="CA" />
-          <Xref kind="cert" k={s.certref} label="Cert" />
-        </span>,
-        <span key="am" className="inline-flex flex-wrap gap-1">
-          {s.authmode.length
-            ? s.authmode.map((n) => (
-                <Xref key={n} kind="authserver" k={n} />
-              ))
-            : "—"}
-        </span>,
-        s.crypto ?? "—",
-        s.tls === "***redacted***" ? <Redacted /> : "—",
-      ])}
+      rows={rows.map((s) => {
+        const extras: string[] = [];
+        if (s.push_options) extras.push("push");
+        if (s.custom_options) extras.push("custom");
+        if (s.comp_lzo && s.comp_lzo !== "no")
+          extras.push(`comp ${s.comp_lzo}`);
+        if (s.verify_x509_name) extras.push("vfy-x509");
+        if (s.data_ciphers) extras.push("data-ciphers");
+        if (s.fragment) extras.push(`frag ${s.fragment}`);
+        if (s.tunnel_mtu) extras.push(`mtu ${s.tunnel_mtu}`);
+        return [
+          s.vpnid,
+          s.description ?? "—",
+          s.mode ?? "—",
+          <InterfaceChip key="if" name={s.interface} />,
+          `${s.protocol ?? "?"} :${s.local_port ?? "?"}`,
+          s.tunnel_network ?? s.tunnel_networkv6 ?? "—",
+          <span key="pki" className="inline-flex flex-wrap gap-1">
+            <Xref kind="ca" k={s.caref} label="CA" />
+            <Xref kind="cert" k={s.certref} label="Cert" />
+          </span>,
+          <span key="am" className="inline-flex flex-wrap gap-1">
+            {s.authmode.length
+              ? s.authmode.map((n) => (
+                  <Xref key={n} kind="authserver" k={n} />
+                ))
+              : "—"}
+          </span>,
+          s.crypto ?? "—",
+          s.tls === "***redacted***" ? <Redacted /> : "—",
+          extras.length === 0 ? (
+            "—"
+          ) : (
+            <span key="x" className="inline-flex flex-wrap items-center gap-1 text-xs">
+              {extras.map((e) => (
+                <span
+                  key={e}
+                  className="rounded bg-muted px-1.5 py-0.5 font-mono"
+                  title={
+                    e === "push"
+                      ? (s.push_options ?? undefined)
+                      : e === "custom"
+                        ? (s.custom_options ?? undefined)
+                        : undefined
+                  }
+                >
+                  {e}
+                </span>
+              ))}
+            </span>
+          ),
+        ];
+      })}
     />
   );
 }
@@ -2119,25 +2381,74 @@ function OpenVpnServersTable({ rows }: { rows: OpenVpnServer[] }) {
 function OpenVpnClientsTable({ rows }: { rows: OpenVpnClient[] }) {
   return (
     <Table
-      headers={["#", "Description", "Mode", "Iface", "Server", "Tunnel", "CA / Cert", "Cipher", "TLS"]}
+      headers={[
+        "#",
+        "Description",
+        "Mode",
+        "Iface",
+        "Server",
+        "Tunnel",
+        "CA / Cert",
+        "Cipher",
+        "TLS",
+        "Auth user",
+        "Extras",
+      ]}
       rowKeys={rows.map((c) => c.vpnid)}
       rowIds={rows.map((c) => itemId("openvpn_client", c.vpnid))}
-      rows={rows.map((c) => [
-        c.vpnid,
-        c.description ?? "—",
-        c.mode ?? "—",
-        <InterfaceChip key="if" name={c.interface} />,
-        c.server_addr
-          ? `${c.server_addr}:${c.server_port ?? "?"}`
-          : "—",
-        c.tunnel_network ?? "—",
-        <span key="pki" className="inline-flex flex-wrap gap-1">
-          <Xref kind="ca" k={c.caref} label="CA" />
-          <Xref kind="cert" k={c.certref} label="Cert" />
-        </span>,
-        c.crypto ?? "—",
-        c.tls === "***redacted***" ? <Redacted /> : "—",
-      ])}
+      rows={rows.map((c) => {
+        const extras: string[] = [];
+        if (c.custom_options) extras.push("custom");
+        if (c.comp_lzo && c.comp_lzo !== "no")
+          extras.push(`comp ${c.comp_lzo}`);
+        if (c.data_ciphers) extras.push("data-ciphers");
+        if (c.fragment) extras.push(`frag ${c.fragment}`);
+        if (c.tunnel_mtu) extras.push(`mtu ${c.tunnel_mtu}`);
+        // Auth user cell shows identity + redacted password marker.
+        const authBits: React.ReactNode[] = [];
+        if (c.username) authBits.push(<span key="u">{c.username}</span>);
+        if (c.password === "***redacted***" || c.auth_user_pass === "***redacted***") {
+          authBits.push(<Redacted key="p" />);
+        }
+        return [
+          c.vpnid,
+          c.description ?? "—",
+          c.mode ?? "—",
+          <InterfaceChip key="if" name={c.interface} />,
+          c.server_addr
+            ? `${c.server_addr}:${c.server_port ?? "?"}`
+            : "—",
+          c.tunnel_network ?? "—",
+          <span key="pki" className="inline-flex flex-wrap gap-1">
+            <Xref kind="ca" k={c.caref} label="CA" />
+            <Xref kind="cert" k={c.certref} label="Cert" />
+          </span>,
+          c.crypto ?? "—",
+          c.tls === "***redacted***" ? <Redacted /> : "—",
+          authBits.length === 0 ? (
+            "—"
+          ) : (
+            <span key="au" className="inline-flex flex-wrap items-center gap-1">
+              {authBits}
+            </span>
+          ),
+          extras.length === 0 ? (
+            "—"
+          ) : (
+            <span key="x" className="inline-flex flex-wrap items-center gap-1 text-xs">
+              {extras.map((e) => (
+                <span
+                  key={e}
+                  className="rounded bg-muted px-1.5 py-0.5 font-mono"
+                  title={e === "custom" ? (c.custom_options ?? undefined) : undefined}
+                >
+                  {e}
+                </span>
+              ))}
+            </span>
+          ),
+        ];
+      })}
     />
   );
 }
@@ -2178,22 +2489,46 @@ function IpsecPhase1Table({ rows }: { rows: IpsecPhase1[] }) {
         "Auth",
         "PSK",
         "Encryption set",
+        "DPD / lifetime",
         "Description",
       ]}
       rowKeys={rows.map((p) => p.ikeid)}
       rowIds={rows.map((p) => itemId("ipsec_phase1", p.ikeid))}
-      rows={rows.map((p) => [
-        p.ikeid,
-        p.iketype ?? "—",
-        <InterfaceChip key="if" name={p.interface} />,
-        p.remote_gateway ?? "—",
-        p.authentication_method ?? "—",
-        p.pre_shared_key === "***redacted***" ? <Redacted /> : "—",
-        <span key="e" className="font-mono text-xs">
-          {p.encryption_set.join(", ") || "—"}
-        </span>,
-        p.descr ?? "—",
-      ])}
+      rows={rows.map((p) => {
+        const tuning: string[] = [];
+        if (p.dpd_action) tuning.push(`dpd ${p.dpd_action}`);
+        if (p.dpd_delay) tuning.push(`delay ${p.dpd_delay}s`);
+        if (p.dpd_maxfail) tuning.push(`maxfail ${p.dpd_maxfail}`);
+        if (p.lifetime) tuning.push(`life ${p.lifetime}s`);
+        if (p.reauth_time && p.reauth_time !== "0")
+          tuning.push(`reauth ${p.reauth_time}s`);
+        if (p.mobike === "on") tuning.push("MOBIKE");
+        if (p.nat_traversal && p.nat_traversal !== "off")
+          tuning.push(`NAT-T ${p.nat_traversal}`);
+        return [
+          p.ikeid,
+          p.iketype ?? "—",
+          <InterfaceChip key="if" name={p.interface} />,
+          p.remote_gateway ?? "—",
+          p.authentication_method ?? "—",
+          p.pre_shared_key === "***redacted***" ? <Redacted /> : "—",
+          <span key="e" className="font-mono text-xs">
+            {p.encryption_set.join(", ") || "—"}
+          </span>,
+          tuning.length === 0 ? (
+            "—"
+          ) : (
+            <span key="t" className="inline-flex flex-wrap items-center gap-1 text-xs">
+              {tuning.map((s) => (
+                <span key={s} className="rounded bg-muted px-1.5 py-0.5 font-mono">
+                  {s}
+                </span>
+              ))}
+            </span>
+          ),
+          p.descr ?? "—",
+        ];
+      })}
     />
   );
 }
@@ -2208,24 +2543,47 @@ function IpsecPhase2Table({ rows }: { rows: IpsecPhase2[] }) {
         "Local",
         "Remote",
         "Encryption set",
+        "Extras",
         "Description",
       ]}
       rowKeys={rows.map((p) => p.uniqid)}
-      rows={rows.map((p) => [
-        p.uniqid,
-        <Xref key="ike" kind="ipsec_phase1" k={p.ikeid} />,
-        p.mode ?? "—",
-        p.local_address
-          ? `${p.local_address}${p.local_netbits ? "/" + p.local_netbits : ""}`
-          : "—",
-        p.remote_address
-          ? `${p.remote_address}${p.remote_netbits ? "/" + p.remote_netbits : ""}`
-          : "—",
-        <span key="e" className="font-mono text-xs">
-          {p.encryption_set.join(", ") || "—"}
-        </span>,
-        p.descr ?? "—",
-      ])}
+      rows={rows.map((p) => {
+        const extras: string[] = [];
+        if (p.mode === "vti") {
+          if (p.mode_vti_addr) extras.push(`vti ${p.mode_vti_addr}`);
+          if (p.mode_vti_remote_addr)
+            extras.push(`peer ${p.mode_vti_remote_addr}`);
+        }
+        if (p.lifetime) extras.push(`life ${p.lifetime}s`);
+        if (p.keepalive) extras.push(`ping ${p.keepalive}`);
+        if (p.pfsgroup) extras.push(`pfs dh${p.pfsgroup}`);
+        return [
+          p.uniqid,
+          <Xref key="ike" kind="ipsec_phase1" k={p.ikeid} />,
+          p.mode ?? "—",
+          p.local_address
+            ? `${p.local_address}${p.local_netbits ? "/" + p.local_netbits : ""}`
+            : "—",
+          p.remote_address
+            ? `${p.remote_address}${p.remote_netbits ? "/" + p.remote_netbits : ""}`
+            : "—",
+          <span key="e" className="font-mono text-xs">
+            {p.encryption_set.join(", ") || "—"}
+          </span>,
+          extras.length === 0 ? (
+            "—"
+          ) : (
+            <span key="x" className="inline-flex flex-wrap items-center gap-1 text-xs">
+              {extras.map((s) => (
+                <span key={s} className="rounded bg-muted px-1.5 py-0.5 font-mono">
+                  {s}
+                </span>
+              ))}
+            </span>
+          ),
+          p.descr ?? "—",
+        ];
+      })}
     />
   );
 }
@@ -2239,6 +2597,26 @@ function IpsecPskTable({ rows }: { rows: IpsecPskEntry[] }) {
         k.ident_type ?? "—",
         k.pre_shared_key === "***redacted***" ? <Redacted /> : "—",
       ])}
+    />
+  );
+}
+
+function IpsecMobileClientsCard({ m }: { m: IpsecMobileClient }) {
+  const pool =
+    m.pool_address && m.pool_netbits
+      ? `${m.pool_address}/${m.pool_netbits}`
+      : m.pool_address;
+  return (
+    <Dl
+      items={[
+        ["Enabled", <StatusPill key="e" enabled={m.enable} />],
+        ["User source", m.user_source ?? "—"],
+        ["Group source", m.group_source ?? "—"],
+        ["Address pool", pool ?? "—"],
+        ["DNS", m.dns_address ?? "—"],
+        ["WINS", m.wins_address ?? "—"],
+        ["Login banner", m.login_banner ?? "—"],
+      ]}
     />
   );
 }

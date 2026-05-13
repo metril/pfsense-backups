@@ -35,6 +35,22 @@ class Bridge(BaseModel):
     descr: str | None = None
     # STP toggle (present ⇒ enabled)
     enablestp: bool = False
+    # v0.42.0 — STP tuning. Without these the structured view said
+    # "STP is on/off" but hid the parameters operators actually care
+    # about when debugging a flapping bridge: bridge priority, the
+    # forward delay / hello time / maxage timers, the protocol
+    # selection, plus per-member overrides.
+    stp_proto: str | None = None  # "rstp" | "stp"
+    stp_priority: str | None = None
+    stp_forward_delay: str | None = None
+    stp_hello_time: str | None = None
+    stp_maxage: str | None = None
+    stp_holdcnt: str | None = None
+    # Per-member priority/pathcost. pfSense stores these as a
+    # comma-separated list (e.g. ``ifpriority="em0,16,em1,32"``);
+    # parser flattens into a dict keyed by member name.
+    stp_member_priorities: dict[str, str] = {}
+    stp_member_pathcosts: dict[str, str] = {}
 
 
 class Tunnel(BaseModel):
@@ -123,6 +139,19 @@ def parse_vlans(root: Element) -> list[Vlan]:
     return out
 
 
+def _parse_member_pairs(raw: str | None) -> dict[str, str]:
+    """pfSense stores per-member STP overrides as a comma-separated
+    interleaved list: ``em0,16,em1,32`` → ``{"em0": "16", "em1": "32"}``.
+    """
+    if not raw:
+        return {}
+    tokens = [t.strip() for t in raw.split(",") if t.strip()]
+    out: dict[str, str] = {}
+    for i in range(0, len(tokens) - 1, 2):
+        out[tokens[i]] = tokens[i + 1]
+    return out
+
+
 def parse_bridges(root: Element) -> list[Bridge]:
     el = root.find("bridges")
     if el is None:
@@ -139,6 +168,14 @@ def parse_bridges(root: Element) -> list[Bridge]:
                 members=members_raw.split(",") if members_raw else [],
                 descr=text(b, "descr"),
                 enablestp=bool_flag(b, "enablestp"),
+                stp_proto=text(b, "proto"),
+                stp_priority=text(b, "priority"),
+                stp_forward_delay=text(b, "fwdelay"),
+                stp_hello_time=text(b, "hellotime"),
+                stp_maxage=text(b, "maxage"),
+                stp_holdcnt=text(b, "holdcnt"),
+                stp_member_priorities=_parse_member_pairs(text(b, "ifpriority")),
+                stp_member_pathcosts=_parse_member_pairs(text(b, "ifpathcost")),
             )
         )
     return out
