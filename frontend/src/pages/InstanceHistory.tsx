@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/Button";
 import { Tabs } from "@/components/ui/Tabs";
 import {
   useAnchorBlameSummary,
-  useBackups,
+  useInstanceHistory,
   useInstances,
   useParsedDiffPair,
 } from "@/api/queries";
@@ -54,18 +54,13 @@ export function InstanceHistoryPage() {
   const instances = useInstances();
   const instance = instances.data?.find((i) => i.id === id);
 
-  // Load all successful backups in chronological (ascending) order
-  // so array indexes map directly onto "earlier → later" on the
-  // timeline.
-  const backupsQuery = useBackups({
-    instanceId: id,
-    sort: "started_at",
-    order: "asc",
-  });
-  // Filter out failed backups. Use the raw query data as the only
-  // dep so we don't pay for a fresh filter on every render.
+  // v0.45.0: dedicated lean endpoint. Returns every successful
+  // backup for this instance in ASC chronological order so array
+  // indexes map directly onto "earlier → later" on the timeline.
+  // Server already filters success=true, so no client-side filter.
+  const backupsQuery = useInstanceHistory(id);
   const backups = useMemo(
-    () => (backupsQuery.data ?? []).filter((b) => b.success),
+    () => backupsQuery.data ?? [],
     [backupsQuery.data],
   );
 

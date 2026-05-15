@@ -109,9 +109,16 @@ export interface BackupListItem {
   included_packages: boolean;
   included_ssh: boolean;
   encrypted: boolean;
-  /** v0.37.0 — precomputed "+N since first backup" summary. Null for
-   *  backups taken before v0.37.0 (or when compute skipped / failed);
-   *  the UI renders null as a quiet "—". */
+}
+
+/** Lean per-row payload for the per-instance scrubber. v0.45.0 — the
+ *  global Backups page never rendered ``changes_since_first``, so the
+ *  diff JOIN moved here and the wide BackupListItem shrunk. */
+export interface BackupHistoryItem {
+  id: number;
+  started_at: string;
+  size_bytes: number;
+  tag: string | null;
   changes_since_first: DiffCounts | null;
 }
 

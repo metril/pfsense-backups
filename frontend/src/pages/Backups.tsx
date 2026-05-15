@@ -259,6 +259,16 @@ export function BackupsPage() {
         </div>
       </div>
 
+      {/* v0.45.0: the API no longer caps at 100 — long-history
+          deployments may render a 1000+ row table. Surface the count
+          + a nudge toward the filters when that gets heavy. */}
+      {rows.length > 200 && (
+        <div className="mt-3 text-xs text-muted-fg">
+          Showing {rows.length.toLocaleString()} backups — narrow with the
+          instance filter or date range above to scroll less.
+        </div>
+      )}
+
       <table className="mt-6 w-full text-sm">
         <thead className="text-xs uppercase text-muted-fg">
           <tr>

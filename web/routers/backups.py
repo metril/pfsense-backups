@@ -78,10 +78,22 @@ class BackupListItem(BaseModel):
     included_ssh: bool = True
     encrypted: bool = False
 
-    # v0.37.0 precomputed summary against the oldest-still-on-disk
-    # backup for this instance. ``None`` when no diff row exists yet
-    # (backup predates v0.37.0 or diff compute skipped / failed).
-    # Rendered as "—" by the frontend on null.
+
+class BackupHistoryItem(BaseModel):
+    """Lean per-row payload for the per-instance scrubber.
+
+    The scrubber only needs ``id`` (navigation + diff fetch),
+    ``started_at`` (timeline label), ``size_bytes`` (focused
+    summary), ``tag`` (focused badge), and ``changes_since_first``
+    (the "since first" cluster) — five fields vs. BackupListItem's
+    twenty-two. Stripping the rest cuts the payload by roughly 4×
+    on a 200-backup history.
+    """
+
+    id: int
+    started_at: str
+    size_bytes: int
+    tag: str | None = None
     changes_since_first: DiffCounts | None = None
 
 
@@ -214,31 +226,29 @@ async def list_backups(
     started_to: datetime | None = None,
     sort: str = "started_at",
     order: str = "desc",
-    limit: int = Query(default=100, le=500),
+    # v0.45.0: the 100-row default + ``le=500`` cap is gone. The
+    # global Backups page loads the full set so operators can sort
+    # / filter across all history. ``limit`` stays as an opt-in
+    # query param for callers that explicitly want paging.
+    limit: int | None = Query(default=None, ge=1),
     offset: int = Query(default=0, ge=0),
 ) -> list[BackupListItem]:
     col = _SORTABLE.get(sort, Backup.started_at)
     direction = col.desc() if order.lower() == "desc" else col.asc()
-    # LEFT JOIN against ``backup_diff`` on kind='first' so each row
-    # carries its precomputed "+N since first" summary when one
-    # exists. Missing rows render as ``None`` — frontend shows "—".
+    # The "+N since first" diff JOIN that used to live here is gone
+    # in v0.45.0 — the global Backups table doesn't render that
+    # column, and the per-instance scrubber moved to its own lean
+    # ``/api/backups/history`` endpoint (which keeps the JOIN
+    # because *it* renders the cluster).
     stmt = (
-        select(
-            Backup,
-            Instance.name,
-            BackupDiff.added_count,
-            BackupDiff.removed_count,
-            BackupDiff.modified_count,
-        )
+        select(Backup, Instance.name)
         .join(Instance, Backup.instance_id == Instance.id)
-        .outerjoin(
-            BackupDiff,
-            (BackupDiff.backup_id == Backup.id) & (BackupDiff.kind == "first"),
-        )
         .order_by(direction)
-        .limit(limit)
-        .offset(offset)
     )
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    if offset:
+        stmt = stmt.offset(offset)
     if instance_id is not None:
         stmt = stmt.where(Backup.instance_id == instance_id)
     if started_from is not None:
@@ -247,10 +257,7 @@ async def list_backups(
         stmt = stmt.where(Backup.started_at <= started_to)
     rows = (await db.execute(stmt)).all()
     out: list[BackupListItem] = []
-    for b, name, added, removed, modified in rows:
-        counts: DiffCounts | None = None
-        if added is not None and removed is not None and modified is not None:
-            counts = DiffCounts(added=added, removed=removed, modified=modified)
+    for b, name in rows:
         out.append(
             BackupListItem(
                 id=b.id,
@@ -270,6 +277,56 @@ async def list_backups(
                 included_packages=b.included_packages,
                 included_ssh=b.included_ssh,
                 encrypted=b.encrypted,
+            )
+        )
+    return out
+
+
+@router.get("/history", response_model=list[BackupHistoryItem])
+async def list_backup_history(
+    db: DbSession,
+    instance_id: int = Query(...),
+) -> list[BackupHistoryItem]:
+    """Per-instance scrubber feed.
+
+    Returns every successful backup for the instance in ASC
+    chronological order, with only the fields the scrubber renders
+    (id, started_at, size_bytes, tag, changes_since_first). No
+    limit / offset / sort / order knobs — the v0.45.0 scrubber is
+    "always all, always ascending". The composite index
+    ``ix_backups_instance_started`` keeps the query cheap at
+    thousands of rows.
+    """
+    stmt = (
+        select(
+            Backup.id,
+            Backup.started_at,
+            Backup.size_bytes,
+            Backup.tag,
+            BackupDiff.added_count,
+            BackupDiff.removed_count,
+            BackupDiff.modified_count,
+        )
+        .outerjoin(
+            BackupDiff,
+            (BackupDiff.backup_id == Backup.id) & (BackupDiff.kind == "first"),
+        )
+        .where(Backup.instance_id == instance_id)
+        .where(Backup.success.is_(True))
+        .order_by(Backup.started_at.asc())
+    )
+    rows = (await db.execute(stmt)).all()
+    out: list[BackupHistoryItem] = []
+    for bid, started, size, tag, added, removed, modified in rows:
+        counts: DiffCounts | None = None
+        if added is not None and removed is not None and modified is not None:
+            counts = DiffCounts(added=added, removed=removed, modified=modified)
+        out.append(
+            BackupHistoryItem(
+                id=bid,
+                started_at=started.isoformat(),
+                size_bytes=size,
+                tag=tag,
                 changes_since_first=counts,
             )
         )

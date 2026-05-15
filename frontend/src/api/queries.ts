@@ -12,6 +12,7 @@ import type {
   AuditEntry,
   AuditFacets,
   AuthUser,
+  BackupHistoryItem,
   BackupListItem,
   BackupOverridesRequest,
   Instance,
@@ -221,6 +222,22 @@ export function useBackups(filter: BackupFilter | number | undefined = undefined
     ],
     queryFn: () =>
       api.get<BackupListItem[]>(qs ? `/api/backups?${qs}` : "/api/backups"),
+  });
+}
+
+/** v0.45.0 — per-instance scrubber feed. Returns ALL successful
+ *  backups for an instance in ASC chronological order. The endpoint
+ *  applies the ``success`` filter server-side and ships a lean
+ *  schema (5 fields per row, no JOIN waste) so big histories load
+ *  fast. No pagination knobs: always the full set. */
+export function useInstanceHistory(instanceId: number | undefined) {
+  return useQuery({
+    queryKey: ["backup-history", instanceId ?? "none"],
+    queryFn: () =>
+      api.get<BackupHistoryItem[]>(
+        `/api/backups/history?instance_id=${instanceId}`,
+      ),
+    enabled: instanceId !== undefined && Number.isFinite(instanceId),
   });
 }
 

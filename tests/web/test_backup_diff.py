@@ -4,9 +4,11 @@ Covers:
 
 - ``/api/backups/{id}/diff-summary`` populates + caches rows on first
   read (the lazy-backfill path for backups that predate v0.37.0).
-- The list endpoint's LEFT JOIN against ``backup_diff`` surfaces
-  ``changes_since_first`` in ``/api/backups`` responses once a diff
-  row exists.
+- The per-instance history endpoint's LEFT JOIN against
+  ``backup_diff`` surfaces ``changes_since_first`` in
+  ``/api/backups/history`` responses once a diff row exists.
+  (v0.45.0: moved off the wide list endpoint to the lean history
+  endpoint — the global list never rendered the field anyway.)
 - ``/api/backups/{id}/diff-vs-first/parsed`` returns the full
   ``ConfigDiff`` payload, served from the cached ``full_diff_gz``
   blob on second access.
@@ -130,14 +132,18 @@ async def test_diff_summary_populates_and_caches(
     assert len(pre) == len(post) == 2  # 'previous' + 'first'
 
 
-async def test_backup_list_surfaces_changes_since_first(
+async def test_backup_history_surfaces_changes_since_first(
     client: AsyncClient,
     app_and_session: tuple[FastAPI, async_sessionmaker[AsyncSession], Crypto],
     tmp_path: Path,
 ) -> None:
-    """Once a diff row exists, ``/api/backups?instance_id=…``
+    """Once a diff row exists, ``/api/backups/history?instance_id=…``
     returns ``changes_since_first`` for that backup via LEFT JOIN.
-    Other rows (no diff yet) render ``null``."""
+    Other rows (no diff yet) render ``null``.
+
+    v0.45.0: the JOIN moved from ``/api/backups`` to the dedicated
+    ``/api/backups/history`` scrubber endpoint.
+    """
     _, session_factory, _ = app_and_session
     inst = await _seed_instance(session_factory)
 
@@ -156,7 +162,7 @@ async def test_backup_list_surfaces_changes_since_first(
     # Trigger diff population for the second backup only.
     await client.get(f"/api/backups/{second_id}/diff-summary")
 
-    r = await client.get(f"/api/backups?instance_id={inst.id}")
+    r = await client.get(f"/api/backups/history?instance_id={inst.id}")
     assert r.status_code == 200
     rows = {row["id"]: row for row in r.json()}
     # First backup was diffed against NO earlier backup → no row →
