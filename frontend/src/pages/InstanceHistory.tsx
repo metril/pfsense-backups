@@ -13,6 +13,7 @@ import {
 } from "@/api/queries";
 import { collectChangedAnchors } from "@/lib/changedAnchors";
 import { formatLocal, formatLocalDate } from "@/lib/datetime";
+import { useDebouncedValue } from "@/lib/useDebouncedValue";
 import { useFocusedAnchor } from "@/lib/useFocusedAnchor";
 import { useBlameHotkey } from "@/lib/useBlameHotkey";
 import { AnchorHistoryDrawer } from "@/components/xref/AnchorHistoryDrawer";
@@ -78,17 +79,29 @@ export function InstanceHistoryPage() {
   const focused = focusIdx >= 0 ? backups[focusIdx] : undefined;
   const previous = focusIdx > 0 ? backups[focusIdx - 1] : undefined;
 
+  // v0.45.1: debounce the index that drives backend fetches. The
+  // slider thumb / counter / date labels still respond to
+  // ``focusIdx`` instantly; only the lazy data hooks (parsed config,
+  // pair-diff, blame summary) wait ~150ms after the drag settles so
+  // a fast scrub through N positions doesn't fire N concurrent
+  // decrypt+parse jobs.
+  const committedFocusIdx = useDebouncedValue(focusIdx, 150);
+  const committedFocused =
+    committedFocusIdx >= 0 ? backups[committedFocusIdx] : undefined;
+  const committedPrevious =
+    committedFocusIdx > 0 ? backups[committedFocusIdx - 1] : undefined;
+
   // Diff against the previous backup. Enabled whenever we have both
   // sides; the hook already handles the null case.
   const diffQuery = useParsedDiffPair(
-    previous?.id ?? null,
-    focused?.id ?? null,
+    committedPrevious?.id ?? null,
+    committedFocused?.id ?? null,
   );
 
   // v0.40.0: blame summary keyed on the focused backup — tooltip
   // shows "as of this backup" rather than "as of now" so scrubbing
   // through history gives truthful rollback info.
-  const blameSummary = useAnchorBlameSummary(id, focused?.id);
+  const blameSummary = useAnchorBlameSummary(id, committedFocused?.id);
   const blameAnchors = blameSummary.data?.anchors;
   const blameIndexed = blameSummary.data?.indexed ?? false;
   const changedAnchors = useMemo(
@@ -98,7 +111,8 @@ export function InstanceHistoryPage() {
 
   // Apply ``data-xref-changed`` to every anchor in the changed set.
   // Run after a frame so the Structured view's lazy-mount + React
-  // commit have painted.
+  // commit have painted. Keyed on ``committedFocused?.id`` since
+  // that's what the panel re-mounts on (v0.45.1 debounce).
   useEffect(() => {
     let cancelled = false;
     const apply = () => {
@@ -120,7 +134,7 @@ export function InstanceHistoryPage() {
       cancelled = true;
       cancelAnimationFrame(rafId);
     };
-  }, [changedAnchors, focused?.id]);
+  }, [changedAnchors, committedFocused?.id]);
 
   // Keyboard ← / → steps through the timeline. Home / End jump to
   // edges. Guards against typing into inputs / modals, mirroring
@@ -468,10 +482,19 @@ export function InstanceHistoryPage() {
                 indexed={blameIndexed}
                 openBlame={openBlame}
               >
+                {/* v0.45.1: the panel re-mounts (and re-fetches its
+                    parsed config) only on the debounced index so a
+                    fast scrub doesn't trigger one /parsed request per
+                    slider tick. Falls back to the live ``focused.id``
+                    on initial mount before the debounce settles. */}
                 {viewTab === "structured" ? (
-                  <ParsedBackupView backupId={focused.id} />
+                  <ParsedBackupView
+                    backupId={committedFocused?.id ?? focused.id}
+                  />
                 ) : (
-                  <RawXmlPanel backupId={focused.id} />
+                  <RawXmlPanel
+                    backupId={committedFocused?.id ?? focused.id}
+                  />
                 )}
               </AnchorBlameProvider>
             </Suspense>

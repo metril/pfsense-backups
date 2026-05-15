@@ -355,6 +355,28 @@ async def _load(db: AsyncSession, backup_id: int) -> tuple[Backup, Path]:
     return b, path
 
 
+async def _load_and_snapshot(db: AsyncSession, backup_id: int) -> _BackupWalkRow:
+    """Load a Backup, validate its on-disk file exists, and return a
+    plain Pydantic snapshot safe to use after the session closes.
+
+    The caller is expected to ``await db.close()`` (or release the
+    connection some other way) before doing heavy decrypt / parse
+    work — see v0.45.1 pool-discipline rewrite. The snapshot carries
+    every field ``_read_for_walk`` + ``_row_path`` need; ORM
+    attribute access after the session closes would lazy-load and
+    blow up, so we copy out here.
+    """
+    row, _ = await _load(db, backup_id)
+    return _BackupWalkRow(
+        id=row.id,
+        started_at=row.started_at,
+        path=row.path,
+        compressed=row.compressed,
+        encrypted=row.encrypted,
+        encrypt_password_ct=row.encrypt_password_ct,
+    )
+
+
 @router.get("/{backup_id}")
 async def get_backup(backup_id: int, db: DbSession) -> dict[str, Any]:
     b, _ = await _load(db, backup_id)
@@ -468,60 +490,13 @@ async def delete_backup(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-def _row_encrypt_password(row: Backup, crypto) -> str:
-    """Fernet-decrypt the per-backup encryption password, or raise 409.
-
-    Prefers the per-row ciphertext so a rotated instance-level password
-    still lets us open historical backups. Refusing rather than falling
-    back to the instance password keeps the contract explicit.
-    """
-    if not row.encrypt_password_ct:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "cannot decrypt backup: no per-row password stored. "
-            "Download the raw encrypted file and decrypt offline.",
-        )
-    try:
-        return crypto.decrypt(row.encrypt_password_ct)
-    except Exception as exc:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            f"cannot decrypt backup password: {exc}",
-        ) from exc
-
-
-def _decrypt_row_content(row: Backup, path: Path, crypto) -> bytes:
-    """Read the on-disk blob and return plaintext XML bytes.
-
-    Handles gzipped rows transparently, picks the KDF based on wrapper
-    headers (with fallback), and translates known failure modes into
-    HTTPException so the frontend can show a sensible error toast.
-    """
-    import gzip
-
-    if path.suffix == ".gz" or row.compressed:
-        with gzip.open(path, "rb") as gz:
-            raw = gz.read()
-    else:
-        raw = path.read_bytes()
-    if not looks_encrypted(raw):
-        # Marked encrypted in the DB but the file looks like plain XML —
-        # happens with historical rows imported before this feature. Fall
-        # through to returning the raw content.
-        return raw
-    password = _row_encrypt_password(row, crypto)
-    try:
-        return decrypt_pfsense_backup(raw, password)
-    except PfSenseCryptoError as exc:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            f"cannot decrypt backup — password missing or KDF mismatch ({exc})",
-        ) from exc
-
-
 @router.get("/{backup_id}/content")
 async def get_content(
-    backup_id: int, db: DbSession, user: CurrentUser, crypto: CryptoDep
+    backup_id: int,
+    request: Request,
+    db: DbSession,
+    user: CurrentUser,
+    crypto: CryptoDep,
 ) -> Response:
     """Decompressed XML text (used by the diff view).
 
@@ -530,24 +505,42 @@ async def get_content(
     in memory. The decrypted XML never lands on disk. The decrypt event
     is audited so operators can see who read plaintext pfSense config
     (which includes cert keys, VPN PSKs, admin password hashes).
+
+    v0.45.1 — release the DB session before the decrypt to keep the
+    pool free during the parse-style hot path.
     """
-    row, path = await _load(db, backup_id)
-    if row.encrypted:
-        content = await asyncio.to_thread(_decrypt_row_content, row, path, crypto)
-        audit.record(
-            db, actor_email=user["email"], action="view_decrypted",
-            resource="backup", resource_id=backup_id,
-            details={"filename": row.filename},
-        )
-        await db.commit()
-    else:
-        content = await asyncio.to_thread(read_content, path)
+    row, _ = await _load(db, backup_id)
+    filename = row.filename
+    snap = _BackupWalkRow(
+        id=row.id, started_at=row.started_at, path=row.path,
+        compressed=row.compressed, encrypted=row.encrypted,
+        encrypt_password_ct=row.encrypt_password_ct,
+    )
+    await db.close()
+
+    try:
+        content = await asyncio.to_thread(_read_for_walk, snap, crypto)
+    except _WalkAbortError as abort:
+        raise HTTPException(abort.status_code, abort.detail) from abort
+
+    if snap.encrypted:
+        async with request.app.state.session_factory() as audit_db:
+            audit.record(
+                audit_db,
+                actor_email=user["email"],
+                action="view_decrypted",
+                resource="backup",
+                resource_id=backup_id,
+                details={"filename": filename},
+            )
+            await audit_db.commit()
     return Response(content=content, media_type="application/xml")
 
 
 @router.get("/{backup_id}/download", response_model=None)
 async def download(
     backup_id: int,
+    request: Request,
     db: DbSession,
     user: CurrentUser,
     crypto: CryptoDep,
@@ -561,23 +554,41 @@ async def download(
     round-trip into pfSense's import flow). Decrypted downloads are
     audited; the raw path is recorded too so the log shows which
     operator pulled which file.
+
+    v0.45.1 — release the DB session before the decrypt or stream-out
+    so a slow download doesn't hold a pool slot.
     """
     row, path = await _load(db, backup_id)
+    filename = row.filename
+    snap = _BackupWalkRow(
+        id=row.id, started_at=row.started_at, path=row.path,
+        compressed=row.compressed, encrypted=row.encrypted,
+        encrypt_password_ct=row.encrypt_password_ct,
+    )
+    await db.close()
+    sf = request.app.state.session_factory
 
-    if row.encrypted and not raw:
-        plaintext = await asyncio.to_thread(_decrypt_row_content, row, path, crypto)
+    if snap.encrypted and not raw:
+        try:
+            plaintext = await asyncio.to_thread(_read_for_walk, snap, crypto)
+        except _WalkAbortError as abort:
+            raise HTTPException(abort.status_code, abort.detail) from abort
         download_name = path.name
         # Strip .gz / .enc-ish suffixes so the user gets a `.xml` they
         # can open directly.
         for suffix in (".gz",):
             if download_name.endswith(suffix):
                 download_name = download_name[: -len(suffix)]
-        audit.record(
-            db, actor_email=user["email"], action="download_decrypted",
-            resource="backup", resource_id=backup_id,
-            details={"filename": row.filename},
-        )
-        await db.commit()
+        async with sf() as audit_db:
+            audit.record(
+                audit_db,
+                actor_email=user["email"],
+                action="download_decrypted",
+                resource="backup",
+                resource_id=backup_id,
+                details={"filename": filename},
+            )
+            await audit_db.commit()
         return Response(
             content=plaintext,
             media_type="application/xml",
@@ -586,13 +597,16 @@ async def download(
             },
         )
 
-    audit.record(
-        db, actor_email=user["email"],
-        action="download_raw" if row.encrypted else "download",
-        resource="backup", resource_id=backup_id,
-        details={"filename": row.filename},
-    )
-    await db.commit()
+    async with sf() as audit_db:
+        audit.record(
+            audit_db,
+            actor_email=user["email"],
+            action="download_raw" if snap.encrypted else "download",
+            resource="backup",
+            resource_id=backup_id,
+            details={"filename": filename},
+        )
+        await audit_db.commit()
 
     async def body() -> AsyncIterator[bytes]:
         for chunk in await asyncio.to_thread(lambda: list(stream_raw(path))):
@@ -662,7 +676,11 @@ class ParsedBackupResponse(BaseModel):
 
 @router.get("/{backup_id}/parsed", response_model=ParsedBackupResponse)
 async def get_parsed(
-    backup_id: int, db: DbSession, user: CurrentUser, crypto: CryptoDep
+    backup_id: int,
+    request: Request,
+    db: DbSession,
+    user: CurrentUser,
+    crypto: CryptoDep,
 ) -> ParsedBackupResponse:
     """Structured, redaction-aware projection of the backup's config.xml.
 
@@ -681,22 +699,43 @@ async def get_parsed(
     switch can jump to the same content without a second request.
     The positions map is built with lxml on the same bytes we already
     parse; adds ~O(tree size) time, no I/O.
+
+    v0.45.1 — release the request-scoped DB session before the
+    decrypt+parse so a slow parse doesn't pin a pool slot.
     """
-    row, path = await _load(db, backup_id)
-    if row.encrypted:
-        content = await asyncio.to_thread(_decrypt_row_content, row, path, crypto)
-        audit.record(
-            db, actor_email=user["email"], action="view_decrypted",
-            resource="backup", resource_id=backup_id,
-            details={"filename": row.filename, "via": "parsed"},
-        )
-        await db.commit()
-    else:
-        content = await asyncio.to_thread(read_content, path)
-    if isinstance(content, str):
-        content_bytes = content.encode("utf-8")
-    else:
-        content_bytes = content
+    # Load filename for the audit log before releasing the session;
+    # _BackupWalkRow doesn't carry it.
+    row, _ = await _load(db, backup_id)
+    filename = row.filename
+    snap = _BackupWalkRow(
+        id=row.id,
+        started_at=row.started_at,
+        path=row.path,
+        compressed=row.compressed,
+        encrypted=row.encrypted,
+        encrypt_password_ct=row.encrypt_password_ct,
+    )
+    await db.close()
+
+    try:
+        content_bytes = await asyncio.to_thread(_read_for_walk, snap, crypto)
+    except _WalkAbortError as abort:
+        raise HTTPException(abort.status_code, abort.detail) from abort
+    if isinstance(content_bytes, str):
+        content_bytes = content_bytes.encode("utf-8")
+
+    if snap.encrypted:
+        async with request.app.state.session_factory() as audit_db:
+            audit.record(
+                audit_db,
+                actor_email=user["email"],
+                action="view_decrypted",
+                resource="backup",
+                resource_id=backup_id,
+                details={"filename": filename, "via": "parsed"},
+            )
+            await audit_db.commit()
+
     try:
         parsed = await asyncio.to_thread(parse_pfsense_xml, content_bytes)
     except PfSenseParseError as exc:
@@ -710,42 +749,66 @@ async def get_parsed(
 
 @router.get("/diff/pair/parsed", response_model=ConfigDiff)
 async def diff_pair_parsed(
-    a: int, b: int, db: DbSession, user: CurrentUser, crypto: CryptoDep
+    a: int,
+    b: int,
+    request: Request,
+    db: DbSession,
+    user: CurrentUser,
+    crypto: CryptoDep,
 ) -> ConfigDiff:
     """Semantic diff between two parsed configs.
 
     Decrypts both sides in memory, parses each, then runs the
     structured diff engine. Single audit entry per pair when either
     side is encrypted.
+
+    v0.45.1 — release the request-scoped DB session before the
+    heavy decrypt+parse+diff. The scrubber fires one of these per
+    focused-backup change; holding a pool slot through 100ms–1s+
+    of CPU/IO exhausts the pool at <60 concurrent requests.
     """
-    a_row, a_path = await _load(db, a)
-    b_row, b_path = await _load(db, b)
+    a_snap = await _load_and_snapshot(db, a)
+    b_snap = await _load_and_snapshot(db, b)
+    await db.close()
 
-    def _get(row: Backup, path: Path) -> bytes | str:
-        if row.encrypted:
-            return _decrypt_row_content(row, path, crypto)
-        return read_content(path)
-
-    a_bytes = await asyncio.to_thread(_get, a_row, a_path)
-    b_bytes = await asyncio.to_thread(_get, b_row, b_path)
-    if a_row.encrypted or b_row.encrypted:
-        audit.record(
-            db, actor_email=user["email"], action="view_decrypted",
-            resource="backup_diff", resource_id=None,
-            details={"a": a_row.id, "b": b_row.id, "via": "parsed"},
+    def _read_both() -> tuple[bytes | str, bytes | str]:
+        return (
+            _read_for_walk(a_snap, crypto),
+            _read_for_walk(b_snap, crypto),
         )
-        await db.commit()
+
     try:
+        a_bytes, b_bytes = await asyncio.to_thread(_read_both)
         a_parsed = await asyncio.to_thread(parse_pfsense_xml, a_bytes)
         b_parsed = await asyncio.to_thread(parse_pfsense_xml, b_bytes)
+    except _WalkAbortError as abort:
+        raise HTTPException(abort.status_code, abort.detail) from abort
     except PfSenseParseError as exc:
         raise HTTPException(422, str(exc)) from exc
-    return await asyncio.to_thread(diff_configs, a_parsed, b_parsed)
+    result = await asyncio.to_thread(diff_configs, a_parsed, b_parsed)
+
+    if a_snap.encrypted or b_snap.encrypted:
+        async with request.app.state.session_factory() as audit_db:
+            audit.record(
+                audit_db,
+                actor_email=user["email"],
+                action="view_decrypted",
+                resource="backup_diff",
+                resource_id=None,
+                details={"a": a_snap.id, "b": b_snap.id, "via": "parsed"},
+            )
+            await audit_db.commit()
+    return result
 
 
 @router.get("/diff/pair")
 async def diff_pair(
-    a: int, b: int, db: DbSession, user: CurrentUser, crypto: CryptoDep
+    a: int,
+    b: int,
+    request: Request,
+    db: DbSession,
+    user: CurrentUser,
+    crypto: CryptoDep,
 ) -> dict[str, Any]:
     """Return both backups' decompressed XML content for a side-by-side diff view.
 
@@ -753,38 +816,69 @@ async def diff_pair(
     password so the diff view sees plaintext XML on either side. The
     decrypt event is audited so operators can see who read plaintext
     pfSense config via the diff path.
-    """
-    a_row, a_path = await _load(db, a)
-    b_row, b_path = await _load(db, b)
 
-    def _get(row: Backup, path: Path) -> bytes:
-        if row.encrypted:
-            return _decrypt_row_content(row, path, crypto)
-        return read_content(path)
+    v0.45.1 — snapshot row metadata, release the DB session, then
+    do the file reads + decrypts on a worker thread. Audit row goes
+    through a fresh session if either side was encrypted.
+    """
+    # Snapshot the full row so we have filename for the response
+    # without holding a session through the file reads. The snapshot
+    # struct only carries fields ``_read_for_walk`` needs, so capture
+    # filename separately.
+    a_row, _ = await _load(db, a)
+    b_row, _ = await _load(db, b)
+    a_filename, a_started_at = a_row.filename, a_row.started_at
+    b_filename, b_started_at = b_row.filename, b_row.started_at
+    a_snap = _BackupWalkRow(
+        id=a_row.id, started_at=a_started_at, path=a_row.path,
+        compressed=a_row.compressed, encrypted=a_row.encrypted,
+        encrypt_password_ct=a_row.encrypt_password_ct,
+    )
+    b_snap = _BackupWalkRow(
+        id=b_row.id, started_at=b_started_at, path=b_row.path,
+        compressed=b_row.compressed, encrypted=b_row.encrypted,
+        encrypt_password_ct=b_row.encrypt_password_ct,
+    )
+    await db.close()
+
+    def _read_both() -> tuple[bytes | str, bytes | str]:
+        return (
+            _read_for_walk(a_snap, crypto),
+            _read_for_walk(b_snap, crypto),
+        )
 
     def _as_str(v: bytes | str) -> str:
         return v.decode("utf-8", errors="replace") if isinstance(v, bytes) else v
 
-    a_content = _as_str(await asyncio.to_thread(_get, a_row, a_path))
-    b_content = _as_str(await asyncio.to_thread(_get, b_row, b_path))
-    if a_row.encrypted or b_row.encrypted:
-        audit.record(
-            db, actor_email=user["email"], action="view_decrypted",
-            resource="backup_diff", resource_id=None,
-            details={"a": a_row.id, "b": b_row.id},
-        )
-        await db.commit()
+    try:
+        a_bytes, b_bytes = await asyncio.to_thread(_read_both)
+    except _WalkAbortError as abort:
+        raise HTTPException(abort.status_code, abort.detail) from abort
+    a_content = _as_str(a_bytes)
+    b_content = _as_str(b_bytes)
+
+    if a_snap.encrypted or b_snap.encrypted:
+        async with request.app.state.session_factory() as audit_db:
+            audit.record(
+                audit_db,
+                actor_email=user["email"],
+                action="view_decrypted",
+                resource="backup_diff",
+                resource_id=None,
+                details={"a": a_snap.id, "b": b_snap.id},
+            )
+            await audit_db.commit()
     return {
         "a": {
-            "id": a_row.id,
-            "filename": a_row.filename,
-            "started_at": a_row.started_at.isoformat(),
+            "id": a_snap.id,
+            "filename": a_filename,
+            "started_at": a_started_at.isoformat(),
             "content": a_content,
         },
         "b": {
-            "id": b_row.id,
-            "filename": b_row.filename,
-            "started_at": b_row.started_at.isoformat(),
+            "id": b_snap.id,
+            "filename": b_filename,
+            "started_at": b_started_at.isoformat(),
             "content": b_content,
         },
     }
@@ -846,30 +940,33 @@ async def _find_base(
 
 
 async def _recompute_diff_row(
-    db: AsyncSession,
-    backup: Backup,
+    session_factory: Any,
+    backup_snap: _BackupWalkRow,
+    base_snap: _BackupWalkRow,
     kind: str,
     crypto: Any,
 ) -> BackupDiff | None:
     """Lazy recompute path: missing row OR stale (base pruned). Reads
     both backups from disk, diffs them, upserts the row. Returns the
     freshly-inserted ``BackupDiff`` or None if computation failed
-    (base missing on disk, XML malformed)."""
-    base = await _find_base(db, backup, kind)
-    if base is None:
-        return None
+    (base missing on disk, XML malformed).
 
+    v0.45.1 — operates on snapshots; the caller must have already
+    released its own DB session before invoking this. The heavy
+    file read + diff happens with no connection held; only the brief
+    upsert acquires a pool slot via ``session_factory``.
+    """
     def _read() -> tuple[bytes | None, bytes | None]:
         new_b = read_backup_bytes(
-            Path(backup.path),
-            encrypted=backup.encrypted,
-            encrypt_password_ct=backup.encrypt_password_ct,
+            _row_path(backup_snap.path),
+            encrypted=backup_snap.encrypted,
+            encrypt_password_ct=backup_snap.encrypt_password_ct,
             crypto=crypto,
         )
         base_b = read_backup_bytes(
-            Path(base.path),
-            encrypted=base.encrypted,
-            encrypt_password_ct=base.encrypt_password_ct,
+            _row_path(base_snap.path),
+            encrypted=base_snap.encrypted,
+            encrypt_password_ct=base_snap.encrypt_password_ct,
             crypto=crypto,
         )
         return new_b, base_b
@@ -882,47 +979,56 @@ async def _recompute_diff_row(
         return None
     added, removed, modified = summarise_diff(diff)
     blob = encode_diff(diff)
-    # Delete any existing (stale) row, then insert fresh.
-    existing = await db.get(BackupDiff, (backup.id, kind))
-    if existing is not None:
-        await db.delete(existing)
-        await db.flush()
-    row = BackupDiff(
-        backup_id=backup.id,
-        kind=kind,
-        base_backup_id=base.id,
-        added_count=added,
-        removed_count=removed,
-        modified_count=modified,
-        full_diff_gz=blob,
-    )
-    db.add(row)
-    await db.commit()
+    async with session_factory() as write_db:
+        # Delete any existing (stale) row, then insert fresh.
+        existing = await write_db.get(BackupDiff, (backup_snap.id, kind))
+        if existing is not None:
+            await write_db.delete(existing)
+            await write_db.flush()
+        row = BackupDiff(
+            backup_id=backup_snap.id,
+            kind=kind,
+            base_backup_id=base_snap.id,
+            added_count=added,
+            removed_count=removed,
+            modified_count=modified,
+            full_diff_gz=blob,
+        )
+        write_db.add(row)
+        await write_db.commit()
+        # Session factory uses ``expire_on_commit=False`` so the
+        # ORM attributes stay populated after the session closes —
+        # callers can read primitive fields on the returned row.
     return row
 
 
-async def _get_or_recompute(
-    db: AsyncSession,
-    backup: Backup,
-    kind: str,
-    crypto: Any,
-) -> BackupDiff | None:
-    """Check the cache, recompute on miss or stale. Stale =
-    ``base_backup_id`` no longer matches the current canonical base
-    for this kind (typically fires when retention prunes the first
-    backup and 'vs_first' diffs now point at a deleted row)."""
-    existing = await db.get(BackupDiff, (backup.id, kind))
-    if existing is not None:
-        current_base = await _find_base(db, backup, kind)
-        current_base_id = current_base.id if current_base else None
-        if existing.base_backup_id == current_base_id and current_base_id is not None:
-            return existing
-    return await _recompute_diff_row(db, backup, kind, crypto)
+def _snap(backup: Backup) -> _BackupWalkRow:
+    """Pluck a thread-safe snapshot out of a live ORM row."""
+    return _BackupWalkRow(
+        id=backup.id,
+        started_at=backup.started_at,
+        path=backup.path,
+        compressed=backup.compressed,
+        encrypted=backup.encrypted,
+        encrypt_password_ct=backup.encrypt_password_ct,
+    )
+
+
+def _is_fresh(cached: BackupDiff | None, base: Backup | None) -> bool:
+    """A cached ``backup_diff`` row is fresh when it points at the
+    currently-canonical base for its kind. Stale = base was pruned
+    or replaced (e.g. retention removed the first-ever backup)."""
+    return (
+        cached is not None
+        and base is not None
+        and cached.base_backup_id == base.id
+    )
 
 
 @router.get("/{backup_id}/diff-summary", response_model=DiffSummaryResponse)
 async def backup_diff_summary(
     backup_id: int,
+    request: Request,
     db: DbSession,
     user: CurrentUser,
     crypto: CryptoDep,
@@ -931,60 +1037,118 @@ async def backup_diff_summary(
     rollups for a backup. Hits the ``backup_diff`` table; on miss or
     stale (first backup pruned) it recomputes + upserts lazily. Safe
     to call on backups that predate v0.37.0 — they simply pay the
-    full diff cost on first access and are cached afterwards."""
+    full diff cost on first access and are cached afterwards.
+
+    v0.45.1 — cache lookups + base resolution run on the
+    request-scoped session, which is then closed BEFORE any heavy
+    recompute. The recompute helper handles its own writeback via
+    a fresh session, so a slow backfill no longer pins a pool slot.
+    """
     backup = await db.get(Backup, backup_id)
     if backup is None:
         raise HTTPException(404, "backup not found")
 
-    vs_prev_row = await _get_or_recompute(db, backup, "previous", crypto)
-    vs_first_row = await _get_or_recompute(db, backup, "first", crypto)
+    backup_encrypted = backup.encrypted
+    backup_snap = _snap(backup)
 
-    # Encrypted backups can't be diffed without decryption. If either
-    # side required decrypt-on-read, treat the compute as a
-    # view_decrypted event so the audit log stays honest.
-    if vs_prev_row is not None or vs_first_row is not None:
-        if backup.encrypted:
+    prev_base = await _find_base(db, backup, "previous")
+    first_base = await _find_base(db, backup, "first")
+    cached_prev = await db.get(BackupDiff, (backup_id, "previous"))
+    cached_first = await db.get(BackupDiff, (backup_id, "first"))
+
+    prev_fresh = _is_fresh(cached_prev, prev_base)
+    first_fresh = _is_fresh(cached_first, first_base)
+
+    # Pull primitives out of ORM rows BEFORE closing the session;
+    # detached-instance access for these primitives would still
+    # technically work (``expire_on_commit=False``), but explicit
+    # extraction here makes the post-close code obviously safe.
+    first_backup_id_out: int | None = first_base.id if first_base else None
+    first_backup_started_at_iso: str | None = (
+        first_base.started_at.isoformat() if first_base else None
+    )
+    cached_prev_counts: tuple[int, int, int] | None = (
+        (cached_prev.added_count, cached_prev.removed_count, cached_prev.modified_count)
+        if prev_fresh and cached_prev is not None
+        else None
+    )
+    cached_first_counts: tuple[int, int, int] | None = (
+        (cached_first.added_count, cached_first.removed_count, cached_first.modified_count)
+        if first_fresh and cached_first is not None
+        else None
+    )
+
+    # Snapshot base rows only for kinds that may need recompute.
+    prev_base_snap = (
+        _snap(prev_base) if prev_base is not None and not prev_fresh else None
+    )
+    first_base_snap = (
+        _snap(first_base) if first_base is not None and not first_fresh else None
+    )
+
+    await db.close()
+
+    sf = request.app.state.session_factory
+    if cached_prev_counts is None and prev_base_snap is not None:
+        row = await _recompute_diff_row(
+            sf, backup_snap, prev_base_snap, "previous", crypto
+        )
+        if row is not None:
+            cached_prev_counts = (
+                row.added_count, row.removed_count, row.modified_count,
+            )
+    if cached_first_counts is None and first_base_snap is not None:
+        row = await _recompute_diff_row(
+            sf, backup_snap, first_base_snap, "first", crypto
+        )
+        if row is not None:
+            cached_first_counts = (
+                row.added_count, row.removed_count, row.modified_count,
+            )
+
+    # Encrypted backups can't be diffed without decryption. Preserve
+    # the v0.37.0 semantic: any diff returned + encrypted backup =>
+    # log a view_decrypted entry. Fresh session for the write.
+    if (cached_prev_counts is not None or cached_first_counts is not None) and backup_encrypted:
+        async with sf() as audit_db:
             audit.record(
-                db,
+                audit_db,
                 actor_email=user["email"],
                 action="view_decrypted",
                 resource="backup_diff_summary",
                 resource_id=str(backup_id),
             )
-            await db.commit()
-
-    first_backup = await _find_base(db, backup, "first")
+            await audit_db.commit()
 
     return DiffSummaryResponse(
         backup_id=backup_id,
         vs_previous=(
             DiffSummary(
-                added=vs_prev_row.added_count,
-                removed=vs_prev_row.removed_count,
-                modified=vs_prev_row.modified_count,
+                added=cached_prev_counts[0],
+                removed=cached_prev_counts[1],
+                modified=cached_prev_counts[2],
             )
-            if vs_prev_row is not None
+            if cached_prev_counts is not None
             else None
         ),
         vs_first=(
             DiffSummary(
-                added=vs_first_row.added_count,
-                removed=vs_first_row.removed_count,
-                modified=vs_first_row.modified_count,
+                added=cached_first_counts[0],
+                removed=cached_first_counts[1],
+                modified=cached_first_counts[2],
             )
-            if vs_first_row is not None
+            if cached_first_counts is not None
             else None
         ),
-        first_backup_id=first_backup.id if first_backup else None,
-        first_backup_started_at=(
-            first_backup.started_at.isoformat() if first_backup else None
-        ),
+        first_backup_id=first_backup_id_out,
+        first_backup_started_at=first_backup_started_at_iso,
     )
 
 
 @router.get("/{backup_id}/diff-vs-first/parsed")
 async def backup_diff_vs_first_parsed(
     backup_id: int,
+    request: Request,
     db: DbSession,
     user: CurrentUser,
     crypto: CryptoDep,
@@ -994,38 +1158,72 @@ async def backup_diff_vs_first_parsed(
     cached ``full_diff_gz`` blob whenever available; falls through to
     recompute on miss / stale. Returns 404 when there's no first
     backup to diff against (single-backup instance), 409 when the
-    diff cannot be computed (XML malformed, base file missing)."""
+    diff cannot be computed (XML malformed, base file missing).
+
+    v0.45.1 — cache lookup runs on the request-scoped session, which
+    is then closed before any recompute.
+    """
     backup = await db.get(Backup, backup_id)
     if backup is None:
         raise HTTPException(404, "backup not found")
 
-    row = await _get_or_recompute(db, backup, "first", crypto)
-    if row is None:
-        # Distinguish "no first to diff against" from "compute failed".
-        first = await _find_base(db, backup, "first")
-        if first is None:
+    backup_encrypted = backup.encrypted
+    backup_snap = _snap(backup)
+
+    first_base = await _find_base(db, backup, "first")
+    cached_first = await db.get(BackupDiff, (backup_id, "first"))
+    fresh = _is_fresh(cached_first, first_base)
+
+    cached_blob: bytes | None = (
+        cached_first.full_diff_gz if fresh and cached_first is not None else None
+    )
+    first_base_snap = (
+        _snap(first_base) if first_base is not None and not fresh else None
+    )
+    # "no first base exists" must be distinguishable from "compute
+    # failed" further down; capture the existence-of-base bit now.
+    has_first_base = first_base is not None
+
+    await db.close()
+
+    sf = request.app.state.session_factory
+    diff_blob: bytes
+    if cached_blob is not None:
+        diff_blob = cached_blob
+    elif first_base_snap is not None:
+        row = await _recompute_diff_row(
+            sf, backup_snap, first_base_snap, "first", crypto
+        )
+        if row is None:
             raise HTTPException(
-                404,
-                "no earlier backup to diff against — this is the first "
-                "successful backup for its instance",
+                409,
+                "could not compute diff against first backup "
+                "(base file missing or XML malformed)",
             )
+        diff_blob = row.full_diff_gz
+    elif not has_first_base:
         raise HTTPException(
-            409,
-            "could not compute diff against first backup "
-            "(base file missing or XML malformed)",
+            404,
+            "no earlier backup to diff against — this is the first "
+            "successful backup for its instance",
         )
+    else:
+        # has_first_base=True but no snapshot ⇒ fresh cache existed
+        # but with no blob. Defensive — shouldn't happen in practice.
+        raise HTTPException(500, "diff blob missing for fresh cache row")
 
-    if backup.encrypted:
-        audit.record(
-            db,
-            actor_email=user["email"],
-            action="view_decrypted",
-            resource="backup_diff_vs_first",
-            resource_id=str(backup_id),
-        )
-        await db.commit()
+    if backup_encrypted:
+        async with sf() as audit_db:
+            audit.record(
+                audit_db,
+                actor_email=user["email"],
+                action="view_decrypted",
+                resource="backup_diff_vs_first",
+                resource_id=str(backup_id),
+            )
+            await audit_db.commit()
 
-    return decode_diff(row.full_diff_gz)
+    return decode_diff(diff_blob)
 
 
 # --------------------------------------------------------------------- #
@@ -1097,7 +1295,7 @@ def _row_path(raw_path: str) -> Path:
 
 
 def _read_for_walk(row: _BackupWalkRow, crypto: Any) -> bytes | str:
-    """Version of ``_decrypt_row_content`` that operates on the plain
+    """Read a backup file (handles .gz + decryption) using a plain
     snapshot (``_BackupWalkRow``) instead of an ORM instance — safe
     to call from inside ``asyncio.to_thread``."""
     import gzip

@@ -89,16 +89,23 @@ def _async_url(url: str) -> str:
 def make_async_engine(
     url: str,
     *,
-    pool_size: int = 20,
-    max_overflow: int = 40,
+    pool_size: int = 40,
+    max_overflow: int = 100,
 ) -> AsyncEngine:
-    # Defaults bumped from SQLAlchemy's 5/10 because endpoints that parse
-    # a config inside ``asyncio.to_thread`` (notably ``/parsed`` and
-    # ``/instance/{id}/anchor-history``) hold a pool connection while the
-    # parse runs. Under modest concurrency the old 15-slot ceiling hit
-    # QueuePool TimeoutError. SQLite + aiosqlite is happy with many
-    # connections — WAL allows parallel readers, writes still serialise
-    # via ``busy_timeout``.
+    # v0.45.1: ceiling raised from 20/40 to 40/100 (= 140 total) after
+    # the snapshot-then-release rewrite in ``web/routers/backups.py``.
+    # The hot endpoints (``/parsed``, ``/diff/pair/parsed``,
+    # ``/content``, ``/download``, ``/diff-summary``, ``/diff-vs-first/parsed``,
+    # ``/instance/{id}/anchor-history``) now close the request-scoped
+    # session BEFORE the slow decrypt+parse+diff and re-open a fresh
+    # session only for the brief audit-log / upsert write. The bigger
+    # cap is a safety margin for peak concurrency, not the primary
+    # fix — the v0.45.0 deployment exhausted 60 slots even after the
+    # original 5/10→20/40 bump because slots were held for whole
+    # seconds at a time.
+    # SQLite + aiosqlite is happy with many connections: WAL allows
+    # parallel readers, writes still serialise via ``busy_timeout``,
+    # each connection is ~50 KB of process state.
     async_url = _async_url(url)
     connect_args = {}
     if async_url.startswith("sqlite"):
