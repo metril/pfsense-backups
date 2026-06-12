@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, ChevronLeft, ChevronRight, Clock, Split } from "lucide-react";
 import { Alert } from "@/components/ui/Alert";
 import { Badge } from "@/components/ui/Badge";
+import { QueryError } from "@/components/ui/QueryError";
 import { Button } from "@/components/ui/Button";
 import { Tabs } from "@/components/ui/Tabs";
 import {
@@ -212,6 +213,14 @@ export function InstanceHistoryPage() {
 
   if (backupsQuery.isLoading) {
     return <div className="p-6 text-sm text-muted-fg">Loading backups…</div>;
+  }
+
+  if (backupsQuery.isError) {
+    return (
+      <div className="p-6">
+        <QueryError title="Could not load backups" error={backupsQuery.error} />
+      </div>
+    );
   }
 
   if (backups.length === 0) {

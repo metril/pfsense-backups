@@ -14,11 +14,14 @@ import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from typing import Any
 
 import zmq
+from pydantic import ValidationError
 from sqlalchemy.orm import sessionmaker
 
 from pfsense_shared.crypto import Crypto
+from pfsense_shared.models import Job
 from pfsense_shared.schemas import (
     NotificationSent,
     ReencryptAllBackupsCommand,
@@ -130,8 +133,41 @@ class IpcListener:
             return
         try:
             handler(payload)
+        except ValidationError as exc:
+            # Schema mismatch between web and worker (version skew) —
+            # must be loud, and the web-created Job row must not be
+            # left in "queued" until the next worker boot's
+            # ``_mark_stale_jobs`` sweep.
+            log.error(
+                "IPC command %s failed schema validation "
+                "(web/worker version skew?): %s; payload keys=%s",
+                cmd, exc, sorted(payload),
+            )
+            self._fail_orphaned_job(payload, f"worker rejected {cmd} command: {exc}")
         except Exception as exc:  # defensive — never let a bad command kill the worker
             log.exception("Command %s failed: %s", cmd, exc)
+            self._fail_orphaned_job(payload, f"{cmd} failed: {type(exc).__name__}: {exc}")
+
+    def _fail_orphaned_job(self, payload: dict[str, Any], message: str) -> None:
+        """Mark the command's Job failed if the handler died before the
+        manager could. Only touches jobs still in a non-terminal state, so
+        a job the handler already resolved (success or failure) keeps its
+        original status and message."""
+        job_id = payload.get("job_id")
+        if not isinstance(job_id, int):
+            return
+        try:
+            with self._session_factory() as s:
+                job = s.get(Job, job_id)
+                if job is None or job.status not in ("queued", "running"):
+                    return
+                job.status = "failure"
+                job.finished_at = datetime.now(UTC)
+                job.message = message
+                s.commit()
+                log.info("Marked job %d failed after command error", job_id)
+        except Exception:
+            log.exception("Could not mark job %s failed after command error", job_id)
 
     # -------------------------------------------------------------- #
     # handlers

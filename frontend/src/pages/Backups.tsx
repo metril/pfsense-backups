@@ -21,6 +21,7 @@ import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { Dialog } from "@/components/ui/Dialog";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Label } from "@/components/ui/Label";
+import { QueryError } from "@/components/ui/QueryError";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
 import { FormCheckbox, FormInput } from "@/components/ui/form";
@@ -377,7 +378,12 @@ export function BackupsPage() {
             ))}
         </tbody>
       </table>
-      {!backups.isPending && rows.length === 0 && (
+      {backups.isError && (
+        <div className="mt-8">
+          <QueryError title="Could not load backups" error={backups.error} />
+        </div>
+      )}
+      {!backups.isPending && !backups.isError && rows.length === 0 && (
         <div className="mt-8">
           <EmptyState
             icon={<Archive className="h-8 w-8" />}

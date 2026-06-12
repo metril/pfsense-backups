@@ -31,6 +31,7 @@ from sqlalchemy.pool import ConnectionPoolEntry
 from alembic import command
 
 from .models import BackupSettings, LoggingSettings
+from .paths import DATA_DIR
 
 log = logging.getLogger(__name__)
 
@@ -160,12 +161,19 @@ def _lock_path(db_url: str) -> Path:
     """Derive an init-lock path from the DB URL.
 
     For sqlite URLs the lock sits next to the DB file. For anything else
-    (not currently in use, but future-proof) we fall back to /tmp.
+    (not currently in use, but future-proof) prefer the data volume —
+    /tmp can be ephemeral or reaped in containers, which would let two
+    booting processes race ``alembic upgrade head``. /tmp remains the
+    last resort when no data dir is writable.
     """
     if db_url.startswith("sqlite:///"):
         db_file = Path(db_url.removeprefix("sqlite:///"))
         return db_file.parent / ".init.lock"
-    return Path("/tmp/pfsense-backups-init.lock")
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        return DATA_DIR / ".init.lock"
+    except OSError:
+        return Path("/tmp/pfsense-backups-init.lock")
 
 
 @contextlib.contextmanager

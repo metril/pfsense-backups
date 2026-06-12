@@ -26,6 +26,7 @@ import { Input } from "@/components/ui/Input";
 import { Label } from "@/components/ui/Label";
 import { Checkbox } from "@/components/ui/Checkbox";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { QueryError } from "@/components/ui/QueryError";
 import { Select, type SelectOption } from "@/components/ui/Select";
 import { SkeletonRows } from "@/components/ui/Skeleton";
 import { SplitButton } from "@/components/ui/SplitButton";
@@ -143,7 +144,7 @@ function scheduleSummary(cron: string | null): string {
 }
 
 export function InstancesPage() {
-  const { data, isPending } = useInstances();
+  const { data, isPending, isError, error } = useInstances();
   const [editing, setEditing] = useState<Draft | null>(null);
 
   const create = useCreateInstance();
@@ -170,6 +171,10 @@ export function InstancesPage() {
       {isPending ? (
         <div className="mt-6">
           <SkeletonRows count={4} />
+        </div>
+      ) : isError ? (
+        <div className="mt-6">
+          <QueryError title="Could not load instances" error={error} />
         </div>
       ) : data!.length === 0 ? (
         <div className="mt-8">

@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, Eye, Play, Plug, Split } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { QueryError } from "@/components/ui/QueryError";
 import { SplitButton } from "@/components/ui/SplitButton";
 import { BackupOverridesDialog } from "@/components/BackupOverridesDialog";
 import {
@@ -295,7 +296,14 @@ export function InstanceDetailPage() {
                 </td>
               </tr>
             ))}
-            {(backups.data ?? []).length === 0 && (
+            {backups.isError && (
+              <tr>
+                <td colSpan={8} className="py-4">
+                  <QueryError title="Could not load backups" error={backups.error} />
+                </td>
+              </tr>
+            )}
+            {!backups.isError && (backups.data ?? []).length === 0 && (
               <tr>
                 <td colSpan={8} className="py-8 text-center text-sm text-muted-fg">
                   No backups yet for {inst.name}.
@@ -351,7 +359,14 @@ export function InstanceDetailPage() {
                 <td className="py-2 text-xs text-muted-fg">{j.message ?? ""}</td>
               </tr>
             ))}
-            {(jobs.data ?? []).length === 0 && (
+            {jobs.isError && (
+              <tr>
+                <td colSpan={5} className="py-4">
+                  <QueryError title="Could not load jobs" error={jobs.error} />
+                </td>
+              </tr>
+            )}
+            {!jobs.isError && (jobs.data ?? []).length === 0 && (
               <tr>
                 <td colSpan={5} className="py-8 text-center text-sm text-muted-fg">
                   No jobs recorded for {inst.name} yet. (Background reference: {nameOf(id)})

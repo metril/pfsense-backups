@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from datetime import datetime
 from typing import Any
 
@@ -542,9 +543,20 @@ class Notifier:
         if hook.headers_json:
             # M2: URL is stored as-is; don't expandvars. Headers commonly
             # carry `Authorization: Bearer ${TOKEN}` and benefit from
-            # per-call env expansion.
+            # per-call env expansion. Expansion is intentionally
+            # unrestricted, but every expansion is WARN-logged (names
+            # only, never values) so a template exfiltrating worker env
+            # vars to a webhook URL is visible in the logs.
             for k, v in json.loads(hook.headers_json).items():
-                headers[k] = os.path.expandvars(str(v))
+                raw = str(v)
+                headers[k] = os.path.expandvars(raw)
+                if headers[k] != raw:
+                    expanded = re.findall(r"\$(?:\{(\w+)\}|(\w+))", raw)
+                    names = sorted({a or b for a, b in expanded})
+                    log.warning(
+                        "notification %r: expanded env var(s) %s into header %r",
+                        hook.name, ", ".join(names) or "<unknown>", k,
+                    )
 
         payload: dict[str, Any] | None
         is_discord_url = "discord.com/api/webhooks" in url.lower()

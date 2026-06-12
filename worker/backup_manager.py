@@ -439,6 +439,17 @@ class PfSenseBackupManager:
                     "(instance %s): %s — job is marked failed anyway",
                     job_id, snap.id, hist_exc,
                 )
+                # Surface the secondary failure in the job message too —
+                # operators reading the UI shouldn't need worker logs to
+                # learn the history row is missing. Best-effort: if this
+                # re-mark also fails, the job is already terminal.
+                with contextlib.suppress(Exception):
+                    self._mark_job(
+                        job_id,
+                        status="failure",
+                        finished_at=finished_at,
+                        message=f"{err} (history row not written: {hist_exc})",
+                    )
             self._publisher.publish(
                 BackupFailed(
                     job_id=job_id,

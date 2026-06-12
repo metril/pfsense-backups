@@ -16,7 +16,7 @@ from fastapi import APIRouter, Request, Response
 from fastapi.responses import RedirectResponse
 
 from ..dependencies import CurrentUser
-from ..middleware import CSRF_COOKIE, CSRF_HEADER
+from ..middleware import CSRF_COOKIE, CSRF_HEADER, csrf_cookie_secure, set_csrf_cookie
 from ..services.oidc import generate_pkce, user_from_claims
 from ..services.rate_limit import limiter, login_limit
 
@@ -133,14 +133,7 @@ async def csrf(request: Request, response: Response) -> dict[str, str]:
     token = request.cookies.get(CSRF_COOKIE)
     if not token:
         token = secrets.token_urlsafe(32)
-        response.set_cookie(
-            key=CSRF_COOKIE,
-            value=token,
-            httponly=False,
-            secure=True,
-            samesite="lax",
-            path="/",
-        )
+        set_csrf_cookie(response, token, csrf_cookie_secure(request))
     return {"csrf": token, "header": CSRF_HEADER}
 
 

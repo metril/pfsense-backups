@@ -13,8 +13,9 @@ import {
   QueryClient,
   QueryClientProvider,
 } from "@tanstack/react-query";
-import { api, ApiError } from "./api/client";
+import { api } from "./api/client";
 import { useAuthStatus } from "./api/queries";
+import { extractMessage } from "./lib/errors";
 import { Layout } from "./components/Layout";
 import { ConfirmProvider } from "./components/ui/ConfirmDialog";
 import { ToastProvider, useToast } from "./components/ui/Toast";
@@ -35,28 +36,6 @@ import { SettingsPage } from "./pages/Settings";
 import "./index.css";
 
 type ToastApi = ReturnType<typeof useToast>;
-
-/**
- * Extract a user-friendly message from an error. FastAPI returns either a
- * string ``detail`` or a list of validation error objects — handle both
- * (L5 / related frontend polish).
- */
-function extractMessage(err: unknown): string {
-  if (err instanceof ApiError) {
-    const body = err.body as { detail?: unknown } | null;
-    const detail = body?.detail;
-    if (typeof detail === "string") return detail;
-    if (Array.isArray(detail)) {
-      return detail
-        .map((item: { msg?: string; loc?: unknown[] }) =>
-          item?.msg ? `${(item.loc ?? []).join(".")}: ${item.msg}` : JSON.stringify(item),
-        )
-        .join("; ");
-    }
-    return err.message || `HTTP ${err.status}`;
-  }
-  return err instanceof Error ? err.message : String(err);
-}
 
 // QueryClient is created exactly once at module load. Previously it lived
 // inside a useMemo([toast]) which re-ran whenever the ToastProvider's

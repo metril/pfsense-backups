@@ -104,7 +104,15 @@ def read_backup_bytes(
     try:
         password = crypto.decrypt(encrypt_password_ct)
     except Exception as exc:
-        log.warning("failed to decrypt backup password for %s: %s", path, exc)
+        # ERROR, not warning: the master key failing to open a stored
+        # password ciphertext is systemic (key rotated without
+        # re-encrypting, corrupted key file), unlike a single odd backup
+        # file — operators must be able to tell the two apart in logs.
+        log.error(
+            "master key cannot decrypt the stored backup password for %s "
+            "(possible key rotation issue — skipping diff): %s",
+            path, exc,
+        )
         return None
     try:
         return decrypt_pfsense_backup(raw, password)

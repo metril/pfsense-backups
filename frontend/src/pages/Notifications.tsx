@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/DropdownMenu";
 import { Input } from "@/components/ui/Input";
 import { Label } from "@/components/ui/Label";
+import { QueryError } from "@/components/ui/QueryError";
 import { Select } from "@/components/ui/Select";
 import {
   FormCheckbox,
@@ -130,7 +131,7 @@ function stripId(d: Draft): Omit<Notification, "id"> {
 }
 
 export function NotificationsPage() {
-  const { data, isPending } = useNotifications();
+  const { data, isPending, isError, error } = useNotifications();
   const instances = useInstances();
   const create = useCreateNotification();
   const update = useUpdateNotification();
@@ -157,6 +158,10 @@ export function NotificationsPage() {
 
       {isPending ? (
         <div className="mt-6 text-sm text-muted-fg">Loading…</div>
+      ) : isError ? (
+        <div className="mt-6">
+          <QueryError title="Could not load notifications" error={error} />
+        </div>
       ) : (
         <div className="mt-6 space-y-3">
           {data!.map((n) => {

@@ -10,6 +10,7 @@ import { useBlocker } from "react-router-dom";
 import { useForm, useWatch } from "react-hook-form";
 import { Button } from "@/components/ui/Button";
 import { Label } from "@/components/ui/Label";
+import { QueryError } from "@/components/ui/QueryError";
 import { type SelectOption } from "@/components/ui/Select";
 import { FormInput, FormSelect } from "@/components/ui/form";
 import { supportedTimezones } from "@/lib/timezones";
@@ -123,6 +124,12 @@ export function SettingsPage() {
   );
 
   if (settings.isPending) return <div className="text-sm text-muted-fg">Loading…</div>;
+
+  // Don't render editable forms seeded with empty defaults when the
+  // settings fetch failed — saving them would clobber real values.
+  if (settings.isError) {
+    return <QueryError title="Could not load settings" error={settings.error} />;
+  }
 
   return (
     <div className="max-w-2xl space-y-8">

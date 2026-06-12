@@ -460,26 +460,41 @@ def diff_to_anchor_events(
         # no longer exists in ``parsed_after``, so we emit ``None`` as
         # value (matches the singleton-removed shape — caller JSON-
         # encodes to null).
-        for (list_path, row_key), kind in package_row_hits.items():
+        #
+        # Rows are resolved through a per-``list_path`` key→row map
+        # built once, instead of re-walking + re-dumping the row list
+        # for every hit — a big HAProxy diff (many backends changed)
+        # made the old per-event linear scan quadratic. ``setdefault``
+        # keeps the old scan's first-row-wins semantics for duplicate
+        # keys, and indexing both the anchor key field and the ``key``
+        # fallback preserves the either-field match.
+        row_maps: dict[str, dict[str, dict[str, Any]]] = {}
+        installed_pkg = getattr(parsed_after, "installedpackages", None)
+        for list_path in {lp for (lp, _rk) in package_row_hits}:
             spec = PACKAGE_ROW_SPEC.get(list_path)
             if spec is None:
                 continue
-            anchor_kind, anchor_key_field = spec
-            installed_pkg = getattr(parsed_after, "installedpackages", None)
+            _anchor_kind, anchor_key_field = spec
             row_list = (
                 _descend(installed_pkg, list_path)
                 if installed_pkg is not None
                 else None
             )
-            row_dict: dict[str, Any] | None = None
-            if row_list:
-                for row in row_list:
-                    d = _dump_row(row)
-                    if str(d.get(anchor_key_field)) == row_key or str(
-                        d.get("key")
-                    ) == row_key:
-                        row_dict = d
-                        break
+            by_key: dict[str, dict[str, Any]] = {}
+            for row in row_list or []:
+                d = _dump_row(row)
+                by_key.setdefault(str(d.get(anchor_key_field)), d)
+                by_key.setdefault(str(d.get("key")), d)
+            row_maps[list_path] = by_key
+
+        for (list_path, row_key), kind in package_row_hits.items():
+            spec = PACKAGE_ROW_SPEC.get(list_path)
+            if spec is None:
+                continue
+            anchor_kind, anchor_key_field = spec
+            row_dict: dict[str, Any] | None = row_maps.get(list_path, {}).get(
+                row_key
+            )
             # Derive the sanitised anchor key from the resolved row
             # when available; fall back to the diff's key segment.
             anchor_key_value: str | None = None

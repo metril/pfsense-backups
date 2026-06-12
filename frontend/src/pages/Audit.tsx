@@ -5,6 +5,7 @@ import { cn } from "@/lib/cn";
 import { formatLocal } from "@/lib/datetime";
 import { useDebouncedValue } from "@/lib/useDebouncedValue";
 import { useAuditFacets, useAuditLog, type AuditFilter } from "@/api/queries";
+import { QueryError } from "@/components/ui/QueryError";
 
 const ACTION_TONE: Record<string, string> = {
   create: "text-ok",
@@ -259,7 +260,14 @@ export function AuditPage() {
               </Fragment>
             );
           })}
-          {!entries.isPending && (entries.data ?? []).length === 0 && (
+          {entries.isError && (
+            <tr>
+              <td colSpan={6} className="py-4">
+                <QueryError title="Could not load audit log" error={entries.error} />
+              </td>
+            </tr>
+          )}
+          {!entries.isPending && !entries.isError && (entries.data ?? []).length === 0 && (
             <tr>
               <td colSpan={6} className="py-8 text-center text-sm text-muted-fg">
                 {hasFilter ? "No audit entries match the current filters." : "No audit entries yet."}

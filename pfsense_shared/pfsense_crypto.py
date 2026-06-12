@@ -219,9 +219,16 @@ def decrypt_pfsense_backup(blob: bytes | str, password: str) -> bytes:
     """
     parsed = _parse_wrapper(blob)
     try:
-        raw = base64.b64decode(parsed.body_b64, validate=False)
+        # validate=True: the wrapper parser already strips whitespace, so
+        # any non-alphabet character left means a corrupt body or a
+        # mis-detected header/body boundary — fail here with a precise
+        # error instead of feeding garbage to the KDF chain and surfacing
+        # as an opaque "decryption failed".
+        raw = base64.b64decode(parsed.body_b64, validate=True)
     except Exception as exc:
-        raise PfSenseCryptoError(f"base64 decode failed: {exc}") from exc
+        raise PfSenseCryptoError(
+            f"encrypted body is not valid base64: {exc}"
+        ) from exc
 
     salt, ciphertext = _split_salted(raw)
     pw_bytes = password.encode("utf-8")

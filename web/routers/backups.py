@@ -387,7 +387,9 @@ async def get_backup(backup_id: int, db: DbSession) -> dict[str, Any]:
         "finished_at": b.finished_at.isoformat(),
         "duration_seconds": b.duration_seconds,
         "filename": b.filename,
-        "path": b.path,
+        # NB: the absolute on-disk path stays server-side — the UI only
+        # needs ``filename``, and leaking the data-volume layout to the
+        # client buys nothing.
         "size_bytes": b.size_bytes,
         "compressed": b.compressed,
         "success": b.success,
@@ -632,6 +634,8 @@ async def download_zip(
     """
     if not body.ids:
         raise HTTPException(400, "ids must be non-empty")
+    if len(body.ids) > 200:
+        raise HTTPException(422, "too many ids — max 200 backups per zip")
     paths: list[Path] = []
     for bid in body.ids:
         _, p = await _load(db, bid)

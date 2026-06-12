@@ -7,6 +7,7 @@ Also emits CSRF-protection checks for mutating HTTP methods.
 
 from __future__ import annotations
 
+import hmac
 import logging
 import re
 import secrets
@@ -37,6 +38,25 @@ CSRF_COOKIE = "csrftoken"
 CSRF_HEADER = "X-CSRF-Token"
 
 
+def csrf_cookie_secure(request: Request) -> bool:
+    """Cookie ``secure`` flag respects ``settings.dev_mode`` (H13) so
+    local-dev over http://localhost doesn't drop the cookie."""
+    return not getattr(request.app.state.settings, "dev_mode", False)
+
+
+def set_csrf_cookie(response: Response, value: str, secure: bool) -> None:
+    """Single place that knows the CSRF cookie's attributes — used by the
+    middleware and the ``/api/auth/csrf`` endpoint so the two can't drift."""
+    response.set_cookie(
+        key=CSRF_COOKIE,
+        value=value,
+        httponly=False,   # SPA must read it to echo via X-CSRF-Token
+        secure=secure,
+        samesite="lax",
+        path="/",
+    )
+
+
 def _is_public(path: str) -> bool:
     return any(p.search(path) for p in _PUBLIC_PATTERNS)
 
@@ -60,9 +80,7 @@ class AuthRequiredMiddleware(BaseHTTPMiddleware):
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
         csrf_value = request.cookies.get(CSRF_COOKIE) or secrets.token_urlsafe(32)
-        # Cookie flag respects app.state.settings.dev_mode (H13) so local-dev
-        # over http://localhost doesn't drop the cookie.
-        cookie_secure = not getattr(request.app.state.settings, "dev_mode", False)
+        cookie_secure = csrf_cookie_secure(request)
 
         path = request.url.path
         if not _is_public(path):
@@ -83,7 +101,7 @@ class AuthRequiredMiddleware(BaseHTTPMiddleware):
             exempt = any(path.startswith(p) for p in _CSRF_EXEMPT_PATHS)
             if request.method in _MUTATING and not exempt:
                 sent = request.headers.get(CSRF_HEADER)
-                if not sent or sent != csrf_value:
+                if not sent or not hmac.compare_digest(sent, csrf_value):
                     log.warning("CSRF check failed for %s %s", request.method, path)
                     response = JSONResponse(
                         status_code=403, content={"detail": "CSRF token missing or invalid"}
@@ -97,11 +115,4 @@ class AuthRequiredMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     def _set_csrf_cookie(response: Response, value: str, secure: bool) -> None:
-        response.set_cookie(
-            key=CSRF_COOKIE,
-            value=value,
-            httponly=False,   # SPA must read it to echo via X-CSRF-Token
-            secure=secure,
-            samesite="lax",
-            path="/",
-        )
+        set_csrf_cookie(response, value, secure)

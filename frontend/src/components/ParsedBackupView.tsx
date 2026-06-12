@@ -1,6 +1,7 @@
 import {
   memo,
   useCallback,
+  useDeferredValue,
   useEffect,
   useMemo,
   useRef,
@@ -157,7 +158,15 @@ export function ParsedBackupView({ backupId }: { backupId: number }) {
     },
     [setSearchParams],
   );
-  const matcher = useMemo(() => buildMatcher(filterQuery), [filterQuery]);
+  // Defer the filter text so ``narrowConfig`` (a deep traversal of the
+  // whole parsed config) runs at deferred priority — typing into the
+  // filter bar stays responsive on 5k-line configs while the narrowed
+  // tree catches up a frame later.
+  const deferredFilterQuery = useDeferredValue(filterQuery);
+  const matcher = useMemo(
+    () => buildMatcher(deferredFilterQuery),
+    [deferredFilterQuery],
+  );
   // Pre-filter tabular arrays up front — the existing ``length > 0``
   // conditionals downstream handle hiding sections automatically. This
   // keeps the render tree untouched (just replaces ``data`` with a
