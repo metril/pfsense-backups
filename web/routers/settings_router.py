@@ -32,7 +32,31 @@ _SECRET_SENTINEL = "__set__"
 
 def _replication_to_read(row: ReplicationSettings | None) -> ReplicationSettingsRead:
     if row is None:
-        row = ReplicationSettings(id=1)
+        # The singleton is seeded at boot, but a fresh deploy hitting
+        # this endpoint before/without the seed must not 500. NB: a
+        # transient ``ReplicationSettings(id=1)`` is NOT a substitute —
+        # mapped_column defaults only apply at INSERT, so every field
+        # on an unflushed instance is None (the v0.47.0 settings-page
+        # outage). Synthesize the defaults explicitly instead.
+        return ReplicationSettingsRead(
+            enabled=False,
+            kind="s3",
+            s3_endpoint_url=None,
+            s3_region=None,
+            s3_bucket=None,
+            s3_access_key_id=None,
+            s3_secret_access_key=None,
+            sftp_host=None,
+            sftp_port=22,
+            sftp_username=None,
+            sftp_password=None,
+            sftp_private_key=None,
+            base_path="pfsense-backups",
+            encrypt_plaintext=True,
+            double_encrypt=False,
+            replication_password=None,
+            mirror_deletes=False,
+        )
 
     def sent(ct: bytes | None) -> str | None:
         return _SECRET_SENTINEL if ct else None
@@ -122,6 +146,11 @@ async def put_replication(
     if row is None:
         row = ReplicationSettings(id=1)
         db.add(row)
+        # Flush immediately so column defaults materialize — the
+        # validation below reads row.encrypt_plaintext / double_encrypt,
+        # which are None (falsy!) on an unflushed instance, silently
+        # skipping the no-password refusal on first-ever save.
+        await db.flush()
 
     sent = payload.model_dump(exclude_unset=True)
     changed: dict[str, Any] = {}

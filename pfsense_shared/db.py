@@ -30,7 +30,7 @@ from sqlalchemy.pool import ConnectionPoolEntry
 
 from alembic import command
 
-from .models import BackupSettings, LoggingSettings
+from .models import BackupSettings, LoggingSettings, ReplicationSettings
 from .paths import DATA_DIR
 
 log = logging.getLogger(__name__)
@@ -200,17 +200,25 @@ def run_migrations(db_url: str) -> None:
     command.upgrade(cfg, "head")
 
 
-def _singleton_missing(session: Session, model: type[BackupSettings | LoggingSettings]) -> bool:
+def _singleton_missing(
+    session: Session,
+    model: type[BackupSettings | LoggingSettings | ReplicationSettings],
+) -> bool:
     return session.execute(select(model).where(model.id == 1)).scalar_one_or_none() is None
 
 
 def seed_singletons(session_factory: sessionmaker[Session]) -> None:
-    """Idempotent seed of BackupSettings + LoggingSettings singleton rows."""
+    """Idempotent seed of the settings singleton rows. Seeding (vs
+    constructing transient ORM objects on read) matters: mapped_column
+    defaults only apply at INSERT, so an unflushed ``Model(id=1)`` has
+    every field as None."""
     with session_factory() as session:
         if _singleton_missing(session, BackupSettings):
             session.add(BackupSettings(id=1))
         if _singleton_missing(session, LoggingSettings):
             session.add(LoggingSettings(id=1))
+        if _singleton_missing(session, ReplicationSettings):
+            session.add(ReplicationSettings(id=1))
         session.commit()
 
 
