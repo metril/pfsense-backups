@@ -18,6 +18,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+from .services.token_auth import authenticate_bearer
+
 log = logging.getLogger(__name__)
 
 # Routes that do NOT require a session cookie.
@@ -84,6 +86,23 @@ class AuthRequiredMiddleware(BaseHTTPMiddleware):
 
         path = request.url.path
         if not _is_public(path):
+            # F7: bearer tokens authenticate before the session check.
+            # Token requests skip CSRF — a bearer header is never
+            # attached ambiently by a browser, which is the only attack
+            # CSRF defends against. Scope is enforced here by method:
+            # ``read`` tokens get GET/HEAD only.
+            api_user = await authenticate_bearer(request)
+            if api_user is not None:
+                if api_user.get("token_scope") != "write" and (
+                    request.method not in ("GET", "HEAD")
+                ):
+                    return JSONResponse(
+                        status_code=403,
+                        content={"detail": "token scope is read-only"},
+                    )
+                request.state.api_user = api_user
+                return await call_next(request)
+
             user = request.session.get("user")
             if not user:
                 if _wants_json(request):

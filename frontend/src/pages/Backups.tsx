@@ -6,6 +6,7 @@ import {
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
+  CloudDownload,
   Download,
   Eye,
   KeyRound,
@@ -31,6 +32,7 @@ import {
   useDeleteBackup,
   useInstances,
   useReencryptAll,
+  useRetrieveBackup,
   type BackupFilter,
   type BackupOrder,
   type BackupSort,
@@ -87,6 +89,7 @@ export function BackupsPage() {
   const backups = useBackups(filter);
   const instances = useInstances();
   const del = useDeleteBackup();
+  const retrieve = useRetrieveBackup();
   const reencryptAll = useReencryptAll();
   const confirm = useConfirm();
   const toast = useToast();
@@ -97,7 +100,22 @@ export function BackupsPage() {
   // and the second-selected is "B", rather than silently sorting by id.
   const [selectedList, setSelectedList] = useState<number[]>([]);
   const selected = useMemo(() => new Set(selectedList), [selectedList]);
-  const rows = backups.data ?? [];
+  // F3: client-side location filter — the list endpoint returns every
+  // row; off-site state is a render concern.
+  const [locationFilter, setLocationFilter] = useState<
+    "all" | "local" | "both" | "offsite"
+  >("all");
+  const allRows = backups.data ?? [];
+  const rows = allRows.filter((b) => {
+    if (locationFilter === "all") return true;
+    const replicated = b.replica_status === "done";
+    if (locationFilter === "offsite") return !b.local_present;
+    if (locationFilter === "both") return b.local_present && replicated;
+    return b.local_present && !replicated; // "local"
+  });
+  const anyReplication = allRows.some(
+    (b) => b.replica_status !== null || !b.local_present,
+  );
   const canDiff = selectedList.length === 2;
   const hasDateFilter = Boolean(fromDate || toDate);
 
@@ -144,10 +162,13 @@ export function BackupsPage() {
   }
 
   async function deleteBackup(id: number, filename: string) {
+    const row = allRows.find((r) => r.id === id);
+    const hasReplica = row?.replica_status === "done";
     const ok = await confirm({
       title: `Delete ${filename}?`,
       description:
         "The DB row AND the XML file on disk will be removed. " +
+        (hasReplica ? "The off-site copy is deleted too. " : "") +
         "This cannot be undone by the app — restore would require manually " +
         "placing the file back.",
       confirmLabel: "Delete",
@@ -182,6 +203,21 @@ export function BackupsPage() {
               </select>
             )}
           />
+          {anyReplication && (
+            <select
+              value={locationFilter}
+              onChange={(e) =>
+                setLocationFilter(e.target.value as typeof locationFilter)
+              }
+              className="h-9 rounded-md border border-border bg-bg px-2 text-sm"
+              aria-label="Location filter"
+            >
+              <option value="all">All locations</option>
+              <option value="local">Local only</option>
+              <option value="both">Local + off-site</option>
+              <option value="offsite">Off-site only</option>
+            </select>
+          )}
           <div className="flex items-center gap-1 rounded-md border border-border bg-bg px-2 text-sm">
             <span className="text-muted-fg">from</span>
             <Controller
@@ -296,7 +332,7 @@ export function BackupsPage() {
                   className="h-4 w-4 cursor-pointer accent-accent"
                   checked={selected.has(b.id)}
                   onChange={() => toggle(b.id)}
-                  disabled={!b.success}
+                  disabled={!b.success || !b.local_present}
                   aria-label={`Select backup ${b.filename}`}
                 />
               </td>
@@ -312,7 +348,7 @@ export function BackupsPage() {
                 {b.duration_seconds.toFixed(1)}s
               </td>
               <td className="px-3 py-2 font-mono text-xs">
-                {b.success ? (
+                {b.success && b.local_present ? (
                   <Link to={`/backups/${b.id}/view`} className="hover:text-accent">
                     {b.filename}
                   </Link>
@@ -345,16 +381,29 @@ export function BackupsPage() {
               </td>
               <td className="px-3 py-2">
                 <div className="flex justify-end gap-1">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => nav(`/backups/${b.id}/view`)}
-                    disabled={!b.success}
-                    aria-label={`View ${b.filename}`}
-                    title="View XML"
-                  >
-                    <Eye className="h-4 w-4" />
-                  </Button>
+                  {b.local_present ? (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => nav(`/backups/${b.id}/view`)}
+                      disabled={!b.success}
+                      aria-label={`View ${b.filename}`}
+                      title="View XML"
+                    >
+                      <Eye className="h-4 w-4" />
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => retrieve.mutate(b.id)}
+                      disabled={retrieve.isPending}
+                      aria-label={`Retrieve ${b.filename} from off-site storage`}
+                      title="Retrieve from off-site storage"
+                    >
+                      <CloudDownload className="h-4 w-4" />
+                    </Button>
+                  )}
                   <Button
                     variant="ghost"
                     size="icon"
@@ -507,6 +556,31 @@ function ContentsBadges({ b }: { b: BackupListItem }) {
           {b.area}
         </Badge>
       )}
+      {b.config_version && (
+        <Badge
+          tone="default"
+          title={`pfSense config schema version ${b.config_version}`}
+        >
+          v{b.config_version}
+        </Badge>
+      )}
+      {!b.local_present ? (
+        <Badge tone="warn" title="Local file pruned by retention; a verified copy exists off-site. Use Retrieve to bring it back.">
+          off-site only
+        </Badge>
+      ) : b.replica_status === "done" ? (
+        <Badge tone="default" title="A verified copy exists off-site">
+          off-site
+        </Badge>
+      ) : b.replica_status === "failed" ? (
+        <Badge tone="danger" title="Off-site replication failing — the worker retries with backoff">
+          repl. failed
+        </Badge>
+      ) : b.replica_status === "pending" ? (
+        <Badge tone="muted" title="Off-site upload queued">
+          repl. pending
+        </Badge>
+      ) : null}
     </span>
   );
 }

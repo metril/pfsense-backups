@@ -36,6 +36,10 @@ type FormInputProps<T extends FieldValues> = Base<T> & {
   "aria-invalid"?: boolean;
   /** Coerce empty/NaN to a fallback when the field is numeric. */
   numericFallback?: number;
+  /** Numeric fields only: empty input writes ``null`` (a deliberate
+   *  "clear this override") instead of ``undefined`` ("not provided",
+   *  which update endpoints treat as unchanged). */
+  nullable?: boolean;
 };
 
 export function FormInput<T extends FieldValues>({
@@ -43,6 +47,7 @@ export function FormInput<T extends FieldValues>({
   name,
   type = "text",
   numericFallback,
+  nullable = false,
   ...rest
 }: FormInputProps<T>) {
   const isNumber = type === "number";
@@ -62,7 +67,7 @@ export function FormInput<T extends FieldValues>({
               const v = e.target.valueAsNumber;
               if (Number.isFinite(v)) field.onChange(v);
               else if (numericFallback !== undefined) field.onChange(numericFallback);
-              else field.onChange(undefined);
+              else field.onChange(nullable ? null : undefined);
             } else {
               field.onChange(e.target.value);
             }

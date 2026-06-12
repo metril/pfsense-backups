@@ -38,7 +38,9 @@ from pfsense_shared.pfsense_parser import parse as parse_pfsense_xml
 from pfsense_shared.pfsense_positions import build_positions
 from pfsense_shared.schemas import (
     BackupUpdate,
+    DeleteReplicaObjectCommand,
     ReencryptAllBackupsCommand,
+    RetrieveReplicaCommand,
     RunBackupAllCommand,
 )
 
@@ -77,6 +79,11 @@ class BackupListItem(BaseModel):
     included_packages: bool = True
     included_ssh: bool = True
     encrypted: bool = False
+    config_version: str | None = None
+    # F3: off-site replication state. ``location`` is derived for the
+    # UI: local / both / offsite (the list filter keys on it).
+    replica_status: str | None = None
+    local_present: bool = True
 
 
 class BackupHistoryItem(BaseModel):
@@ -95,6 +102,7 @@ class BackupHistoryItem(BaseModel):
     size_bytes: int
     tag: str | None = None
     changes_since_first: DiffCounts | None = None
+    config_version: str | None = None
 
 
 class ZipRequest(BaseModel):
@@ -277,6 +285,9 @@ async def list_backups(
                 included_packages=b.included_packages,
                 included_ssh=b.included_ssh,
                 encrypted=b.encrypted,
+                config_version=b.config_version,
+                replica_status=b.replica_status,
+                local_present=b.local_present,
             )
         )
     return out
@@ -303,6 +314,7 @@ async def list_backup_history(
             Backup.started_at,
             Backup.size_bytes,
             Backup.tag,
+            Backup.config_version,
             BackupDiff.added_count,
             BackupDiff.removed_count,
             BackupDiff.modified_count,
@@ -317,7 +329,7 @@ async def list_backup_history(
     )
     rows = (await db.execute(stmt)).all()
     out: list[BackupHistoryItem] = []
-    for bid, started, size, tag, added, removed, modified in rows:
+    for bid, started, size, tag, config_version, added, removed, modified in rows:
         counts: DiffCounts | None = None
         if added is not None and removed is not None and modified is not None:
             counts = DiffCounts(added=added, removed=removed, modified=modified)
@@ -328,6 +340,7 @@ async def list_backup_history(
                 size_bytes=size,
                 tag=tag,
                 changes_since_first=counts,
+                config_version=config_version,
             )
         )
     return out
@@ -400,6 +413,7 @@ async def get_backup(backup_id: int, db: DbSession) -> dict[str, Any]:
         "included_rrd": b.included_rrd,
         "included_packages": b.included_packages,
         "included_ssh": b.included_ssh,
+        "config_version": b.config_version,
         "encrypted": b.encrypted,
     }
 
@@ -445,7 +459,7 @@ async def patch_backup(
 
 @router.delete("/{backup_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_backup(
-    backup_id: int, db: DbSession, user: CurrentUser
+    backup_id: int, db: DbSession, user: CurrentUser, ipc: Ipc
 ) -> Response:
     """Remove the backup row + the file on disk.
 
@@ -473,6 +487,10 @@ async def delete_backup(
 
     filename = b.filename
     instance_id = b.instance_id
+    # F3: manual delete removes the off-site copy too (best-effort via
+    # the worker, which owns the transports). The confirm dialog in the
+    # UI calls out the off-site copy when one exists.
+    replica_key = b.replica_key if b.replica_status == "done" else None
     await db.delete(b)
     audit.record(
         db, actor_email=user["email"], action="delete", resource="backup",
@@ -482,14 +500,49 @@ async def delete_backup(
             "instance_id": instance_id,
             "file_removed": file_removed,
             "file_missing": file_missing,
+            "replica_deleted": bool(replica_key),
         },
     )
     await db.commit()
+    if replica_key:
+        await ipc.send(DeleteReplicaObjectCommand(replica_key=replica_key))
     log.info(
         "Deleted backup id=%d filename=%s (file_removed=%s file_missing=%s)",
         backup_id, filename, file_removed, file_missing,
     )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/{backup_id}/retrieve")
+async def retrieve_backup(
+    backup_id: int, db: DbSession, user: CurrentUser, ipc: Ipc
+) -> dict[str, Any]:
+    """Bring an off-site-only backup back to local storage (F3). The
+    worker downloads, sha256-verifies, strips the replication
+    encryption layer(s), restores the original file shape, and flips
+    ``local_present`` back on; progress lands as a Job."""
+    b = await db.get(Backup, backup_id)
+    if b is None:
+        raise HTTPException(404, "backup not found")
+    if b.local_present:
+        raise HTTPException(409, "backup is already present locally")
+    if b.replica_status != "done" or not b.replica_key:
+        raise HTTPException(409, "no verified off-site copy recorded for this backup")
+
+    job = Job(
+        instance_id=b.instance_id, kind="retrieve_replica",
+        requested_by=user["email"],
+    )
+    db.add(job)
+    await db.flush()
+    audit.record(
+        db, actor_email=user["email"], action="trigger",
+        resource="backup_retrieve", resource_id=backup_id,
+        details={"filename": b.filename, "replica_key": b.replica_key},
+    )
+    await db.commit()
+    await ipc.send(RetrieveReplicaCommand(backup_id=backup_id, job_id=job.id))
+    return {"job_id": job.id}
 
 
 @router.get("/{backup_id}/content")

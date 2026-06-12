@@ -41,11 +41,18 @@ class Scheduler:
         publisher: IpcPublisher,
         run_backup: Callable[..., object],
         instance_locks: InstanceLocks,
+        staleness_check: Callable[[], object] | None = None,
+        replication_sweep: Callable[[], object] | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._publisher = publisher
         self._run_backup = run_backup
         self._instance_locks = instance_locks
+        # Optional periodic sweeps (F6 staleness, F3 replication retry)
+        # — injected as plain callables so this module stays free of
+        # notifier/metrics/transport wiring.
+        self._staleness_check = staleness_check
+        self._replication_sweep = replication_sweep
         # MemoryJobStore — not SQLAlchemyJobStore. The persistent store
         # pickles each job, which for bound methods like ``self._fire``
         # drags the Scheduler instance (and its SQLAlchemy engine, whose
@@ -71,6 +78,28 @@ class Scheduler:
     def start(self) -> None:
         self._scheduler.start()
         self.load_all_jobs()
+        if self._staleness_check is not None:
+            from apscheduler.triggers.interval import IntervalTrigger
+
+            from .staleness import CHECK_INTERVAL_MINUTES
+
+            self._scheduler.add_job(
+                self._staleness_check,
+                trigger=IntervalTrigger(minutes=CHECK_INTERVAL_MINUTES),
+                id="staleness-check",
+                replace_existing=True,
+            )
+        if self._replication_sweep is not None:
+            from apscheduler.triggers.interval import IntervalTrigger
+
+            from .replication import SWEEP_INTERVAL_MINUTES
+
+            self._scheduler.add_job(
+                self._replication_sweep,
+                trigger=IntervalTrigger(minutes=SWEEP_INTERVAL_MINUTES),
+                id="replication-sweep",
+                replace_existing=True,
+            )
 
     def shutdown(self) -> None:
         # Wait for any running trigger callback to finish so we don't leave

@@ -176,6 +176,37 @@ class ReencryptAllBackupsCommand(BaseModel):
     also_update_instance_passwords: bool = True
 
 
+class TestReplicationCommand(BaseModel):
+    """Round-trip a tiny object against the configured replication
+    target. Runs on the worker (via IPC) so credentials and network
+    reachability are tested from the process that will actually
+    upload. Result comes back as a ``ReplicationTestResult`` event."""
+
+    cmd: Literal["test_replication"] = "test_replication"
+    request_id: str
+
+
+class DeleteReplicaObjectCommand(BaseModel):
+    """Best-effort remote-object delete, fired by the web when an
+    operator manually deletes a backup that has an off-site copy. The
+    row is already gone by the time this runs; failures just log (the
+    orphan is caught by ``verify-replicas`` / lifecycle rules)."""
+
+    cmd: Literal["delete_replica_object"] = "delete_replica_object"
+    replica_key: str
+
+
+class RetrieveReplicaCommand(BaseModel):
+    """Download an off-site-only backup back to local storage: fetch
+    the remote object, verify ``replica_sha256``, strip the replication
+    encryption layer(s) added at upload, restore the original local
+    file shape, and flip ``local_present`` back on."""
+
+    cmd: Literal["retrieve_replica"] = "retrieve_replica"
+    backup_id: int
+    job_id: int
+
+
 IpcCommand = (
     RunBackupCommand
     | RunBackupAllCommand
@@ -184,6 +215,9 @@ IpcCommand = (
     | SendTestNotificationCommand
     | ReencryptBackupsCommand
     | ReencryptAllBackupsCommand
+    | TestReplicationCommand
+    | RetrieveReplicaCommand
+    | DeleteReplicaObjectCommand
 )
 
 
@@ -208,7 +242,9 @@ class BackupProgress(_BaseEvent):
     topic: Literal["backup.progress"] = "backup.progress"
     job_id: int
     instance_id: int
-    phase: Literal["auth", "download", "save", "cleanup"]
+    # NB: extending this literal is an IPC contract change — worker and
+    # web must deploy together ("replicate" added in F3).
+    phase: Literal["auth", "download", "save", "cleanup", "replicate"]
 
 
 class BackupFinished(_BaseEvent):
@@ -237,6 +273,13 @@ class TestConnectionResult(_BaseEvent):
     topic: Literal["test_connection.result"] = "test_connection.result"
     job_id: int
     instance_id: int
+    ok: bool
+    detail: str | None = None
+
+
+class ReplicationTestResult(_BaseEvent):
+    topic: Literal["replication_test.result"] = "replication_test.result"
+    request_id: str
     ok: bool
     detail: str | None = None
 
@@ -288,6 +331,7 @@ IpcEvent = (
     | BackupFailed
     | ScheduleReloaded
     | TestConnectionResult
+    | ReplicationTestResult
     | NotificationSent
     | WorkerHeartbeat
     | ReencryptStarted
@@ -316,6 +360,15 @@ class InstanceCreate(BaseModel):
     enabled: bool = True
     retention_count: int = Field(default=365, ge=0, le=10000)
     compress: bool = False
+    # Off-site replication opt-in (F3).
+    replicate: bool = False
+    # Staleness alerting (F6): NULL = auto-derive from cron cadence.
+    stale_after_hours: int | None = Field(default=None, ge=1, le=8760)
+    # GFS retention tiers (F2): all NULL = count-only behavior.
+    retention_keep_all_days: int | None = Field(default=None, ge=0, le=3650)
+    retention_daily_days: int | None = Field(default=None, ge=0, le=3650)
+    retention_weekly_weeks: int | None = Field(default=None, ge=0, le=520)
+    retention_monthly_months: int | None = Field(default=None, ge=0, le=120)
 
     # Backup contents — defaults match today's hard-coded behavior so
     # upgrades don't change what gets captured.
@@ -367,6 +420,12 @@ class InstanceUpdate(BaseModel):
     enabled: bool | None = None
     retention_count: int | None = Field(default=None, ge=0, le=10000)
     compress: bool | None = None
+    replicate: bool | None = None
+    stale_after_hours: int | None = Field(default=None, ge=1, le=8760)
+    retention_keep_all_days: int | None = Field(default=None, ge=0, le=3650)
+    retention_daily_days: int | None = Field(default=None, ge=0, le=3650)
+    retention_weekly_weeks: int | None = Field(default=None, ge=0, le=520)
+    retention_monthly_months: int | None = Field(default=None, ge=0, le=120)
 
     backup_area: str | None = None
     backup_include_rrd: bool | None = None
@@ -416,6 +475,12 @@ class InstanceRead(BaseModel):
     enabled: bool
     retention_count: int
     compress: bool
+    replicate: bool
+    stale_after_hours: int | None
+    retention_keep_all_days: int | None
+    retention_daily_days: int | None
+    retention_weekly_weeks: int | None
+    retention_monthly_months: int | None
 
     backup_area: str
     backup_include_rrd: bool
@@ -427,6 +492,86 @@ class InstanceRead(BaseModel):
 
     created_at: datetime
     updated_at: datetime
+
+
+class ReplicationSettingsRead(BaseModel):
+    """Secrets read back as the ``__set__`` sentinel, never plaintext."""
+
+    enabled: bool
+    kind: Literal["s3", "sftp"]
+    s3_endpoint_url: str | None
+    s3_region: str | None
+    s3_bucket: str | None
+    s3_access_key_id: str | None
+    s3_secret_access_key: str | None  # "__set__" | None
+    sftp_host: str | None
+    sftp_port: int
+    sftp_username: str | None
+    sftp_password: str | None  # "__set__" | None
+    sftp_private_key: str | None  # "__set__" | None
+    base_path: str
+    encrypt_plaintext: bool
+    double_encrypt: bool
+    replication_password: str | None  # "__set__" | None
+    mirror_deletes: bool
+
+
+class ReplicationSettingsUpdate(BaseModel):
+    """Secrets follow the instance-password convention: ``"__set__"``
+    sentinel = keep existing ciphertext, None/empty = clear, any other
+    string = new plaintext to Fernet-encrypt."""
+
+    enabled: bool | None = None
+    kind: Literal["s3", "sftp"] | None = None
+    s3_endpoint_url: str | None = None
+    s3_region: str | None = None
+    s3_bucket: str | None = None
+    s3_access_key_id: str | None = None
+    s3_secret_access_key: str | None = None
+    sftp_host: str | None = None
+    sftp_port: int | None = Field(default=None, ge=1, le=65535)
+    sftp_username: str | None = None
+    sftp_password: str | None = None
+    sftp_private_key: str | None = None
+    base_path: str | None = None
+    encrypt_plaintext: bool | None = None
+    double_encrypt: bool | None = None
+    replication_password: str | None = None
+    mirror_deletes: bool | None = None
+
+
+ApiTokenScope = Literal["read", "write"]
+
+
+class ApiTokenCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    scope: ApiTokenScope = "read"
+    # Days until expiry; None = never expires.
+    expires_in_days: int | None = Field(default=None, ge=1, le=3650)
+
+
+class ApiTokenRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    prefix: str
+    scope: ApiTokenScope
+    enabled: bool
+    created_by: str
+    created_at: datetime
+    expires_at: datetime | None
+    last_used_at: datetime | None
+
+
+class ApiTokenCreated(ApiTokenRead):
+    """Create response — the only place the plaintext secret appears."""
+
+    token: str
+
+
+class ApiTokenUpdate(BaseModel):
+    enabled: bool | None = None
 
 
 class BackupRead(BaseModel):
@@ -477,12 +622,18 @@ class JobRead(BaseModel):
 
 NotificationKind = Literal["discord", "home_assistant", "ntfy", "healthchecks", "webhook"]
 
+# ``change`` fires only when a successful backup's vs-previous diff is
+# non-empty (with a "Changes: +A / -R / ~M" summary in the message).
+# ``stale`` fires from the worker's staleness sweep (no successful
+# backup within the instance's threshold) + the matching recovery.
+NotificationTrigger = Literal["success", "failure", "always", "change", "stale"]
+
 
 class NotificationCreate(BaseModel):
     name: str
     kind: NotificationKind = "webhook"
     url: str = ""
-    trigger: Literal["success", "failure", "always"] = "always"
+    trigger: NotificationTrigger = "always"
     enabled: bool = True
     message_format: str = "{status}: pfSense backup completed. {details}"
     include_instance_details: bool = True
@@ -497,7 +648,7 @@ class NotificationUpdate(BaseModel):
     name: str | None = None
     kind: NotificationKind | None = None
     url: str | None = None
-    trigger: Literal["success", "failure", "always"] | None = None
+    trigger: NotificationTrigger | None = None
     enabled: bool | None = None
     message_format: str | None = None
     include_instance_details: bool | None = None

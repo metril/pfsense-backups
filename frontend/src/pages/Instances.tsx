@@ -72,6 +72,12 @@ const blank = (): Draft => ({
   enabled: true,
   retention_count: 365,
   compress: false,
+  replicate: false,
+  stale_after_hours: null,
+  retention_keep_all_days: null,
+  retention_daily_days: null,
+  retention_weekly_weeks: null,
+  retention_monthly_months: null,
   backup_area: "",
   backup_include_rrd: false,
   backup_include_packages: true,
@@ -371,6 +377,12 @@ function toDraft(inst: Instance): Draft {
     enabled: inst.enabled,
     retention_count: inst.retention_count,
     compress: inst.compress,
+    replicate: inst.replicate,
+    stale_after_hours: inst.stale_after_hours,
+    retention_keep_all_days: inst.retention_keep_all_days,
+    retention_daily_days: inst.retention_daily_days,
+    retention_weekly_weeks: inst.retention_weekly_weeks,
+    retention_monthly_months: inst.retention_monthly_months,
     backup_area: inst.backup_area ?? "",
     backup_include_rrd: inst.backup_include_rrd,
     backup_include_packages: inst.backup_include_packages,
@@ -488,6 +500,13 @@ function EditorDialog({
           <Field label="Enabled">
             <FormSwitch control={control} name="enabled" label="Instance enabled" />
           </Field>
+          <Field label="Replicate off-site">
+            <FormSwitch
+              control={control}
+              name="replicate"
+              label="Copy backups to the off-site destination (Settings)"
+            />
+          </Field>
 
           <div className="col-span-2">
             <Label>Schedule (cron)</Label>
@@ -497,6 +516,38 @@ function EditorDialog({
               timezoneName="cron_timezone"
               globalTimezone={globalTimezone}
             />
+          </div>
+
+          <div className="col-span-2 border-t border-border pt-4">
+            <Label>Retention tiers &amp; staleness (optional)</Label>
+            <p className="mt-1 text-xs text-muted-fg">
+              Leave tier fields empty for plain count-based retention.
+              When any tier is set, the keep-set is the union of the
+              tiers (newest per day / week / month), still capped at the
+              retention count. Pruning a backup also prunes its change
+              history (blame / anchor events).
+            </p>
+            <div className="mt-2 grid grid-cols-2 gap-3 md:grid-cols-5">
+              <Field label="Keep all (days)">
+                <FormInput control={control} name="retention_keep_all_days" type="number" min={0} nullable />
+              </Field>
+              <Field label="Daily (days)">
+                <FormInput control={control} name="retention_daily_days" type="number" min={0} nullable />
+              </Field>
+              <Field label="Weekly (weeks)">
+                <FormInput control={control} name="retention_weekly_weeks" type="number" min={0} nullable />
+              </Field>
+              <Field label="Monthly (months)">
+                <FormInput control={control} name="retention_monthly_months" type="number" min={0} nullable />
+              </Field>
+              <Field label="Stale after (h)">
+                <FormInput control={control} name="stale_after_hours" type="number" min={1} nullable />
+              </Field>
+            </div>
+            <p className="mt-1 text-xs text-muted-fg">
+              "Stale after" drives the worker's no-recent-backup alert;
+              empty = automatic (2× the cron cadence).
+            </p>
           </div>
 
           <div className="col-span-2 border-t border-border pt-4">

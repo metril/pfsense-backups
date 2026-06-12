@@ -23,14 +23,18 @@ from sqlalchemy.orm import sessionmaker
 from pfsense_shared.crypto import Crypto
 from pfsense_shared.models import Job
 from pfsense_shared.schemas import (
+    DeleteReplicaObjectCommand,
     NotificationSent,
     ReencryptAllBackupsCommand,
     ReencryptBackupsCommand,
     ReloadScheduleCommand,
+    ReplicationTestResult,
+    RetrieveReplicaCommand,
     RunBackupAllCommand,
     RunBackupCommand,
     SendTestNotificationCommand,
     TestConnectionCommand,
+    TestReplicationCommand,
 )
 
 from .backup_manager import PfSenseBackupManager
@@ -127,6 +131,9 @@ class IpcListener:
             "send_test_notification": self._handle_send_test_notification,
             "reencrypt_backups": self._handle_reencrypt_backups,
             "reencrypt_all_backups": self._handle_reencrypt_all_backups,
+            "test_replication": self._handle_test_replication,
+            "retrieve_replica": self._handle_retrieve_replica,
+            "delete_replica_object": self._handle_delete_replica_object,
         }.get(cmd)
         if handler is None:
             log.error("Unknown IPC command: %s", cmd)
@@ -256,6 +263,67 @@ class IpcListener:
             self._scheduler.reload_all()
         else:
             self._scheduler.reload_instance(c.instance_id)
+
+    def _handle_test_replication(self, payload: dict[str, Any]) -> None:
+        c = TestReplicationCommand.model_validate(payload)
+        from .replication import load_config, make_target
+
+        ok, detail = True, "connection OK"
+        try:
+            cfg = load_config(self._session_factory, self._crypto)
+            if cfg is None:
+                ok, detail = False, "replication is not enabled"
+            else:
+                make_target(cfg).ping()
+        except Exception as exc:
+            ok, detail = False, str(exc)
+        self._publisher.publish(
+            ReplicationTestResult(
+                request_id=c.request_id, ok=ok, detail=detail,
+                ts=datetime.now(UTC),
+            )
+        )
+
+    def _handle_retrieve_replica(self, payload: dict[str, Any]) -> None:
+        c = RetrieveReplicaCommand.model_validate(payload)
+        from pfsense_shared.models import Backup
+
+        from .replication import retrieve_replica
+
+        # Serialize with per-instance work so a retrieval can't race a
+        # retention sweep that's deciding the same row's fate.
+        with self._session_factory() as s:
+            row = s.get(Backup, c.backup_id)
+            instance_id = row.instance_id if row is not None else None
+        self._manager._mark_job(c.job_id, status="running")
+        try:
+            if instance_id is None:
+                raise RuntimeError(f"backup {c.backup_id} not found")
+            with self._instance_locks.for_instance(instance_id):
+                retrieve_replica(self._session_factory, self._crypto, c.backup_id)
+            self._manager._mark_job(
+                c.job_id, status="success", finished_at=datetime.now(UTC),
+                message=f"backup {c.backup_id} retrieved from off-site storage",
+            )
+        except Exception as exc:
+            self._manager._mark_job(
+                c.job_id, status="failure", finished_at=datetime.now(UTC),
+                message=f"retrieve failed: {exc}",
+            )
+
+    def _handle_delete_replica_object(self, payload: dict[str, Any]) -> None:
+        c = DeleteReplicaObjectCommand.model_validate(payload)
+        from .replication import load_config, make_target
+
+        cfg = load_config(self._session_factory, self._crypto)
+        if cfg is None:
+            log.warning(
+                "delete_replica_object: replication disabled; %s orphaned",
+                c.replica_key,
+            )
+            return
+        make_target(cfg).delete(c.replica_key)
+        log.info("deleted remote replica object %s", c.replica_key)
 
     def _handle_send_test_notification(self, payload: dict) -> None:
         c = SendTestNotificationCommand.model_validate(payload)

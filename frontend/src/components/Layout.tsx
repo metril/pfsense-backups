@@ -7,6 +7,7 @@ import {
   History,
   LogOut,
   ScrollText,
+  Search,
   Settings,
   WifiOff,
 } from "lucide-react";
@@ -20,6 +21,7 @@ const NAV = [
   { to: "/", label: "Dashboard", icon: Activity, end: true },
   { to: "/instances", label: "Instances", icon: Boxes },
   { to: "/backups", label: "Backups", icon: History },
+  { to: "/search", label: "Search", icon: Search },
   { to: "/notifications", label: "Notifications", icon: BellRing },
   { to: "/logs", label: "Logs", icon: ScrollText },
   { to: "/audit", label: "Audit", icon: FileClock },

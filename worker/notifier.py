@@ -19,6 +19,7 @@ import requests
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from pfsense_shared.backup_diff_storage import ChangeSummary
 from pfsense_shared.models import Instance, Notification
 
 from .prometheus_metrics import PrometheusMetrics
@@ -64,6 +65,7 @@ class Notifier:
         details: str,
         failed_instances: list[str] | None = None,
         succeeded_instances: list[str] | None = None,
+        change_summary: ChangeSummary | None = None,
     ) -> None:
         """Fire one terminal notification per enabled row.
 
@@ -71,9 +73,14 @@ class Notifier:
         per row: scoped rows only fire when one of the scoped instances
         actually ran, and the message / Healthchecks ping path reflect
         the scoped subset rather than the aggregate run outcome.
+
+        ``change_summary`` (single-instance runs only) gates rows with
+        ``trigger="change"`` and appends a "Changes: …" line to every
+        message that fires while it's present.
         """
         failed_instances = failed_instances or []
         succeeded_instances = succeeded_instances or []
+        has_changes = change_summary is not None and not change_summary.is_empty
 
         webhooks = (
             session.execute(select(Notification).where(Notification.enabled.is_(True)))
@@ -90,9 +97,16 @@ class Notifier:
             if scope is None:
                 continue
             effective_success, scoped_failed, scoped_ok, scoped_details = scope
-            if not self._should_send(hook.trigger, effective_success):
+            if not self._should_send(
+                hook.trigger, effective_success, has_changes=has_changes
+            ):
                 continue
-            status_label = "SUCCESS" if effective_success else "FAILURE"
+            is_change_row = hook.trigger.lower() == "change"
+            status_label = (
+                "CHANGED"
+                if is_change_row
+                else ("SUCCESS" if effective_success else "FAILURE")
+            )
             message = self._format_message(
                 hook,
                 status=status_label,
@@ -100,6 +114,8 @@ class Notifier:
                 failed_instances=scoped_failed,
                 succeeded_instances=scoped_ok,
             )
+            if has_changes and change_summary is not None:
+                message += f"\n{change_summary.as_line()}"
             # H8: one broken webhook must not silence the rest.
             try:
                 self._dispatch(
@@ -108,6 +124,123 @@ class Notifier:
                     is_success=effective_success,
                     failed_instances=scoped_failed,
                     succeeded_instances=scoped_ok,
+                    changes=(
+                        change_summary.as_dict()
+                        if has_changes and change_summary is not None
+                        else None
+                    ),
+                )
+            except Exception as exc:
+                log.error("Webhook %s failed; continuing: %s", hook.name, exc)
+
+    def send_change_only(
+        self,
+        session: Session,
+        *,
+        instance_name: str,
+        change_summary: ChangeSummary,
+    ) -> None:
+        """Per-instance fan-out used by ``backup_all`` sweeps: outcome
+        rows get one aggregate ``send`` at the end of the sweep, but
+        ``change`` rows are inherently per-instance, so the manager
+        calls this after each instance whose vs-previous diff was
+        non-empty."""
+        if change_summary.is_empty:
+            return
+        rows = (
+            session.execute(
+                select(Notification).where(
+                    Notification.enabled.is_(True),
+                    Notification.trigger == "change",
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not rows:
+            return
+        name_to_id = self._name_to_id_map(session)
+        instance_id = name_to_id.get(instance_name)
+        for hook in rows:
+            if hook.instance_ids_json:
+                try:
+                    scoped = set(json.loads(hook.instance_ids_json))
+                except (TypeError, ValueError):
+                    continue
+                if instance_id not in scoped:
+                    continue
+            message = self._format_message(
+                hook,
+                status="CHANGED",
+                details=f"Config changed for {instance_name}",
+                failed_instances=[],
+                succeeded_instances=[instance_name],
+            )
+            message += f"\n{change_summary.as_line()}"
+            try:
+                self._dispatch(
+                    hook,
+                    message,
+                    is_success=True,
+                    failed_instances=[],
+                    succeeded_instances=[instance_name],
+                    changes=change_summary.as_dict(),
+                )
+            except Exception as exc:
+                log.error("Webhook %s failed; continuing: %s", hook.name, exc)
+
+    def send_stale(
+        self,
+        session: Session,
+        *,
+        instance_id: int,
+        instance_name: str,
+        detail: str,
+        is_recovery: bool,
+    ) -> None:
+        """Staleness alert / recovery for one instance. Routes to rows
+        with trigger ``stale`` or ``always`` — never ``failure``
+        (operators configured those for "a run failed", not "the cron
+        went quiet"). kind=healthchecks rows are excluded: Healthchecks
+        is itself a missed-ping staleness detector, and a ``/fail``
+        ping here would mark the *backup* check red over a scheduling
+        gap it is already tracking."""
+        rows = (
+            session.execute(
+                select(Notification).where(
+                    Notification.enabled.is_(True),
+                    Notification.trigger.in_(["stale", "always"]),
+                    Notification.kind != "healthchecks",
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not rows:
+            return
+        status = "RECOVERED" if is_recovery else "STALE"
+        for hook in rows:
+            if hook.instance_ids_json:
+                try:
+                    scoped = set(json.loads(hook.instance_ids_json))
+                except (TypeError, ValueError):
+                    continue
+                if instance_id not in scoped:
+                    continue
+            message = self._format_message(
+                hook,
+                status=status,
+                details=detail,
+                failed_instances=[] if is_recovery else [instance_name],
+                succeeded_instances=[instance_name] if is_recovery else [],
+            )
+            try:
+                self._dispatch(
+                    hook,
+                    message,
+                    is_success=is_recovery,
+                    failed_instances=[] if is_recovery else [instance_name],
+                    succeeded_instances=[instance_name] if is_recovery else [],
                 )
             except Exception as exc:
                 log.error("Webhook %s failed; continuing: %s", hook.name, exc)
@@ -197,10 +330,20 @@ class Notifier:
     # -------------------------------------------------------------- #
 
     @staticmethod
-    def _should_send(trigger: str, is_success: bool) -> bool:
+    def _should_send(
+        trigger: str, is_success: bool, *, has_changes: bool = False
+    ) -> bool:
         t = trigger.lower()
         if t == "always":
             return True
+        if t == "change":
+            # Only fires for a successful run whose vs-previous diff is
+            # non-empty. First-ever backups have no previous → no fire.
+            return is_success and has_changes
+        if t == "stale":
+            # Staleness rows are driven by Notifier.send_stale, never by
+            # terminal backup outcomes.
+            return False
         return (t == "success" and is_success) or (t == "failure" and not is_success)
 
     @staticmethod
@@ -293,10 +436,14 @@ class Notifier:
         is_test: bool = False,
         failed_instances: list[str] | None = None,
         succeeded_instances: list[str] | None = None,
+        changes: dict[str, Any] | None = None,
     ) -> None:
         kind = hook.kind or "webhook"
         fi = failed_instances or []
         si = succeeded_instances or []
+        # ``changes`` rides the message text for every sender; only the
+        # structured-JSON senders (generic webhook, HA webhook) also get
+        # it as a machine-readable key.
         if kind == "discord":
             self._send_discord(
                 hook, message, is_success=is_success, is_test=is_test,
@@ -306,6 +453,7 @@ class Notifier:
             self._send_home_assistant(
                 hook, message, is_success=is_success, is_test=is_test,
                 failed_instances=fi, succeeded_instances=si,
+                changes=changes,
             )
         elif kind == "ntfy":
             self._send_ntfy(
@@ -317,6 +465,7 @@ class Notifier:
             self._send_webhook(
                 hook, message, is_success=is_success, is_test=is_test,
                 failed_instances=fi, succeeded_instances=si,
+                changes=changes,
             )
 
     def _post(
@@ -417,6 +566,7 @@ class Notifier:
         is_test: bool,
         failed_instances: list[str],
         succeeded_instances: list[str],
+        changes: dict[str, Any] | None = None,
     ) -> None:
         emoji, color, _tag, label = _style(is_success, is_test)
         cfg = self._config(hook)
@@ -445,6 +595,8 @@ class Notifier:
             if hook.include_instance_details:
                 body["succeeded"] = succeeded_instances
                 body["failed"] = failed_instances
+            if changes is not None:
+                body["changes"] = changes
             if self._hostname:
                 body["host"] = self._hostname
         else:
@@ -536,6 +688,7 @@ class Notifier:
         is_test: bool = False,
         failed_instances: list[str] | None = None,
         succeeded_instances: list[str] | None = None,
+        changes: dict[str, Any] | None = None,
     ) -> None:
         emoji, color, _tag, label = _style(is_success, is_test)
         url = hook.url
@@ -589,6 +742,8 @@ class Notifier:
             if hook.include_instance_details:
                 payload["succeeded"] = succeeded_instances or []
                 payload["failed"] = failed_instances or []
+            if changes is not None:
+                payload["changes"] = changes
 
         # M3: Discord caps payload.content at 2000 chars.
         if payload is not None and is_discord_url:

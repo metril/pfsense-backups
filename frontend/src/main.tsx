@@ -32,6 +32,7 @@ import { InstancesPage } from "./pages/Instances";
 import { Login } from "./pages/Login";
 import { LogsPage } from "./pages/Logs";
 import { NotificationsPage } from "./pages/Notifications";
+import { SearchPage } from "./pages/Search";
 import { SettingsPage } from "./pages/Settings";
 import "./index.css";
 
@@ -91,6 +92,7 @@ const router = createBrowserRouter(
         <Route path="backups" element={<BackupsPage />} />
         <Route path="backups/:id/view" element={<BackupViewPage />} />
         <Route path="backups/diff/:a/:b" element={<BackupDiffPage />} />
+        <Route path="search" element={<SearchPage />} />
         <Route path="notifications" element={<NotificationsPage />} />
         <Route path="logs" element={<LogsPage />} />
         <Route path="audit" element={<AuditPage />} />

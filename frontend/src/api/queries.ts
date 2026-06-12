@@ -1,6 +1,7 @@
 // TanStack Query hooks bound to the REST surface.
 
 import {
+  useInfiniteQuery,
   useMutation,
   useQuery,
   useQueryClient,
@@ -9,6 +10,9 @@ import {
 import { api } from "./client";
 import type {
   AllSettings,
+  ApiToken,
+  ApiTokenCreate,
+  ApiTokenCreated,
   AuditEntry,
   AuditFacets,
   AuthUser,
@@ -22,10 +26,12 @@ import type {
   Notification,
   PreflightRequest,
   PreflightResponse,
+  SearchResponse,
   ReencryptAllRequest,
   ScheduleRow,
   SettingsBackup,
   SettingsLogging,
+  SettingsReplication,
 } from "./types";
 import type { ConfigDiff, ParsedConfig } from "./parsedTypes";
 
@@ -478,6 +484,87 @@ export function useUpdateLoggingSettings() {
   return useMutation({
     mutationFn: (patch: Partial<SettingsLogging>) => api.put<SettingsLogging>("/api/settings/logging", patch),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["settings"] }),
+  });
+}
+
+export function useUpdateReplicationSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (patch: Partial<SettingsReplication>) =>
+      api.put<SettingsReplication>("/api/settings/replication", patch),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["settings"] }),
+  });
+}
+
+export function useTestReplication() {
+  return useMutation({
+    mutationFn: () =>
+      api.post<{ ok: boolean; detail: string | null }>("/api/settings/replication/test"),
+  });
+}
+
+export function useRetrieveBackup() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (backupId: number) =>
+      api.post<{ job_id: number }>(`/api/backups/${backupId}/retrieve`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["backups"] }),
+  });
+}
+
+// ----------------- global search -----------------
+
+export function useGlobalSearch(
+  q: string,
+  filters: { instanceId?: number; kind?: string } = {},
+) {
+  return useInfiniteQuery({
+    queryKey: ["search", q, filters.instanceId ?? null, filters.kind ?? null],
+    queryFn: ({ pageParam }) => {
+      const qs = new URLSearchParams({ q, limit: "50" });
+      if (filters.instanceId != null) qs.set("instance_id", String(filters.instanceId));
+      if (filters.kind) qs.set("kind", filters.kind);
+      if (pageParam != null) qs.set("before_id", String(pageParam));
+      return api.get<SearchResponse>(`/api/search?${qs.toString()}`);
+    },
+    initialPageParam: null as number | null,
+    getNextPageParam: (last) =>
+      last.has_more && last.hits.length > 0
+        ? last.hits[last.hits.length - 1].event_id
+        : undefined,
+    enabled: q.trim().length >= 2,
+    staleTime: 60_000,
+  });
+}
+
+// ----------------- API tokens -----------------
+
+export function useApiTokens() {
+  return useQuery({ queryKey: ["api-tokens"], queryFn: () => api.get<ApiToken[]>("/api/tokens") });
+}
+
+export function useCreateApiToken() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: ApiTokenCreate) => api.post<ApiTokenCreated>("/api/tokens", payload),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["api-tokens"] }),
+  });
+}
+
+export function useUpdateApiToken() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, enabled }: { id: number; enabled: boolean }) =>
+      api.patch<ApiToken>(`/api/tokens/${id}`, { enabled }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["api-tokens"] }),
+  });
+}
+
+export function useDeleteApiToken() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.delete(`/api/tokens/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["api-tokens"] }),
   });
 }
 

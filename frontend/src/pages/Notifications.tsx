@@ -424,6 +424,8 @@ function EditorDialog({
                   { value: "always", label: "always" },
                   { value: "success", label: "success only" },
                   { value: "failure", label: "failure only" },
+                  { value: "change", label: "config changed" },
+                  { value: "stale", label: "backups stale" },
                 ]}
                 aria-label="Notification trigger"
               />

@@ -36,6 +36,7 @@ async def _seed_one(
     success: bool = True,
     tag: str | None = None,
     size_bytes: int = 1024,
+    config_version: str | None = None,
 ) -> int:
     async with session_factory() as s:
         row = Backup(
@@ -50,6 +51,7 @@ async def _seed_one(
             success=success,
             encrypted=False,
             tag=tag,
+            config_version=config_version,
         )
         s.add(row)
         await s.commit()
@@ -178,7 +180,7 @@ async def test_history_row_has_lean_schema(
     client: AsyncClient,
     app_and_session: tuple[FastAPI, async_sessionmaker[AsyncSession], Crypto],
 ) -> None:
-    """Each row carries exactly the 5 fields the scrubber renders. The
+    """Each row carries exactly the 6 fields the scrubber renders. The
     wide BackupListItem columns (filename, area, encrypted, …) are
     NOT included — keeping the payload small was the whole point."""
     _, session_factory, _ = app_and_session
@@ -203,6 +205,7 @@ async def test_history_row_has_lean_schema(
         "size_bytes",
         "tag",
         "changes_since_first",
+        "config_version",
     }
     assert row["tag"] == "pre-upgrade"
     assert row["size_bytes"] == 2048
@@ -306,3 +309,26 @@ async def test_history_returns_more_than_100_rows(
     r = await client.get(f"/api/backups/history?instance_id={inst.id}")
     assert r.status_code == 200
     assert len(r.json()) == 250
+
+
+async def test_history_surfaces_config_version(
+    client, app_and_session
+) -> None:
+    """F5: ``config_version`` rides the scrubber feed (NULL-safe)."""
+    _, session_factory, _ = app_and_session
+    inst = await _seed_instance(session_factory)
+    t0 = datetime(2026, 6, 1, tzinfo=UTC)
+    await _seed_one(
+        session_factory, instance_id=inst.id, started_at=t0, config_version="23.3"
+    )
+    await _seed_one(
+        session_factory,
+        instance_id=inst.id,
+        started_at=t0 + timedelta(days=1),
+        config_version=None,
+    )
+
+    r = await client.get(f"/api/backups/history?instance_id={inst.id}")
+    assert r.status_code == 200
+    body = r.json()
+    assert [row["config_version"] for row in body] == ["23.3", None]

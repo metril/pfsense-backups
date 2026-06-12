@@ -21,6 +21,15 @@ export interface Instance {
   enabled: boolean;
   retention_count: number;
   compress: boolean;
+  /** Off-site replication opt-in (destination configured in Settings). */
+  replicate: boolean;
+  /** Staleness alert threshold in hours; null = auto (2× cron cadence). */
+  stale_after_hours: number | null;
+  /** GFS retention tiers; all null = count-only retention. */
+  retention_keep_all_days: number | null;
+  retention_daily_days: number | null;
+  retention_weekly_weeks: number | null;
+  retention_monthly_months: number | null;
   /** Backup contents — what pfSense diag_backup.php will return. */
   backup_area: string;
   backup_include_rrd: boolean;
@@ -48,6 +57,12 @@ export interface InstanceCreate {
   enabled?: boolean;
   retention_count?: number;
   compress?: boolean;
+  replicate?: boolean;
+  stale_after_hours?: number | null;
+  retention_keep_all_days?: number | null;
+  retention_daily_days?: number | null;
+  retention_weekly_weeks?: number | null;
+  retention_monthly_months?: number | null;
 
   backup_area?: string;
   backup_include_rrd?: boolean;
@@ -109,6 +124,12 @@ export interface BackupListItem {
   included_packages: boolean;
   included_ssh: boolean;
   encrypted: boolean;
+  /** pfSense config schema version (<version> tag); null = not parsed yet. */
+  config_version: string | null;
+  /** Off-site replication state: null|pending|done|failed|skipped. */
+  replica_status: string | null;
+  /** False = off-site only (local file pruned; retrievable). */
+  local_present: boolean;
 }
 
 /** Lean per-row payload for the per-instance scrubber. v0.45.0 — the
@@ -120,6 +141,7 @@ export interface BackupHistoryItem {
   size_bytes: number;
   tag: string | null;
   changes_since_first: DiffCounts | null;
+  config_version: string | null;
 }
 
 export interface DiffSummaryResponse {
@@ -155,7 +177,9 @@ export interface Notification {
   name: string;
   kind: NotificationKind;
   url: string;
-  trigger: "success" | "failure" | "always";
+  /** "change" fires only when a successful backup actually changed the
+   *  config; "stale" fires from the worker's no-recent-backup sweep. */
+  trigger: "success" | "failure" | "always" | "change" | "stale";
   enabled: boolean;
   message_format: string;
   include_instance_details: boolean;
@@ -211,6 +235,48 @@ export interface Job {
   message: string | null;
 }
 
+export interface ApiToken {
+  id: number;
+  name: string;
+  /** Display handle, e.g. "pfsb_a1b2c3d4" — never the full secret. */
+  prefix: string;
+  scope: "read" | "write";
+  enabled: boolean;
+  created_by: string;
+  created_at: string;
+  expires_at: string | null;
+  last_used_at: string | null;
+}
+
+/** Create response — the only time the plaintext secret is visible. */
+export interface ApiTokenCreated extends ApiToken {
+  token: string;
+}
+
+export interface ApiTokenCreate {
+  name: string;
+  scope: "read" | "write";
+  expires_in_days?: number | null;
+}
+
+export interface SearchHit {
+  event_id: number;
+  instance_id: number;
+  instance_name: string;
+  backup_id: number;
+  occurred_at: string;
+  anchor_id: string;
+  kind: "added" | "modified" | "removed" | "reordered";
+  section: string | null;
+  label: string;
+  excerpt: string;
+}
+
+export interface SearchResponse {
+  hits: SearchHit[];
+  has_more: boolean;
+}
+
 export interface SettingsBackup {
   filename_format: string;
   timestamp_format: string;
@@ -224,9 +290,31 @@ export interface SettingsLogging {
   format: string;
 }
 
+export interface SettingsReplication {
+  enabled: boolean;
+  kind: "s3" | "sftp";
+  s3_endpoint_url: string | null;
+  s3_region: string | null;
+  s3_bucket: string | null;
+  s3_access_key_id: string | null;
+  /** "__set__" when stored, else null. Never plaintext. */
+  s3_secret_access_key: string | null;
+  sftp_host: string | null;
+  sftp_port: number;
+  sftp_username: string | null;
+  sftp_password: string | null;
+  sftp_private_key: string | null;
+  base_path: string;
+  encrypt_plaintext: boolean;
+  double_encrypt: boolean;
+  replication_password: string | null;
+  mirror_deletes: boolean;
+}
+
 export interface AllSettings {
   backup: SettingsBackup | null;
   logging: SettingsLogging | null;
+  replication: SettingsReplication | null;
 }
 
 // -------- Event envelope from /api/events WebSocket --------

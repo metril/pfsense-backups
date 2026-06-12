@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import gzip
 import logging
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -37,6 +38,86 @@ def summarise_diff(diff: ConfigDiff) -> tuple[int, int, int]:
         removed += len(section.removed)
         modified += len(section.modified)
     return added, removed, modified
+
+
+@dataclass
+class ChangeSummary:
+    """Compact rollup of a vs-previous diff, built once by the worker's
+    post-backup diff pass and handed to the notifier so ``change``-trigger
+    rows can announce *what* changed without re-reading the diff blob."""
+
+    added: int = 0
+    removed: int = 0
+    modified: int = 0
+    labels: list[str] = field(default_factory=list)
+
+    @property
+    def is_empty(self) -> bool:
+        return self.added == 0 and self.removed == 0 and self.modified == 0
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "added": self.added,
+            "removed": self.removed,
+            "modified": self.modified,
+            "labels": list(self.labels),
+        }
+
+    def as_line(self) -> str:
+        line = f"Changes: +{self.added} / -{self.removed} / ~{self.modified}"
+        if self.labels:
+            line += " — " + "; ".join(self.labels)
+        return line
+
+
+def _row_label(row: dict[str, Any]) -> str | None:
+    """Best human name for an added/removed raw row dict — these carry no
+    precomputed ``label`` (unlike ``ItemDiff``), so fall back through the
+    name-ish fields most sections use."""
+    for k in ("name", "descr", "key"):
+        v = row.get(k)
+        if isinstance(v, str) and v:
+            return v
+    return None
+
+
+def change_labels(diff: ConfigDiff, limit: int = 5) -> list[str]:
+    """Collect up to ``limit`` human labels describing a diff, prefixed
+    with the section name ("aliases: mgmt-hosts"). Modified/reordered
+    items carry diff-time labels; added/removed rows fall back to their
+    name-ish fields or a bare section mention."""
+    labels: list[str] = []
+    for section_name in type(diff).model_fields:
+        section = getattr(diff, section_name, None)
+        if not isinstance(section, SectionDiff) or section.is_empty:
+            continue
+        pretty = section_name.replace("_", " ")
+        for item in section.modified:
+            labels.append(f"{pretty}: {item.label}")
+            if len(labels) >= limit:
+                return labels
+        for kind, rows in (("added", section.added), ("removed", section.removed)):
+            for row in rows:
+                name = _row_label(row)
+                labels.append(
+                    f"{pretty} {kind}: {name}" if name else f"{pretty}: row {kind}"
+                )
+                if len(labels) >= limit:
+                    return labels
+    return labels
+
+
+def build_change_summary(diff: ConfigDiff) -> ChangeSummary | None:
+    """ChangeSummary for a vs-previous diff, or None when nothing changed."""
+    added, removed, modified = summarise_diff(diff)
+    if added == removed == modified == 0:
+        return None
+    return ChangeSummary(
+        added=added,
+        removed=removed,
+        modified=modified,
+        labels=change_labels(diff),
+    )
 
 
 def encode_diff(diff: ConfigDiff) -> bytes:

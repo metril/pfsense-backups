@@ -11,7 +11,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from cachetools import LRUCache  # type: ignore[import-untyped]
+from cachetools import LRUCache
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
@@ -39,7 +39,9 @@ from .routers import jobs as jobs_router
 from .routers import logs as logs_router
 from .routers import notifications as notifications_router
 from .routers import schedule as schedule_router
+from .routers import search as search_router
 from .routers import settings_router
+from .routers import tokens as tokens_router
 from .services.event_bus import EventBus
 from .services.ipc_client import IpcClient
 from .services.log_ring import LogRing
@@ -228,6 +230,8 @@ def create_app(settings: WebSettings | None = None, static_dir: Path | None = No
     app.include_router(jobs_router.router)
     app.include_router(backups_router.router)
     app.include_router(audit_router.router)
+    app.include_router(tokens_router.router)
+    app.include_router(search_router.router)
 
     spa_dir = static_dir or Path(__file__).resolve().parent / "static"
     mount_spa(app, spa_dir)

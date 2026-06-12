@@ -372,6 +372,27 @@ export function InstanceHistoryPage() {
                 {formatLocal(focused.started_at)}
               </span>
               {focused.tag && <Badge tone="muted">{focused.tag}</Badge>}
+              {focused.config_version && (
+                <Badge
+                  tone={
+                    previous?.config_version &&
+                    previous.config_version !== focused.config_version
+                      ? "warn"
+                      : "default"
+                  }
+                  title={
+                    previous?.config_version &&
+                    previous.config_version !== focused.config_version
+                      ? `Config schema upgraded here: v${previous.config_version} → v${focused.config_version}`
+                      : `pfSense config schema version ${focused.config_version}`
+                  }
+                >
+                  {previous?.config_version &&
+                  previous.config_version !== focused.config_version
+                    ? `v${previous.config_version} → v${focused.config_version}`
+                    : `v${focused.config_version}`}
+                </Badge>
+              )}
               <span className="text-muted-fg">·</span>
               <span className="font-mono text-muted-fg">
                 {Math.round(focused.size_bytes / 1024)} KB

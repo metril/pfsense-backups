@@ -1,6 +1,6 @@
 [project]
 name = "pfsense-backups"
-version = "0.46.0"
+version = "0.47.0"
 description = "pfSense configuration backup + web dashboard."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -33,6 +33,8 @@ worker = [
     # resolve to 4.x and fail to boot.
     "apscheduler>=3.10,<4",
     "croniter>=2.0",
+    "boto3>=1.43.28",
+    "paramiko>=5.0.0",
 ]
 web = [
     "fastapi>=0.110",
@@ -85,3 +87,10 @@ ignore_missing_imports = true
 # decorator on every test. Individual test files can still override via
 # @pytest.mark.asyncio(scope=...) if they need a different scope.
 asyncio_mode = "auto"
+
+[dependency-groups]
+dev = [
+    "types-cachetools>=7.0.0.20260518",
+    "types-croniter>=6.2.2.20260518",
+    "types-paramiko>=4.0.0.20260518",
+]

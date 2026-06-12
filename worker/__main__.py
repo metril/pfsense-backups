@@ -17,6 +17,17 @@ Subcommands (via ``python -m worker <cmd>``):
   events for the first backup and diff-projected events for each
   subsequent pairing, then stamps the backfilled timestamp. Safe to
   rerun: per-instance transactional truncate-then-insert.
+- ``backfill-config-versions [--instance=<id>]`` — fill
+  ``Backup.config_version`` for rows captured before the column
+  existed. Idempotent: only touches NULL rows.
+- ``replicate-backfill [--instance=<id>]`` — mark replication-eligible
+  historical backups ``pending`` and run an upload sweep inline.
+- ``verify-replicas [--instance=<id>] [--deep]`` — reconcile ``done``
+  replicas against the remote (size; ``--deep`` re-downloads and
+  sha256-checks); mismatches flip back to ``failed`` for re-upload.
+- ``decrypt-replica <file>`` — strip the replication encryption
+  layer(s) from a downloaded off-site object (prompts for the
+  replication password).
 """
 
 from __future__ import annotations
@@ -52,7 +63,9 @@ from .ipc_listener import IpcListener
 from .ipc_publisher import IpcPublisher
 from .notifier import Notifier
 from .prometheus_metrics import get_metrics_instance
+from .replication import sweep_pending, verify_replicas
 from .scheduler import Scheduler
+from .staleness import check_stale_instances
 
 log = logging.getLogger(__name__)
 
@@ -154,6 +167,12 @@ def main() -> None:
         publisher=publisher,
         run_backup=manager.backup_instance,
         instance_locks=instance_locks,
+        staleness_check=lambda: check_stale_instances(
+            session_factory, notifier, metrics
+        ),
+        replication_sweep=lambda: sweep_pending(
+            session_factory, crypto, notifier=notifier, metrics=metrics
+        ),
     )
     scheduler.start()
 
@@ -555,22 +574,201 @@ def _reindex_one_instance(
         return emitted_total
 
 
+def backfill_config_versions(instance_id: int | None = None) -> int:
+    """Fill ``Backup.config_version`` for historical rows.
+
+    New backups get the column stamped at ingestion; this subcommand
+    covers everything captured before the column existed. Targets
+    ``config_version IS NULL AND success = 1`` only, so reruns are
+    cheap and idempotent. Unreadable / unparseable files are skipped
+    with a warning (their rows stay NULL).
+    """
+    log = logging.getLogger("worker.backfill_config_versions")
+    settings = WorkerSettings()
+    engine = make_engine(settings.app_db_url)
+    init_db(engine)
+    session_factory = make_session_factory(engine)
+    crypto = Crypto.from_file(settings.pfsense_backups_secret_key_file)
+
+    try:
+        filled, skipped = _backfill_config_versions_core(
+            session_factory, crypto, instance_id, log
+        )
+        log.info("backfill done: %d filled, %d skipped", filled, skipped)
+        return 0
+    finally:
+        engine.dispose()
+
+
+def _backfill_config_versions_core(
+    session_factory: Any,
+    crypto: Crypto,
+    instance_id: int | None,
+    log: logging.Logger,
+) -> tuple[int, int]:
+    filled = skipped = 0
+    with session_factory() as s:
+        stmt = (
+            select(Backup.id)
+            .where(Backup.success.is_(True))
+            .where(Backup.config_version.is_(None))
+        )
+        if instance_id is not None:
+            stmt = stmt.where(Backup.instance_id == instance_id)
+        ids = [bid for (bid,) in s.execute(stmt).all()]
+    log.info("backfill target: %d backup(s)", len(ids))
+
+    # One short session per chunk so a long history doesn't hold a
+    # transaction open across hundreds of file reads.
+    chunk_size = 50
+    for start in range(0, len(ids), chunk_size):
+        with session_factory() as s:
+            for bid in ids[start : start + chunk_size]:
+                bkp = s.get(Backup, bid)
+                if bkp is None:
+                    continue
+                raw = read_backup_bytes(
+                    Path(bkp.path),
+                    encrypted=bkp.encrypted,
+                    encrypt_password_ct=bkp.encrypt_password_ct,
+                    crypto=crypto,
+                )
+                if raw is None:
+                    skipped += 1
+                    continue
+                try:
+                    parsed = parse_pfsense_xml(raw)
+                except PfSenseParseError as exc:
+                    log.warning("backup id=%d parse failed: %s", bid, exc)
+                    skipped += 1
+                    continue
+                if parsed.config_version:
+                    bkp.config_version = parsed.config_version
+                    filled += 1
+                else:
+                    skipped += 1
+            s.commit()
+    return filled, skipped
+
+
+def _replication_cli_context() -> tuple[Any, Crypto, Any]:
+    """(session_factory, crypto, engine) for the replication subcommands."""
+    settings = WorkerSettings()
+    engine = make_engine(settings.app_db_url)
+    init_db(engine)
+    session_factory = make_session_factory(engine)
+    crypto = Crypto.from_file(settings.pfsense_backups_secret_key_file)
+    return session_factory, crypto, engine
+
+
+def replicate_backfill(instance_id: int | None = None) -> int:
+    """Mark every eligible successful backup ``pending`` and run the
+    sweep inline. Eligible = instance has ``replicate=True`` and the
+    row has no replica state yet. Idempotent."""
+    log = logging.getLogger("worker.replicate_backfill")
+    session_factory, crypto, engine = _replication_cli_context()
+    try:
+        with session_factory() as s:
+            stmt = (
+                select(Backup.id)
+                .join(Instance, Instance.id == Backup.instance_id)
+                .where(
+                    Backup.success.is_(True),
+                    Backup.local_present.is_(True),
+                    Backup.replica_status.is_(None),
+                    Instance.replicate.is_(True),
+                )
+            )
+            if instance_id is not None:
+                stmt = stmt.where(Backup.instance_id == instance_id)
+            ids = [bid for (bid,) in s.execute(stmt).all()]
+            for bid in ids:
+                row = s.get(Backup, bid)
+                if row is not None:
+                    row.replica_status = "pending"
+            s.commit()
+        log.info("marked %d backup(s) pending; running sweep", len(ids))
+        ok = sweep_pending(session_factory, crypto)
+        log.info("sweep uploaded %d backup(s)", ok)
+        return 0
+    finally:
+        engine.dispose()
+
+
+def verify_replicas_cli(instance_id: int | None = None, deep: bool = False) -> int:
+    log = logging.getLogger("worker.verify_replicas")
+    session_factory, crypto, engine = _replication_cli_context()
+    try:
+        checked, flagged = verify_replicas(
+            session_factory, crypto, instance_id=instance_id, deep=deep
+        )
+        log.info("verified %d replica(s); flagged %d for re-upload", checked, flagged)
+        return 0 if flagged == 0 else 1
+    finally:
+        engine.dispose()
+
+
+def decrypt_replica_cli(file_path: str) -> int:
+    """Strip the replication encryption layer(s) from a downloaded
+    off-site object so it can be fed to diag_backup.php (or read).
+    ``.2x.xml.enc`` strips one layer (the inner blob stays pfSense-
+    encrypted with the instance password); ``.xml.enc`` decrypts to
+    plain XML. Output lands next to the input."""
+    import getpass
+
+    from pfsense_shared.pfsense_crypto import decrypt_pfsense_backup
+
+    log = logging.getLogger("worker.decrypt_replica")
+    src = Path(file_path)
+    if not src.is_file():
+        log.error("no such file: %s", src)
+        return 1
+    password = getpass.getpass("Replication password: ")
+    blob = decrypt_pfsense_backup(src.read_bytes(), password)
+    if src.name.endswith(".2x.xml.enc"):
+        out = src.with_name(src.name.removesuffix(".2x.xml.enc") + ".xml.enc")
+    else:
+        out = src.with_name(src.name.removesuffix(".xml.enc") + ".xml")
+    out.write_bytes(blob)
+    log.info("wrote %s (%d bytes)", out, len(blob))
+    return 0
+
+
 def dispatch() -> int:
     """Dispatch to a subcommand based on ``sys.argv[1]``. Returns an
     exit code. Default (no arg) runs the worker loop, which never
     returns under normal operation — wrapping it in an int return
-    only matters for the ``rotate-key`` / ``reindex-anchor-events``
-    paths."""
+    only matters for the CLI subcommand paths."""
+
+    def _instance_arg() -> int | None:
+        for arg in sys.argv[2:]:
+            if arg.startswith("--instance="):
+                return int(arg.split("=", 1)[1])
+        return None
+
     if len(sys.argv) > 1 and sys.argv[1] == "rotate-key":
         _configure_logging("INFO")
         return rotate_key()
     if len(sys.argv) > 1 and sys.argv[1] == "reindex-anchor-events":
         _configure_logging("INFO")
-        instance_id: int | None = None
-        for arg in sys.argv[2:]:
-            if arg.startswith("--instance="):
-                instance_id = int(arg.split("=", 1)[1])
-        return reindex_anchor_events(instance_id=instance_id)
+        return reindex_anchor_events(instance_id=_instance_arg())
+    if len(sys.argv) > 1 and sys.argv[1] == "backfill-config-versions":
+        _configure_logging("INFO")
+        return backfill_config_versions(instance_id=_instance_arg())
+    if len(sys.argv) > 1 and sys.argv[1] == "replicate-backfill":
+        _configure_logging("INFO")
+        return replicate_backfill(instance_id=_instance_arg())
+    if len(sys.argv) > 1 and sys.argv[1] == "verify-replicas":
+        _configure_logging("INFO")
+        return verify_replicas_cli(
+            instance_id=_instance_arg(), deep="--deep" in sys.argv[2:]
+        )
+    if len(sys.argv) > 1 and sys.argv[1] == "decrypt-replica":
+        _configure_logging("INFO")
+        if len(sys.argv) < 3:
+            print("usage: python -m worker decrypt-replica <file>")
+            return 2
+        return decrypt_replica_cli(sys.argv[2])
     main()
     return 0
 

@@ -52,6 +52,42 @@ class Instance(Base):
     retention_count: Mapped[int] = mapped_column(Integer, default=365)
     compress: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # GFS retention tiers (F2). All NULL = pure count-based behavior
+    # (the pre-F2 default — upgrades change nothing). When any tier is
+    # set, the keep-set is: everything newer than ``keep_all_days``,
+    # plus the newest backup per UTC day / ISO week / month within the
+    # respective windows, capped at ``retention_count``. See
+    # ``pfsense_shared/retention.py``.
+    retention_keep_all_days: Mapped[int | None] = mapped_column(
+        Integer, default=None, nullable=True
+    )
+    retention_daily_days: Mapped[int | None] = mapped_column(
+        Integer, default=None, nullable=True
+    )
+    retention_weekly_weeks: Mapped[int | None] = mapped_column(
+        Integer, default=None, nullable=True
+    )
+    retention_monthly_months: Mapped[int | None] = mapped_column(
+        Integer, default=None, nullable=True
+    )
+
+    # Off-site replication opt-in (F3). The destination + credentials
+    # live in the ReplicationSettings singleton; this flag just says
+    # "this instance's backups go off-site".
+    replicate: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # Staleness alerting (F6). ``stale_after_hours`` NULL = auto-derive
+    # from the cron cadence (2× the gap between fires, floor 1h).
+    # ``stale_notified_at`` is the suppression stamp: set when a stale
+    # alert fires, re-alert only after 24h, cleared (with a recovery
+    # notification) by the next successful backup.
+    stale_after_hours: Mapped[int | None] = mapped_column(
+        Integer, default=None, nullable=True
+    )
+    stale_notified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None, nullable=True
+    )
+
     # What to pull from pfSense's diag_backup.php. Defaults mirror the old
     # hard-coded behavior so upgrades don't change what gets captured.
     backup_area: Mapped[str] = mapped_column(String(64), default="")
@@ -106,6 +142,65 @@ class BackupSettings(Base):
     backup_all_max_workers: Mapped[int] = mapped_column(Integer, default=4)
 
 
+class ReplicationSettings(Base):
+    """Singleton row (id=1): the one off-site destination (F3).
+
+    Credentials are Fernet ciphertext (same Crypto as instance
+    passwords). ``encrypt_plaintext`` (default True) wraps plaintext
+    backups with ``encrypt_pfsense_backup`` + ``replication_password_ct``
+    before upload — a plaintext local backup must never land plaintext
+    off-site; enabling replication without a password while this is on
+    is refused at the settings layer. ``double_encrypt`` additionally
+    wraps already-encrypted backups in the replication-password outer
+    layer (key suffix ``.2x``); default off so off-site blobs stay
+    directly diag_backup.php-restorable.
+    """
+
+    __tablename__ = "replication_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    kind: Mapped[str] = mapped_column(String(16), default="s3")  # s3|sftp
+
+    # S3 (also MinIO/R2 via endpoint_url).
+    s3_endpoint_url: Mapped[str | None] = mapped_column(
+        String(512), default=None, nullable=True
+    )
+    s3_region: Mapped[str | None] = mapped_column(String(64), default=None, nullable=True)
+    s3_bucket: Mapped[str | None] = mapped_column(String(255), default=None, nullable=True)
+    s3_access_key_id: Mapped[str | None] = mapped_column(
+        String(255), default=None, nullable=True
+    )
+    s3_secret_access_key_ct: Mapped[bytes | None] = mapped_column(
+        LargeBinary, default=None, nullable=True
+    )
+
+    # SFTP.
+    sftp_host: Mapped[str | None] = mapped_column(String(255), default=None, nullable=True)
+    sftp_port: Mapped[int] = mapped_column(Integer, default=22)
+    sftp_username: Mapped[str | None] = mapped_column(
+        String(128), default=None, nullable=True
+    )
+    sftp_password_ct: Mapped[bytes | None] = mapped_column(
+        LargeBinary, default=None, nullable=True
+    )
+    sftp_private_key_ct: Mapped[bytes | None] = mapped_column(
+        LargeBinary, default=None, nullable=True
+    )
+
+    # Remote layout: objects land at ``{base_path}/{instance_name}/{filename}``.
+    base_path: Mapped[str] = mapped_column(String(512), default="pfsense-backups")
+
+    encrypt_plaintext: Mapped[bool] = mapped_column(Boolean, default=True)
+    double_encrypt: Mapped[bool] = mapped_column(Boolean, default=False)
+    replication_password_ct: Mapped[bytes | None] = mapped_column(
+        LargeBinary, default=None, nullable=True
+    )
+    # False (default) = keep-forever off-site; retention flips rows to
+    # "off-site only" instead of deleting them.
+    mirror_deletes: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
 class LoggingSettings(Base):
     __tablename__ = "logging_settings"
 
@@ -124,7 +219,7 @@ class Notification(Base):
     # kind: discord|home_assistant|ntfy|healthchecks|webhook
     kind: Mapped[str] = mapped_column(String(32), default="webhook")
     url: Mapped[str] = mapped_column(String(1024))
-    trigger: Mapped[str] = mapped_column(String(16))  # success|failure|always
+    trigger: Mapped[str] = mapped_column(String(16))  # success|failure|always|change
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     message_format: Mapped[str] = mapped_column(
         String(512), default="{status}: pfSense backup completed. {details}"
@@ -201,6 +296,42 @@ class Backup(Base):
     included_packages: Mapped[bool] = mapped_column(Boolean, default=True)
     included_ssh: Mapped[bool] = mapped_column(Boolean, default=True)
     encrypted: Mapped[bool] = mapped_column(Boolean, default=False)
+    # pfSense config SCHEMA version (the <version> tag, e.g. "23.3") —
+    # set when the post-backup parse succeeds, NULL otherwise. The
+    # pfSense *release* string is deliberately not captured: it isn't
+    # in config.xml. Backfill for old rows: `backfill-config-versions`.
+    config_version: Mapped[str | None] = mapped_column(
+        String(32), default=None, nullable=True
+    )
+
+    # Off-site replication state (F3). ``replica_status``:
+    #   NULL    — never eligible (instance not replicating / pre-F3 row)
+    #   pending — queued for upload (retry sweep picks it up)
+    #   done    — uploaded + verified; ``replica_key`` / ``replica_at``
+    #             / ``replica_sha256`` describe the remote object
+    #   failed  — last attempt failed; ``replica_error`` says why,
+    #             ``replica_attempts`` drives the backoff
+    #   skipped — permanently ineligible (e.g. file vanished locally)
+    # ``local_present=False`` marks an "off-site only" row: retention
+    # unlinked the local file but kept the row (and its AnchorEvents)
+    # because a verified replica exists.
+    replica_status: Mapped[str | None] = mapped_column(
+        String(16), default=None, nullable=True
+    )
+    replica_key: Mapped[str | None] = mapped_column(
+        String(1024), default=None, nullable=True
+    )
+    replica_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None, nullable=True
+    )
+    replica_error: Mapped[str | None] = mapped_column(
+        Text, default=None, nullable=True
+    )
+    replica_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    replica_sha256: Mapped[str | None] = mapped_column(
+        String(64), default=None, nullable=True
+    )
+    local_present: Mapped[bool] = mapped_column(Boolean, default=True)
     # Fernet-encrypted copy of the password used for THIS backup.
     # Stored per row so rotating the instance password doesn't strand
     # older encrypted backups.
@@ -221,6 +352,39 @@ class AuditLog(Base):
     resource: Mapped[str] = mapped_column(String(64))
     resource_id: Mapped[str | None] = mapped_column(String(64), default=None, nullable=True)
     details_json: Mapped[str | None] = mapped_column(Text, default=None, nullable=True)
+
+
+class ApiToken(Base):
+    """Long-lived bearer token for automation (F7).
+
+    The secret is ``pfsb_`` + 256 bits of urlsafe randomness, shown
+    exactly once at creation; only its sha256 hex lands here (no salt
+    needed — the secret has full entropy, so rainbow tables don't
+    apply). ``prefix`` is the display handle ("pfsb_a1b2c3…").
+
+    Scope is method-based: ``read`` = GET/HEAD only, ``write`` = all
+    methods. Bearer requests skip CSRF (the header is never attached
+    ambiently by a browser, which is the only thing CSRF defends
+    against) but can never mint or manage tokens — that stays
+    session-only.
+    """
+
+    __tablename__ = "api_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), unique=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    prefix: Mapped[str] = mapped_column(String(16))
+    scope: Mapped[str] = mapped_column(String(16), default="read")  # read|write
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None, nullable=True
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None, nullable=True
+    )
 
 
 class BackupDiff(Base):

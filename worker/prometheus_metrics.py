@@ -86,6 +86,25 @@ class PrometheusMetrics:
             ['instance'],
             registry=self.registry
         )
+
+        self.instance_stale = Gauge(
+            'pfsense_instance_stale',
+            '1 when the instance has no successful backup within its staleness threshold',
+            ['instance'],
+            registry=self.registry
+        )
+
+        self.replication_pending = Gauge(
+            'pfsense_replication_pending_total',
+            'Backups waiting for (or retrying) off-site replication',
+            registry=self.registry
+        )
+
+        self.last_successful_replication_timestamp = Gauge(
+            'pfsense_last_successful_replication_timestamp',
+            'Timestamp of the most recent successful off-site upload',
+            registry=self.registry
+        )
         
         # Authentication metrics
         self.auth_attempts_total = Counter(
@@ -241,6 +260,18 @@ class PrometheusMetrics:
     def set_compression_ratio(self, instance_name: str, ratio: float):
         """Set compression ratio for an instance"""
         self.compression_ratio.labels(instance=instance_name).set(ratio)
+
+    def set_instance_stale(self, instance_name: str, stale: bool) -> None:
+        """Set the staleness flag for an instance"""
+        self.instance_stale.labels(instance=instance_name).set(1 if stale else 0)
+
+    def set_replication_pending(self, count: int) -> None:
+        """Set the count of backups awaiting off-site replication"""
+        self.replication_pending.set(count)
+
+    def set_last_successful_replication(self, timestamp: float) -> None:
+        """Set the timestamp of the most recent successful off-site upload"""
+        self.last_successful_replication_timestamp.set(timestamp)
     
     def record_notification(self, notification_type: str, success: bool):
         """Record notification attempt"""

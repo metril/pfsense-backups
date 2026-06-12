@@ -250,7 +250,11 @@ def decrypt_pfsense_backup(blob: bytes | str, password: str) -> bytes:
             continue
         # Valid PKCS7 padding doesn't guarantee a correct password —
         # but a wrong password almost never produces plausible XML.
-        if _looks_like_xml(plaintext):
+        # A nested ``---- BEGIN config.xml ----`` wrapper is also
+        # plausible: double-encrypted replication objects (F3) carry a
+        # pfSense-encrypted blob inside the replication-password layer,
+        # so stripping the outer layer legitimately yields the marker.
+        if _looks_like_xml(plaintext) or looks_encrypted(plaintext):
             return plaintext
         last_exc = PfSenseCryptoError(
             f"{kdf_name} decryption produced non-XML output (wrong password?)"

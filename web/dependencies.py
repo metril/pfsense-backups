@@ -33,9 +33,15 @@ def get_crypto(request: Request) -> Crypto:
 
 def get_current_user(request: Request) -> dict[str, Any]:
     user = request.session.get("user")
-    if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="not authenticated")
-    return user
+    if user:
+        return user
+    # Bearer-token requests (F7): the middleware stashed the resolved
+    # token identity on request.state — audit attribution and every
+    # CurrentUser-consuming route see ``token:<name>`` as the actor.
+    api_user = getattr(request.state, "api_user", None)
+    if api_user:
+        return dict(api_user)
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="not authenticated")
 
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]

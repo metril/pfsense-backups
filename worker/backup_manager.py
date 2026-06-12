@@ -32,6 +32,8 @@ from pfsense_shared.anchor_events import (
     enumerate_anchors,
 )
 from pfsense_shared.backup_diff_storage import (
+    ChangeSummary,
+    build_change_summary,
     compute_diff,
     encode_diff,
     read_backup_bytes,
@@ -55,6 +57,7 @@ from pfsense_shared.pfsense_probe import (
     LOGIN_FORM_MARKERS,
     extract_csrf,
 )
+from pfsense_shared.retention import RetentionPolicy, compute_keep_ids
 from pfsense_shared.schemas import (
     BackupFailed,
     BackupFinished,
@@ -170,6 +173,13 @@ class _InstanceSnapshot:
     timeout: int
     retention_count: int
     compress: bool
+    # Off-site replication opt-in (F3).
+    replicate: bool
+    # GFS retention tiers (F2); all None = count-only behavior.
+    retention_keep_all_days: int | None
+    retention_daily_days: int | None
+    retention_weekly_weeks: int | None
+    retention_monthly_months: int | None
     directory: str
     filename_format: str
     timestamp_format: str
@@ -260,18 +270,31 @@ class PfSenseBackupManager:
             self._fail_job(job_id, f"Instance {instance_id} not found")
             return False
 
-        def _notify_result(ok: bool, detail: str) -> None:
-            if not notify:
-                return
+        def _notify_result(
+            ok: bool, detail: str, change_summary: ChangeSummary | None = None
+        ) -> None:
             try:
                 with self._session_factory() as s:
-                    self._notifier.send(
-                        s,
-                        is_success=ok,
-                        details=detail,
-                        failed_instances=[] if ok else [snap.name],
-                        succeeded_instances=[snap.name] if ok else [],
-                    )
+                    if notify:
+                        self._notifier.send(
+                            s,
+                            is_success=ok,
+                            details=detail,
+                            failed_instances=[] if ok else [snap.name],
+                            succeeded_instances=[snap.name] if ok else [],
+                            change_summary=change_summary,
+                        )
+                    elif change_summary is not None:
+                        # backup_all sweep (notify=False): outcome rows
+                        # get one aggregate send at the end of the sweep,
+                        # but ``change`` rows are inherently per-instance
+                        # — fan those out here or schedule-only users
+                        # would never receive change notifications.
+                        self._notifier.send_change_only(
+                            s,
+                            instance_name=snap.name,
+                            change_summary=change_summary,
+                        )
             except Exception as exc:
                 log.error("Notifier per-instance send failed: %s", exc)
 
@@ -361,6 +384,7 @@ class PfSenseBackupManager:
             duration = time.time() - t0
             finished_at = datetime.now(UTC)
             self._metrics.record_backup_success(snap.name, duration)
+            replication_note: str | None = None
             new_backup_id = self._write_backup_history(
                 instance_id=snap.id,
                 job_id=job_id,
@@ -378,16 +402,33 @@ class PfSenseBackupManager:
             # Read paths (``/api/backups/{id}/diff-summary``) lazily
             # recompute on miss + stale, so this is purely a
             # "populate the cache eagerly" step.
+            change_summary: ChangeSummary | None = None
             if new_backup_id is not None:
                 try:
-                    self._compute_and_persist_diffs(new_backup_id, snap.id)
+                    change_summary = self._compute_and_persist_diffs(
+                        new_backup_id, snap.id
+                    )
                 except Exception as exc:
                     log.warning(
                         "post-backup diff computation failed for backup %s: %s",
                         new_backup_id,
                         exc,
                     )
-            self._mark_job(job_id, status="success", finished_at=finished_at)
+            # F3: one synchronous off-site upload attempt. Failure never
+            # fails the backup — the row stays pending/failed and the
+            # 10-minute sweep retries with backoff; the job message
+            # carries a note so operators see it without worker logs.
+            if new_backup_id is not None and snap.replicate:
+                replication_note = self._replicate_new_backup(
+                    new_backup_id, job_id, snap
+                )
+            self._mark_job(
+                job_id,
+                status="success",
+                finished_at=finished_at,
+                message=replication_note,
+            )
+            self._clear_stale_flag(snap.id, snap.name)
             self._publisher.publish(
                 BackupFinished(
                     job_id=job_id,
@@ -404,6 +445,7 @@ class PfSenseBackupManager:
                 True,
                 f"Backup succeeded for {snap.name} in {duration:.1f}s "
                 f"({result.size_bytes} bytes)",
+                change_summary,
             )
             return True
 
@@ -1012,6 +1054,11 @@ class PfSenseBackupManager:
                 timeout=inst.timeout_seconds,
                 retention_count=inst.retention_count,
                 compress=inst.compress,
+                replicate=inst.replicate,
+                retention_keep_all_days=inst.retention_keep_all_days,
+                retention_daily_days=inst.retention_daily_days,
+                retention_weekly_weeks=inst.retention_weekly_weeks,
+                retention_monthly_months=inst.retention_monthly_months,
                 directory=settings.directory,
                 filename_format=settings.filename_format,
                 timestamp_format=settings.timestamp_format,
@@ -1253,24 +1300,51 @@ class PfSenseBackupManager:
         C3/M4: previously this walked the filesystem with a glob pattern
         keyed on ``name``, which (1) orphaned DB rows after cleanup and
         (2) broke when ``name`` or ``backup_prefix`` changed. We now
-        authoritatively select from the ``backups`` table, keep the most
-        recent ``retention_count`` successful rows per instance, and unlink
-        + delete both file and row for the rest in a single transaction.
+        authoritatively select from the ``backups`` table, compute the
+        keep-set via ``pfsense_shared.retention`` (count-only when no
+        GFS tiers are configured — the pre-F2 behavior exactly), and
+        unlink + delete both file and row for the rest in a single
+        transaction.
         """
-        if snap.retention_count <= 0:
+        policy = RetentionPolicy(
+            count_cap=snap.retention_count,
+            keep_all_days=snap.retention_keep_all_days,
+            daily_days=snap.retention_daily_days,
+            weekly_weeks=snap.retention_weekly_weeks,
+            monthly_months=snap.retention_monthly_months,
+        )
+        if snap.retention_count <= 0 and not policy.has_tiers:
             return 0
 
-        from pfsense_shared.models import Backup  # local import to avoid cycle
+        from pfsense_shared.models import (  # local import to avoid cycle
+            Backup,
+            ReplicationSettings,
+        )
 
         removed = 0
+        remote_deletes: list[str] = []
         with self._session_factory() as s:
+            # F3: retention governs LOCAL copies — off-site-only rows
+            # (local_present=False) are out of the equation entirely.
             successful = (
                 s.query(Backup)
-                .filter(Backup.instance_id == snap.id, Backup.success.is_(True))
+                .filter(
+                    Backup.instance_id == snap.id,
+                    Backup.success.is_(True),
+                    Backup.local_present.is_(True),
+                )
                 .order_by(Backup.started_at.desc())
                 .all()
             )
-            stale_rows = successful[snap.retention_count :]
+            keep_ids = compute_keep_ids(
+                [(row.id, row.started_at) for row in successful], policy
+            )
+            stale_rows = [row for row in successful if row.id not in keep_ids]
+
+            repl = s.get(ReplicationSettings, 1)
+            repl_enabled = repl is not None and repl.enabled
+            mirror_deletes = bool(repl_enabled and repl.mirror_deletes)
+
             for row in stale_rows:
                 path = Path(row.path) if row.path else None
                 if path is not None and path.is_file():
@@ -1278,12 +1352,39 @@ class PfSenseBackupManager:
                         path.unlink()
                     except OSError as exc:
                         log.error("Failed to remove stale backup %s: %s", path, exc)
-                        # Still delete the row — the file pointer is dangling
+                        # Still proceed — the file pointer is dangling
                         # anyway. Err on the side of DB/FS agreement.
+                has_replica = row.replica_status == "done" and row.replica_key
+                if has_replica and repl_enabled and not mirror_deletes:
+                    # Keep-forever off-site: the row survives as
+                    # "off-site only" — and with it, its CASCADE-linked
+                    # AnchorEvents, so change history isn't thinned for
+                    # replicated instances.
+                    row.local_present = False
+                    continue
+                if has_replica and mirror_deletes and row.replica_key:
+                    remote_deletes.append(row.replica_key)
                 s.delete(row)
                 removed += 1
-            if removed:
-                s.commit()
+            s.commit()
+
+        if remote_deletes:
+            # Best-effort, post-commit: a failed remote delete must not
+            # roll back local retention; the orphaned object is caught
+            # by ``verify-replicas`` runs / lifecycle rules.
+            try:
+                from .replication import load_config, make_target
+
+                cfg = load_config(self._session_factory, self._crypto)
+                if cfg is not None:
+                    target = make_target(cfg)
+                    for key in remote_deletes:
+                        try:
+                            target.delete(key)
+                        except Exception as exc:
+                            log.warning("remote delete failed for %s: %s", key, exc)
+            except Exception as exc:
+                log.warning("remote delete pass failed: %s", exc)
         return removed
 
     def _update_retained_files_count(self, snap: _InstanceSnapshot) -> None:
@@ -1367,11 +1468,18 @@ class PfSenseBackupManager:
             s.commit()
             return row.id
 
-    def _compute_and_persist_diffs(self, new_backup_id: int, instance_id: int) -> None:
+    def _compute_and_persist_diffs(
+        self, new_backup_id: int, instance_id: int
+    ) -> ChangeSummary | None:
         """Compute ``(previous, first)`` diffs for a newly-landed
         backup and upsert ``backup_diff`` rows; emit per-anchor
         ``AnchorEvent`` rows against the immediate predecessor (or
-        seed them for the first-ever backup).
+        seed them for the first-ever backup). Also stamps
+        ``Backup.config_version`` from the parse we already have.
+
+        Returns a ``ChangeSummary`` when the vs-previous diff is
+        non-empty (the notifier's ``change`` trigger consumes it);
+        ``None`` on first-ever backups, no-change runs, or any skip.
 
         Runs post-commit of the ``Backup`` row and after the host
         semaphore has released, so this is latency that operators see
@@ -1395,7 +1503,7 @@ class PfSenseBackupManager:
         with self._session_factory() as s:
             new_row = s.get(Backup, new_backup_id)
             if new_row is None:
-                return
+                return None
 
             new_bytes = read_backup_bytes(
                 Path(new_row.path),
@@ -1404,7 +1512,7 @@ class PfSenseBackupManager:
                 crypto=self._crypto,
             )
             if new_bytes is None:
-                return
+                return None
 
             # Parse new side once — used for both diff computation
             # and anchor-event emission below.
@@ -1416,7 +1524,13 @@ class PfSenseBackupManager:
                     new_backup_id,
                     exc,
                 )
-                return
+                return None
+
+            # F: capture the config SCHEMA version (the <version> tag)
+            # while the parse is in hand — costs nothing extra here.
+            if new_parsed.config_version:
+                new_row.config_version = new_parsed.config_version
+            change_summary: ChangeSummary | None = None
 
             # Previous: immediate predecessor (most recent successful
             # backup before this one). None on first-ever backup.
@@ -1485,6 +1599,7 @@ class PfSenseBackupManager:
                 )
 
                 if kind == "previous":
+                    change_summary = build_change_summary(diff)
                     # Emit one AnchorEvent per projected change vs the
                     # immediate predecessor. ``diff_to_anchor_events``
                     # produces (anchor_id, kind, value) tuples; we JSON-
@@ -1518,6 +1633,7 @@ class PfSenseBackupManager:
                 if inst is not None:
                     inst.anchor_events_backfilled_at = datetime.now(UTC)
             s.commit()
+            return change_summary
 
     @staticmethod
     def _emit_anchor_events(
@@ -1596,6 +1712,57 @@ class PfSenseBackupManager:
 
     def _fail_job(self, job_id: int, message: str) -> None:
         self._mark_job(job_id, status="failure", finished_at=datetime.now(UTC), message=message)
+
+    def _replicate_new_backup(
+        self, backup_id: int, job_id: int, snap: _InstanceSnapshot
+    ) -> str | None:
+        """Mark the fresh backup pending and try one upload under the
+        ``replicate`` progress phase. Returns a job-message note when
+        the upload didn't complete (None on success or when replication
+        is globally disabled)."""
+        from .replication import load_config, replicate_backup
+
+        try:
+            cfg = load_config(self._session_factory, self._crypto)
+            if cfg is None:
+                return None
+            self._emit_progress(job_id, snap.id, "replicate")
+            with self._session_factory() as s:
+                row = s.get(Backup, backup_id)
+                if row is None:
+                    return None
+                row.replica_status = "pending"
+                s.commit()
+            ok = replicate_backup(
+                self._session_factory, self._crypto, backup_id, cfg=cfg
+            )
+            if ok:
+                return None
+            return "off-site replication failed — queued for retry"
+        except Exception as exc:
+            log.warning("replication hook failed for backup %d: %s", backup_id, exc)
+            return "off-site replication errored — queued for retry"
+
+    def _clear_stale_flag(self, instance_id: int, instance_name: str) -> None:
+        """F6 recovery: a successful backup clears the staleness stamp;
+        if an alert had fired, send the matching recovery notification
+        so operators see the silence end, not just begin."""
+        try:
+            with self._session_factory() as s:
+                inst = s.get(Instance, instance_id)
+                if inst is None or inst.stale_notified_at is None:
+                    return
+                inst.stale_notified_at = None
+                s.commit()
+                self._notifier.send_stale(
+                    s,
+                    instance_id=instance_id,
+                    instance_name=instance_name,
+                    detail=f"Backups for '{instance_name}' have recovered.",
+                    is_recovery=True,
+                )
+        except Exception as exc:
+            log.warning("stale-flag clear failed for %s: %s", instance_name, exc)
 
     def _emit_progress(self, job_id: int, instance_id: int, phase: str) -> None:
         self._publisher.publish(
