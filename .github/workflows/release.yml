@@ -2,17 +2,93 @@ name: Release
 
 on:
   push:
-    tags: ["v*.*.*"]
+    branches: [main]
+  workflow_dispatch: {}
 
 permissions:
-  contents: write       # for softprops/action-gh-release to create the Release
-  packages: write       # for pushing to ghcr.io
+  contents: write       # tag + GitHub Release
+  packages: write       # push to ghcr.io
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release
+  cancel-in-progress: false
 
 jobs:
-  build-and-push:
+  check:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      release: ${{ steps.ver.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.10.9"
+
+      - name: Install deps
+        run: uv sync --locked --extra worker --extra web --extra dev
+
+      - name: Ruff
+        run: uv run ruff check pfsense_shared/ worker/ web/
+
+      - name: Pytest
+        run: uv run pytest -q
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Frontend install
+        working-directory: frontend
+        run: npm ci
+
+      - name: Frontend type-check
+        working-directory: frontend
+        run: npm run type-check
+
+      - name: Frontend lint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Determine version
+        id: ver
+        run: |
+          VER=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
+          FE=$(python3 -c 'import json; print(json.load(open("frontend/package.json"))["version"])')
+          if [ "$VER" != "$FE" ]; then
+            echo "::error::pyproject.toml ($VER) and frontend/package.json ($FE) versions differ"
+            exit 1
+          fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/v$VER" >/dev/null 2>&1; then
+            echo "Tag v$VER already exists; nothing to release"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  tag:
+    needs: [check, images]
+    if: needs.check.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create and push tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${{ needs.check.outputs.version }}" -m "v${{ needs.check.outputs.version }}" "$GITHUB_SHA"
+          git push origin "v${{ needs.check.outputs.version }}"
+
+  images:
+    needs: check
+    if: needs.check.outputs.release == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -45,9 +121,8 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository_owner }}/pfsense-backups-${{ matrix.component.name }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
+            type=semver,pattern={{version}},value=v${{ needs.check.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=v${{ needs.check.outputs.version }}
             type=raw,value=latest
 
       - name: Build & push ${{ matrix.component.name }}
@@ -62,24 +137,26 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.component.name }}
           cache-to: type=gha,scope=${{ matrix.component.name }},mode=max
 
-  create-release:
-    needs: build-and-push
+  release:
+    needs: [check, tag]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # softprops/action-gh-release needs history for release notes
+          fetch-depth: 0   # needed for release notes
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ needs.check.outputs.version }}
+          target_commitish: ${{ github.sha }}
           generate_release_notes: true
           body: |
-            ## pfsense-backups ${{ github.ref_name }}
+            ## pfsense-backups v${{ needs.check.outputs.version }}
 
             ### Container images
-            - `ghcr.io/${{ github.repository_owner }}/pfsense-backups-worker:${{ github.ref_name }}`
-            - `ghcr.io/${{ github.repository_owner }}/pfsense-backups-web:${{ github.ref_name }}`
+            - `ghcr.io/${{ github.repository_owner }}/pfsense-backups-worker:${{ needs.check.outputs.version }}`
+            - `ghcr.io/${{ github.repository_owner }}/pfsense-backups-web:${{ needs.check.outputs.version }}`
 
             ### Deploying
             ```bash

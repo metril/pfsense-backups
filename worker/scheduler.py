@@ -7,6 +7,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from apscheduler.jobstores.base import JobLookupError
 from apscheduler.jobstores.memory import MemoryJobStore
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -201,7 +202,7 @@ class Scheduler:
             self._scheduler.remove_job(_job_id(instance_id))
             label = f"{name!r} (id={instance_id})" if name else f"instance id={instance_id}"
             log.info("Unscheduled %s", label)
-        except Exception:
+        except JobLookupError:
             pass
 
     def _fire(self, instance_id: int) -> None:

@@ -12,7 +12,8 @@ import json
 import logging
 import os
 import re
-from datetime import datetime
+import time
+from datetime import UTC, datetime
 from typing import Any
 
 import requests
@@ -23,6 +24,8 @@ from pfsense_shared.backup_diff_storage import ChangeSummary
 from pfsense_shared.models import Instance, Notification
 
 from .prometheus_metrics import PrometheusMetrics
+
+_POST_RETRIES = 2
 
 log = logging.getLogger(__name__)
 
@@ -283,7 +286,7 @@ class Notifier:
         lines = [f"{_STYLE_START[0]} Backup run started"]
         if self._hostname:
             lines.append(f"Host: {self._hostname}")
-        lines.append(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append(f"Timestamp: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}")
         message = "\n".join(lines)
         for hook in rows:
             if hook.instance_ids_json:
@@ -412,7 +415,7 @@ class Notifier:
                 msg += f"\nSucceeded: {', '.join(succeeded_instances)}"
             if failed_instances:
                 msg += f"\nFailed: {', '.join(failed_instances)}"
-        msg += f"\nTimestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        msg += f"\nTimestamp: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}"
         if self._hostname:
             msg += f"\nHost: {self._hostname}"
         return msg
@@ -479,16 +482,23 @@ class Notifier:
     ) -> None:
         """Centralized POST + metrics bookkeeping."""
         try:
+            kwargs: dict[str, Any] = {"headers": headers, "timeout": hook.timeout_seconds}
             if json_body is not None:
-                resp = requests.post(
-                    url, json=json_body, headers=headers, timeout=hook.timeout_seconds
-                )
+                kwargs["json"] = json_body
             elif data is not None:
-                resp = requests.post(
-                    url, data=data, headers=headers, timeout=hook.timeout_seconds
-                )
-            else:
-                resp = requests.post(url, headers=headers, timeout=hook.timeout_seconds)
+                kwargs["data"] = data
+            for attempt in range(_POST_RETRIES + 1):
+                try:
+                    resp = requests.post(url, **kwargs)
+                    if resp.status_code >= 500 and attempt < _POST_RETRIES:
+                        time.sleep(0.5 * 2**attempt)
+                        continue
+                except (requests.ConnectionError, requests.Timeout):
+                    if attempt >= _POST_RETRIES:
+                        raise
+                    time.sleep(0.5 * 2**attempt)
+                    continue
+                break
             resp.raise_for_status()
             log.info("Notification sent to %s", hook.name)
             self._metrics.record_notification(hook.name, True)
@@ -518,7 +528,7 @@ class Notifier:
             "title": f"{emoji} {label}",
             "description": description,
             "color": color,
-            "timestamp": datetime.now().astimezone().isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "footer": {"text": f"pfsense-backups · {hook.name}"},
         }
         fields: list[dict[str, Any]] = []
@@ -737,7 +747,7 @@ class Notifier:
                 "emoji": emoji,
                 "color": f"#{color:06x}",
                 "is_test": is_test,
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
             }
             if hook.include_instance_details:
                 payload["succeeded"] = succeeded_instances or []

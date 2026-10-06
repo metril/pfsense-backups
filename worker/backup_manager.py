@@ -48,6 +48,7 @@ from pfsense_shared.models import (
     Instance,
     Job,
 )
+from pfsense_shared.paths import resolve_backup_path
 from pfsense_shared.pfsense_crypto import looks_encrypted
 from pfsense_shared.pfsense_parser import PfSenseParseError
 from pfsense_shared.pfsense_parser import parse as parse_pfsense_xml
@@ -95,7 +96,6 @@ def _reencrypt_one_subprocess(task: dict) -> dict:
     # submit call and so the child picks up a clean module graph.
     import gzip
     import os
-    from pathlib import Path
 
     from pfsense_shared.pfsense_crypto import (
         PfSenseCryptoError,
@@ -109,7 +109,9 @@ def _reencrypt_one_subprocess(task: dict) -> dict:
     old_password: str = task["old_password"]
     new_password: str = task["new_password"]
 
-    path = Path(path_str)
+    from pfsense_shared.paths import resolve_backup_path
+
+    path = resolve_backup_path(path_str)
     try:
         # Read the file — decompress gz on the fly.
         if compressed:
@@ -132,19 +134,17 @@ def _reencrypt_one_subprocess(task: dict) -> dict:
         else:
             out_bytes = new_wrapped
 
-        # Atomic replace via same-directory tmp so a crash mid-write
-        # can't leave a truncated backup.
-        tmp_path = path.with_name(f".{path.name}.tmp.{os.getpid()}")
+        # Stage next to the original; the parent commits the new password
+        # and only then swaps the file in (see _reencrypt_rows).
+        new_path = path.with_name(path.name + ".new")
         try:
-            with open(tmp_path, "wb") as out:
+            with open(new_path, "wb") as out:
                 out.write(out_bytes)
                 out.flush()
                 os.fsync(out.fileno())
-            os.replace(tmp_path, path)
         except Exception:
-            # Clean up the tmp on any error so we don't orphan files.
             try:
-                os.unlink(tmp_path)
+                os.unlink(new_path)
             except FileNotFoundError:
                 pass
             raise
@@ -828,6 +828,8 @@ class PfSenseBackupManager:
                     log.error(
                         "reencrypt_all: instance password rotation failed: %s", exc
                     )
+                    failure += 1
+                    total_tasks += 1
         finally:
             del tasks
             self._finalize_reencrypt_job(job_id, success, failure, total_tasks)
@@ -948,15 +950,44 @@ class PfSenseBackupManager:
                     # Apply DB updates on the parent (child has no
                     # session). Reuse the pre-computed ciphertext so
                     # we don't re-run Fernet encrypt for every row.
+                    # The child staged ``<path>.new``. Commit the new
+                    # password first, then swap the file in, so the old
+                    # file + old password stay consistent on any failure.
+                    old_size = None
+                    final_path = resolve_backup_path(task["path"])
+                    new_path = final_path.with_name(final_path.name + ".new")
                     try:
-                        with self._session_factory() as s:
-                            row = s.get(Backup, result["backup_id"])
-                            if row is not None:
-                                row.encrypt_password_ct = new_password_ct_cache
-                                new_size = result.get("new_size")
-                                if isinstance(new_size, int):
-                                    row.size_bytes = new_size
-                                s.commit()
+                        try:
+                            with self._session_factory() as s:
+                                row = s.get(Backup, result["backup_id"])
+                                if row is not None:
+                                    old_size = row.size_bytes
+                                    row.encrypt_password_ct = new_password_ct_cache
+                                    new_size = result.get("new_size")
+                                    if isinstance(new_size, int):
+                                        row.size_bytes = new_size
+                                    s.commit()
+                        except Exception:
+                            with contextlib.suppress(OSError):
+                                new_path.unlink()
+                            raise
+                        try:
+                            os.replace(new_path, final_path)
+                        except Exception:
+                            log.error(
+                                "reencrypt: failed to replace %s", final_path
+                            )
+                            with contextlib.suppress(OSError):
+                                new_path.unlink()
+                            with contextlib.suppress(Exception), self._session_factory() as s:
+                                row = s.get(Backup, result["backup_id"])
+                                if row is not None:
+                                    row.encrypt_password_ct = self._crypto.encrypt(
+                                        task["old_password"]
+                                    )
+                                    row.size_bytes = old_size
+                                    s.commit()
+                            raise
                         success += 1
                     except Exception as exc:
                         failures.append(
@@ -1346,14 +1377,15 @@ class PfSenseBackupManager:
             mirror_deletes = bool(repl_enabled and repl.mirror_deletes)
 
             for row in stale_rows:
-                path = Path(row.path) if row.path else None
-                if path is not None and path.is_file():
+                path = resolve_backup_path(row.path) if row.path else None
+                if path is not None:
                     try:
                         path.unlink()
+                    except FileNotFoundError:
+                        pass  # already gone — drop the row
                     except OSError as exc:
                         log.error("Failed to remove stale backup %s: %s", path, exc)
-                        # Still proceed — the file pointer is dangling
-                        # anyway. Err on the side of DB/FS agreement.
+                        continue  # keep the row so DB/FS stay in agreement
                 has_replica = row.replica_status == "done" and row.replica_key
                 if has_replica and repl_enabled and not mirror_deletes:
                     # Keep-forever off-site: the row survives as

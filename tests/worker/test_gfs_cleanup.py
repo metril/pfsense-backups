@@ -183,3 +183,79 @@ def test_count_only_cleanup_unchanged(tmp_path: Path) -> None:
             .all()
         )
     assert len(rows) == 3
+
+
+def _cleanup_setup(tmp_path: Path, rel: bool):
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(engine, expire_on_commit=False)
+    crypto = Crypto(Fernet.generate_key())
+    with session_factory() as s:
+        inst = Instance(
+            name="gw-gfs",
+            url="https://gw.gfs.test",
+            username_ct=crypto.encrypt("a"),
+            password_ct=crypto.encrypt("p"),
+            backup_prefix="daily",
+        )
+        s.add(inst)
+        s.commit()
+        iid = inst.id
+        for i in range(3):
+            when = NOW - timedelta(days=i, hours=1)
+            (tmp_path / f"r{i}.xml").write_bytes(b"<pfsense/>")
+            s.add(
+                Backup(
+                    instance_id=iid,
+                    started_at=when,
+                    finished_at=when,
+                    duration_seconds=1.0,
+                    filename=f"r{i}.xml",
+                    path=f"r{i}.xml" if rel else str(tmp_path / f"r{i}.xml"),
+                    size_bytes=10,
+                    compressed=False,
+                    success=True,
+                    encrypted=False,
+                )
+            )
+        s.commit()
+    manager = PfSenseBackupManager(
+        session_factory=session_factory,
+        publisher=MagicMock(),
+        metrics=MagicMock(),
+        crypto=crypto,
+        notifier=MagicMock(),
+        hostname="t",
+        instance_locks=MagicMock(),
+        cross_process_lock=MagicMock(),
+    )
+    return manager, session_factory, iid
+
+
+def test_cleanup_unlinks_relative_path(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("pfsense_shared.paths.BACKUPS_DIR", tmp_path)
+    manager, sf, iid = _cleanup_setup(tmp_path, rel=True)
+    removed = manager._cleanup_old_backups(_snapshot(iid, retention_count=1))
+    assert removed == 2
+    assert (tmp_path / "r0.xml").exists()
+    assert not (tmp_path / "r1.xml").exists()
+    assert not (tmp_path / "r2.xml").exists()
+    with sf() as s:
+        assert len(s.execute(select(Backup.id)).scalars().all()) == 1
+
+
+def test_cleanup_unlink_failure_keeps_row(tmp_path: Path, monkeypatch) -> None:
+    manager, sf, iid = _cleanup_setup(tmp_path, rel=False)
+    real_unlink = Path.unlink
+
+    def flaky(self, *a, **kw):
+        if self.name == "r1.xml":
+            raise PermissionError("denied")
+        return real_unlink(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "unlink", flaky)
+    removed = manager._cleanup_old_backups(_snapshot(iid, retention_count=1))
+    assert removed == 1
+    with sf() as s:
+        names = set(s.execute(select(Backup.filename)).scalars().all())
+    assert names == {"r0.xml", "r1.xml"}
