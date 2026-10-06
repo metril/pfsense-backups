@@ -251,9 +251,12 @@ Python: `uv sync --extra worker --extra web --extra dev` then
 Frontend: `cd frontend && npm install && npm run dev`. Vite proxies `/api`
 and `/api/events` to `http://localhost:8080`.
 
-Releases are cut by pushing a semver tag (`v0.1.0`). GitHub Actions builds
-multi-arch images to `ghcr.io/metril/pfsense-backups-{worker,web}` and opens
-a GitHub Release with auto-generated notes.
+Releases are automatic. Bump `version` in `pyproject.toml` and
+`frontend/package.json` (they must match), then merge to `main`. CI runs the
+checks, tags `vX.Y.Z` if that tag doesn't exist yet, builds multi-arch images
+to `ghcr.io/metril/pfsense-backups-{worker,web}` and publishes a GitHub
+Release with auto-generated notes. Merges that don't change the version do
+not release.
 
 ### Mirroring to both GitLab and GitHub
 

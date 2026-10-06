@@ -2,8 +2,7 @@ name: Build & lint
 
 on:
   push:
-    branches: ["**"]
-    tags-ignore: ["v*.*.*"]        # release.yml handles tags
+    branches-ignore: [main]        # release.yml covers main
   pull_request:
 
 concurrency:
@@ -26,6 +25,9 @@ jobs:
 
       - name: Ruff
         run: uv run ruff check pfsense_shared/ worker/ web/
+
+      - name: Pytest
+        run: uv run pytest -q
 
       - name: Mypy
         run: uv run mypy pfsense_shared/ worker/ web/ || true

@@ -24,7 +24,10 @@ from pfsense_shared.backup_diff_storage import (
     summarise_diff,
 )
 from pfsense_shared.models import AnchorEvent, Backup, BackupDiff, Instance, Job
-from pfsense_shared.paths import BACKUPS_DIR  # noqa: F401 — used by /anchor-history
+from pfsense_shared.paths import (  # noqa: F401 — BACKUPS_DIR used by /anchor-history
+    BACKUPS_DIR,
+    resolve_backup_path,
+)
 from pfsense_shared.pfsense_anchor_values import resolve_anchor_value
 from pfsense_shared.pfsense_crypto import (
     PfSenseCryptoError,
@@ -663,12 +666,8 @@ async def download(
         )
         await audit_db.commit()
 
-    async def body() -> AsyncIterator[bytes]:
-        for chunk in await asyncio.to_thread(lambda: list(stream_raw(path))):
-            yield chunk
-
     return StreamingResponse(
-        body(),
+        _async_iter(stream_raw(path)),
         media_type="application/octet-stream",
         headers={"Content-Disposition": f'attachment; filename="{path.name}"'},
     )
@@ -1347,8 +1346,7 @@ class _BackupWalkRow(BaseModel):
 
 
 def _row_path(raw_path: str) -> Path:
-    p = Path(raw_path)
-    return p if p.is_absolute() else BACKUPS_DIR / p
+    return resolve_backup_path(raw_path)
 
 
 def _read_for_walk(row: _BackupWalkRow, crypto: Any) -> bytes | str:
